@@ -35,7 +35,8 @@ model not only takes advantage of the transformer's ability to process each toke
 The final representations are derived by finding every possible token n-gram and, for each, averaging the corresponding token embeddings.
 
 
-Features
+To-Do
 --------
 
-* TODO
+* Support input chunking for long sequences
+* Add features for handling large datasets
