@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 
-"""Tests for `embed_gram` package."""
+"""Tests for `grammatron` package."""
 
 import pytest
 
 
-from embed_gram import embed_gram
+from grammatron import grammatron
 
 
 @pytest.fixture

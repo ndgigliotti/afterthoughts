@@ -1,1 +1,1 @@
-"""Unit test package for embed_gram."""
+"""Unit test package for grammatron."""

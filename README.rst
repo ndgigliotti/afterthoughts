@@ -1,15 +1,15 @@
 ==========
-Embed-Gram
+Grammatron
 ==========
 
 
-.. image:: https://img.shields.io/pypi/v/embed_gram.svg
-        :target: https://pypi.python.org/pypi/embed_gram
+.. image:: https://img.shields.io/pypi/v/grammatron.svg
+        :target: https://pypi.python.org/pypi/grammatron
 
-.. image:: https://img.shields.io/travis/ndgigliotti/embed_gram.svg
-        :target: https://travis-ci.com/ndgigliotti/embed_gram
+.. image:: https://img.shields.io/travis/ndgigliotti/grammatron.svg
+        :target: https://travis-ci.com/ndgigliotti/grammatron
 
-.. image:: https://readthedocs.org/projects/embed-gram/badge/?version=latest
+.. image:: https://readthedocs.org/projects/grammatron/badge/?version=latest
         :target: https://embed-gram.readthedocs.io/en/latest/?version=latest
         :alt: Documentation Status
 
@@ -20,7 +20,7 @@ Fast n-gram embeddings using transformers.
 
 
 * Free software: MIT license
-* Documentation: https://embed-gram.readthedocs.io.
+.. * Documentation: https://grammatron.readthedocs.io.
 
 This is a new project that is heavily under development. Please check back soon for updates.
 

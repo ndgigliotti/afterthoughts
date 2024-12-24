@@ -31,7 +31,7 @@ def get_ngram_idx(input_ids, ngram_range=(3, 6)):
     return ngram_idx
 
 
-class NgramEncoder:
+class Grammatron:
     def __init__(self, model_name, device="cuda"):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModel.from_pretrained(model_name)
