@@ -22,16 +22,20 @@ Fast n-gram embeddings using transformers.
 * Free software: MIT license
 * Documentation: https://embed-gram.readthedocs.io.
 
+This is a new project that is heavily under development. Please check back soon for updates.
+
+Concept
+-------
+
+The idea behind this project is to provide a fast and context-aware method of embedding n-grams using transformers.
+Sometimes to obtain n-gram embeddings, data scientists extract n-grams upstream of the model and run each n-gram through the model as a separate sequence.
+This is slow and fails to incorporate the context surrounding each n-gram. A better approach is to run the entire document 
+through the model and derive the n-gram embeddings from the token embeddings in the final hidden state. Running the entire document through the 
+model not only takes advantage of the transformer's ability to process each token in parallel, but also incorporates context into the n-gram representations.
+The final representations are derived by finding every possible token n-gram and, for each, averaging the corresponding token embeddings.
+
 
 Features
 --------
 
 * TODO
-
-Credits
--------
-
-This package was created with Cookiecutter_ and the `audreyr/cookiecutter-pypackage`_ project template.
-
-.. _Cookiecutter: https://github.com/audreyr/cookiecutter
-.. _`audreyr/cookiecutter-pypackage`: https://github.com/audreyr/cookiecutter-pypackage
