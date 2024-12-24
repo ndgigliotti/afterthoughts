@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModel
+from tqdm.auto import tqdm
 
 
 class TokenizedDataset(Dataset):
@@ -40,17 +41,29 @@ class NgramEncoder:
     def device(self):
         return self.model.device
 
-    def extract_ngrams(self, input_ids, token_embeds, ngram_range=(3, 6)):
+    def extract_ngrams(self, input_ids, token_embeds, ngram_range=(3, 3)):
         ngrams = []
         ngram_vecs = []
-        ngram_idx = get_ngram_idx(input_ids, ngram_range)
-        for idx in ngram_idx:
-            ngrams.append(input_ids[:, idx])
-            ngram_vecs.append(token_embeds[:, idx].mean(axis=2))
-        ngrams = [self.tokenizer.batch_decode(np.vstack(x)) for x in ngrams]
-        ngram_vecs = [np.vstack(x) for x in ngram_vecs]
-        ngrams = [y for x in ngrams for y in x]
-        ngram_vecs = np.vstack(ngram_vecs)
+        ngram_idx = get_ngram_idx(input_ids, ngram_range=ngram_range)
+        valid_token_mask = np.isin(
+            input_ids, self.tokenizer.all_special_ids, invert=True
+        )
+        for i in tqdm(
+            range(input_ids.shape[0]), desc="Extracting", total=input_ids.shape[0]
+        ):
+            ngrams.append([])
+            ngram_vecs.append([])
+            for idx in ngram_idx:
+                valid_ngrams = np.any(valid_token_mask[i, idx], axis=1)
+                weights = valid_token_mask[i, idx, None][valid_ngrams].repeat(
+                    token_embeds.shape[-1], axis=2
+                )
+                embeds = token_embeds[i, idx][valid_ngrams]
+                ngram_vecs[i].append(np.average(embeds, axis=1, weights=weights))
+                ngrams[i].extend(
+                    self.tokenizer.batch_decode(input_ids[i, idx][valid_ngrams])
+                )
+            ngram_vecs[i] = np.vstack(ngram_vecs[i])
         return ngrams, ngram_vecs
 
     def encode(
@@ -79,7 +92,7 @@ class NgramEncoder:
         token_embeds = []
         with torch.no_grad():
             with torch.cuda.amp.autocast(enabled=amp, dtype=amp_dtype):
-                for batch in loader:
+                for batch in tqdm(loader, desc="Encoding"):
                     batch = {
                         k: v.to(self.device, non_blocking=True)
                         for k, v in batch.items()
@@ -101,6 +114,17 @@ class NgramEncoder:
     ):
         inputs, token_embeds = self.encode(docs, max_length, batch_size, amp, amp_dtype)
         ngrams, ngram_vecs = self.extract_ngrams(
-            inputs["input_ids"], token_embeds, ngram_range
+            inputs["input_ids"], token_embeds, ngram_range=ngram_range
         )
         return ngrams, ngram_vecs
+
+    def encode_queries(self, queries, max_length=512, batch_size=32, amp=True, amp_dtype=torch.bfloat16):
+        inputs, token_embeds = self.encode(queries, max_length=max_length, batch_size=batch_size, amp=amp, amp_dtype=amp_dtype)
+        valid_token_mask = np.isin(
+            inputs["input_ids"], self.tokenizer.all_special_ids, invert=True
+        )
+        # Extract mean token embeddings for each query
+        query_embeds = []
+        for i in tqdm(range(inputs["input_ids"].shape[0]), desc="Extracting", total=inputs["input_ids"].shape[0]):
+            query_embeds.append(token_embeds[i, valid_token_mask[i], :].mean(axis=0))
+        return np.vstack(query_embeds)
