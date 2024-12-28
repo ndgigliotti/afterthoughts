@@ -36,6 +36,8 @@ class TokenizedDataset(Dataset):
             Tokenized input sequences.
         """
         self.inputs = inputs
+        if not isinstance(self.inputs["input_ids"], torch.Tensor):
+            raise TypeError("`input_ids` must be a torch.Tensor.")
 
     def __len__(self) -> int:
         """Returns the number of sequences in the dataset."""
@@ -91,6 +93,9 @@ def get_ngram_idx(
             [np.arange(input_ids.shape[1]) + i for i in range(ngram_size)]
         ).T
         idx = idx[(idx[:, -1] < input_ids.shape[1])]
+        # Continue if empty
+        if idx.size == 0:
+            continue
         ngram_idx.append(idx)
     return ngram_idx
 
@@ -121,8 +126,13 @@ class PhraseFoundry:
         )
         self.model = AutoModel.from_pretrained(model_name)
         self.model.eval().to(device)
+        if not isinstance(invalid_start_token_pattern, (str, type(None))):
+            raise TypeError("`invalid_start_token_pattern` must be a string.")
         self.invalid_start_token_pattern = invalid_start_token_pattern
+        if not isinstance(exclude_tokens, (list, tuple, set, np.ndarray, type(None))):
+            raise TypeError("`exclude_tokens` must be a list of token IDs or tokens.")
         self.exclude_tokens = exclude_tokens
+
 
     @property
     def device(self) -> torch.device:
@@ -419,7 +429,7 @@ class PhraseFoundry:
         do_chunking : bool, optional
             Enable chunking of documents into overlapping sequences, by default False.
         stride : int, optional
-            Stride for splitting documents into overlapping sequences, by default 128.
+            Stride for splitting documents into overlapping sequences, by default 0.
             Only used if `do_chunking` is True.
         amp : bool, optional
             Enable automatic mixed precision, by default False.
