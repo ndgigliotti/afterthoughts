@@ -40,3 +40,12 @@ To-Do
 
 * Support input chunking for long sequences
 * Add features for handling large datasets
+
+License
+-------
+
+This project is licensed under the Apache License 2.0. 
+
+Copyright 2024 Nicholas Gigliotti.
+
+You may use, distribute, and modify this project under the terms of the Apache License 2.0. For detailed information, see the `LICENSE <LICENSE>`_ file included in this repository or visit the official `Apache License website <http://www.apache.org/licenses/LICENSE-2.0>`_.
