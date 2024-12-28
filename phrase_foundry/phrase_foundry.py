@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Grammatron is a library for extracting n-grams from text using transformer models."""
+"""Phrase Foundry is a library for extracting n-grams from text using transformer models."""
 
 import re
 import numpy as np
@@ -95,7 +95,7 @@ def get_ngram_idx(
     return ngram_idx
 
 
-class Grammatron:
+class PhraseFoundry:
     def __init__(
         self,
         model_name: str,
@@ -103,7 +103,7 @@ class Grammatron:
         invalid_start_token_pattern: str | None = r"^##",
         exclude_tokens: list[str] | list[int] | None = None,
     ) -> None:
-        """Initialize a Grammatron model.
+        """Initialize a PhraseFoundry model.
 
         Parameters
         ----------
@@ -129,7 +129,7 @@ class Grammatron:
         """Returns the device the model is on."""
         return self.model.device
 
-    def to(self, device: torch.device | str | int) -> "Grammatron":
+    def to(self, device: torch.device | str | int) -> "PhraseFoundry":
         """Move the model to a new device.
 
         Parameters
@@ -139,7 +139,7 @@ class Grammatron:
 
         Returns
         -------
-        Grammatron
+        PhraseFoundry
             Returns the model instance.
         """
         self.model.to(device)

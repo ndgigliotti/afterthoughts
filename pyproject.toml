@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "grammatron"
+name = "phrase_foundry"
 version = "0.1.0"
 description = "Fast n-gram embeddings using transformers."
 readme = "README.rst"
@@ -31,9 +31,9 @@ dev = [
 
 [project.urls]
 
-bugs = "https://github.com/ndgigliotti/grammatron/issues"
-changelog = "https://github.com/ndgigliotti/grammatron/blob/master/changelog.md"
-homepage = "https://github.com/ndgigliotti/grammatron"
+bugs = "https://github.com/ndgigliotti/phrase-foundry/issues"
+changelog = "https://github.com/ndgigliotti/phrase-foundry/blob/master/changelog.md"
+homepage = "https://github.com/ndgigliotti/phrase-foundry"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
