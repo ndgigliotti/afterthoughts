@@ -3,15 +3,15 @@ Grammatron
 ==========
 
 
-.. image:: https://img.shields.io/pypi/v/grammatron.svg
-        :target: https://pypi.python.org/pypi/grammatron
+.. .. image:: https://img.shields.io/pypi/v/grammatron.svg
+..         :target: https://pypi.python.org/pypi/grammatron
 
-.. image:: https://img.shields.io/travis/ndgigliotti/grammatron.svg
-        :target: https://travis-ci.com/ndgigliotti/grammatron
+.. .. image:: https://img.shields.io/travis/ndgigliotti/grammatron.svg
+..         :target: https://travis-ci.com/ndgigliotti/grammatron
 
-.. image:: https://readthedocs.org/projects/grammatron/badge/?version=latest
-        :target: https://embed-gram.readthedocs.io/en/latest/?version=latest
-        :alt: Documentation Status
+.. .. image:: https://readthedocs.org/projects/grammatron/badge/?version=latest
+..         :target: https://embed-gram.readthedocs.io/en/latest/?version=latest
+..         :alt: Documentation Status
 
 
 
@@ -19,8 +19,7 @@ Grammatron
 Fast n-gram embeddings using transformers.
 
 
-* Free software: MIT license
-.. * Documentation: https://grammatron.readthedocs.io.
+* Free software: Apache Software License 2.0
 
 This is a new project that is heavily under development. Please check back soon for updates.
 
