@@ -108,9 +108,31 @@ def test_tokenized_dataset_getitem():
         "attention_mask": torch.Tensor([[1, 1, 1], [1, 1, 1]]),
     }
     dataset = TokenizedDataset(inputs)
-    item = dataset[0]
+    idx, item = dataset[0]
+    assert idx == 0
     assert item["input_ids"].tolist() == [1, 2, 3]
     assert item["attention_mask"].tolist() == [1, 1, 1]
+
+
+def test_tokenized_dataset_shuffle():
+    """
+    Test the shuffling of the TokenizedDataset.
+
+    This test verifies that the TokenizedDataset can be shuffled using the
+    `shuffle` method. It creates a TokenizedDataset instance with a sample
+    input tensor, shuffles the dataset, and checks that the input_ids of the
+    first item are not equal to the original input_ids.
+
+    Assertions:
+        - The input_ids of the first item after shuffling should not match the original input_ids.
+    """
+    inputs = {"input_ids": torch.Tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]])}
+    dataset = TokenizedDataset(inputs, shuffle=True, random_state=42)
+    idx, item = dataset[0]
+    assert idx != 0
+    assert idx == dataset.order_idx[0]
+    assert item["input_ids"].tolist() != [1, 2, 3]
+    assert item["input_ids"].tolist() == [7, 8, 9]
 
 
 def test_tokenized_dataset_getitem_out_of_bounds():
@@ -627,11 +649,12 @@ def test_phrase_foundry_encode():
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
     phrase_foundry = PhraseFoundry(model_name)
     docs = ["This is a test document."]
-    inputs, token_embeds = phrase_foundry.encode(
-        docs, max_length=10, batch_size=1, stride=3
-    )
-    assert "input_ids" in inputs
-    assert token_embeds.shape[0] == len(docs)
+    encodings = phrase_foundry._encode(docs, max_length=10, batch_size=1, stride=3)
+    assert "input_ids" in encodings
+    assert len(encodings["token_embeds"]) == len(docs)
+    assert len(encodings["input_ids"]) == len(docs)
+    assert len(encodings["seq_idx"]) == len(docs)
+    assert len(encodings["overflow_to_sample_mapping"]) == len(docs)
 
 
 def test_phrase_foundry_encode_extract():
@@ -689,134 +712,6 @@ def test_phrase_foundry_encode_queries():
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
     phrase_foundry = PhraseFoundry(model_name)
     queries = ["test query"]
-    query_embeds = phrase_foundry.encode_queries(
-        queries, max_length=10, batch_size=1, stride=3
-    )
+    query_embeds = phrase_foundry.encode_queries(queries, max_length=10, batch_size=1)
     assert query_embeds.shape[0] == len(queries)
     assert query_embeds.shape[1] == 384
-
-
-def test_encode_with_amp_enabled():
-    """
-    Test the `encode` method of the `PhraseFoundry` class with AMP enabled.
-
-    This test verifies that the `encode` method correctly processes a list of documents
-    and returns the expected inputs and token embeddings when AMP (Automatic Mixed Precision)
-    is enabled.
-
-    Steps:
-    1. Initialize a `PhraseFoundry` instance with a specified model name.
-    2. Define a list of documents to be encoded.
-    3. Call the `encode` method with the documents, specifying `max_length`, `batch_size`, `stride`, and `amp=True`.
-    4. Assert that the returned inputs contain the key "input_ids".
-    5. Assert that the shape of the token embeddings matches the number of documents.
-
-    Raises:
-        AssertionError: If the inputs do not contain "input_ids" or if the shape of the token embeddings is incorrect.
-    """
-    model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
-    phrase_foundry = PhraseFoundry(model_name)
-    docs = ["This is a test document."]
-    inputs, token_embeds = phrase_foundry.encode(
-        docs, max_length=10, batch_size=1, stride=3, amp=True
-    )
-    assert "input_ids" in inputs
-    assert token_embeds.shape[0] == len(docs)
-
-
-def test_encode_with_amp_disabled():
-    """
-    Test the `encode` method of the `PhraseFoundry` class with AMP disabled.
-
-    This test verifies that the `encode` method correctly processes a list of documents
-    and returns the expected inputs and token embeddings when AMP (Automatic Mixed Precision)
-    is disabled.
-
-    Steps:
-    1. Initialize a `PhraseFoundry` instance with a specified model name.
-    2. Define a list of documents to be encoded.
-    3. Call the `encode` method with the documents, specifying `max_length`, `batch_size`, `stride`, and `amp=False`.
-    4. Assert that the returned inputs contain the key "input_ids".
-    5. Assert that the shape of the token embeddings matches the number of documents.
-
-    Raises:
-        AssertionError: If the inputs do not contain "input_ids" or if the shape of the token embeddings is incorrect.
-    """
-    model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
-    phrase_foundry = PhraseFoundry(model_name)
-    docs = ["This is a test document."]
-    inputs, token_embeds = phrase_foundry.encode(
-        docs, max_length=10, batch_size=1, stride=3, amp=False
-    )
-    assert "input_ids" in inputs
-    assert token_embeds.shape[0] == len(docs)
-
-
-def test_encode_with_chunking():
-    """
-    Test the `encode` method of the `PhraseFoundry` class with chunking enabled.
-
-    This test verifies that the `encode` method correctly processes a list of documents
-    with chunking enabled and returns the expected inputs and token embeddings.
-
-    Steps:
-    1. Initialize a `PhraseFoundry` instance with a specified model name.
-    2. Define a list of documents to be encoded.
-    3. Call the `encode` method with the documents, specifying `max_length`, `batch_size`, `stride`, and `do_chunking=True`.
-    4. Assert that the returned inputs contain the key "input_ids".
-    5. Assert that the shape of the token embeddings matches the expected number of chunks.
-    6. Verify that the last chunk tokens match the last tokens of the document.
-
-    Raises:
-        AssertionError: If the inputs do not contain "input_ids" or if the shape of the token embeddings is incorrect.
-    """
-    model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
-    phrase_foundry = PhraseFoundry(model_name)
-    docs = [
-        "This is a test document. " * 50
-    ]  # Create a long document to ensure chunking
-    max_length = 10
-    stride = 5
-    inputs, token_embeds = phrase_foundry.encode(
-        docs, max_length=max_length, stride=stride, do_chunking=True
-    )
-    assert "input_ids" in inputs
-    assert token_embeds.shape[0] == 99
-    token_ids = phrase_foundry.tokenizer(docs, return_tensors="np")["input_ids"][0]
-    # Check that the last chunk tokens match the last tokens of the document
-    last_chunk_tokens = inputs["input_ids"][-1, 1:].cpu().numpy()
-    last_chunk_tokens = last_chunk_tokens[
-        last_chunk_tokens != phrase_foundry.tokenizer.pad_token_id
-    ]
-    np.testing.assert_equal(last_chunk_tokens, token_ids[-len(last_chunk_tokens) :])
-
-
-def test_encode_without_chunking():
-    """
-    Test the `encode` method of the `PhraseFoundry` class with chunking disabled.
-
-    This test verifies that the `encode` method correctly processes a list of documents
-    without chunking and returns the expected inputs and token embeddings.
-
-    Steps:
-    1. Initialize a `PhraseFoundry` instance with a specified model name.
-    2. Define a list of documents to be encoded.
-    3. Call the `encode` method with the documents, specifying `max_length`, `batch_size`, `stride`, and `do_chunking=False`.
-    4. Assert that the returned inputs contain the key "input_ids".
-    5. Assert that the shape of the token embeddings matches the number of documents.
-
-    Raises:
-        AssertionError: If the inputs do not contain "input_ids" or if the shape of the token embeddings is incorrect.
-    """
-    model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
-    phrase_foundry = PhraseFoundry(model_name)
-    docs = [
-        "This is a test document. " * 50
-    ]  # Create a long document to ensure chunking
-    max_length = 10
-    stride = 5
-    inputs, token_embeds = phrase_foundry.encode(
-        docs, max_length=max_length, stride=stride, do_chunking=False
-    )
-    assert "input_ids" in inputs
-    assert token_embeds.shape[0] == len(docs)

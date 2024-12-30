@@ -32,7 +32,7 @@ One of the key advantages of this approach is the efficiency of deriving n-gram 
 
     model = PhraseFoundry(
         # Choose a model which works well with mean-tokens pooling
-        "sentence-transformers/all-mpnet-base-v2",
+        "sentence-transformers/paraphrase-MiniLM-L3-v2",
         device="cuda",
         # Disallow n-grams that start with a subword token
         invalid_start_token_pattern=r"^##",
@@ -46,7 +46,7 @@ One of the key advantages of this approach is the efficiency of deriving n-gram 
     ```python
     samp_idx, ngrams, ngram_vecs = model.encode_extract(
         docs,
-        batch_size=256, # Model batch size, can set larger if AMP is enabled
+        batch_size=512, # Model batch size, can set larger if AMP is enabled
         ngram_range=(4, 6), # Range of n-gram sizes to extract
     )
     ```
@@ -62,40 +62,126 @@ One of the key advantages of this approach is the efficiency of deriving n-gram 
     doc_ngram_vecs = ngram_vecs[samp_idx == i]
     ```
 
-5. Optionally, encode a query string and find ngrams within a nearby radius:
+5. Optionally, encode query strings and find n-grams within a nearby radius. First 
+define a quick search function:
 
     ```python
-    from sklearn.neighbors import NearestNeighbors
+    import numpy as np
+    from sklearn import neighbors as nb
 
-    nn = NearestNeighbors(radius=0.45, metric="cosine")
-    nn.fit(ngram_vecs)
-    queries = model.encode_queries(["interest rate is too high"])
-    dists, idx = nn.radius_neighbors(queries)
-    ngrams[idx[0]] # N-grams
-    samp_idx[idx[0]] # Source document indices
+    def search(
+        queries: list[str],
+        query_vecs: np.ndarray,
+        ngrams: np.ndarray = ngrams,
+        ngram_vecs: np.ndarray = ngram_vecs,
+        samp_idx: np.ndarray = samp_idx,
+        radius: float = 0.5,
+        metric: str = "cosine",
+    ):
+        search_index = nb.NearestNeighbors(radius=radius, metric=metric)
+        search_index.fit(ngram_vecs)
+        dists, idx = search_index.radius_neighbors(query_vecs, return_distance=True)
+        rankings = [np.argsort(d) for d in dists]
+        idx = [i[r] for i, r in zip(idx, rankings)]
+        return {
+            queries[i]: (ngrams[idx[i]], np.unique(samp_idx[idx[i]]))
+            for i in range(len(queries))
+        }
     ```
-    The `radius` parameter can be adjusted to find n-grams within a certain cosine distance of the query.
 
-### Using Automatic Mixed Precision (AMP)
+    Normally you'd want to keep `search_index` for future use, but this is just an example. Now you can search for n-grams near the queries:
 
-To enable automatic mixed precision, set the `amp` parameter to `True` when calling any of the encoding methods. This will automatically lower the numerical precision of the most numerically stable layers, reducing the memory footprint of the model and increasing inference speed. You may also want to adjust the `amp_dtype` parameter to select the lower-precision data type.
+    ```python
+    queries = [
+        "close my account",
+        "credit card fraud",
+        "debt collection",
+        "identity theft",
+        "mortgage fraud",
+        "overdraft fees",
+        "payday loan",
+        "student loan",
+        "unauthorized transaction",
+        "vehicle loan",
+    ]
+    query_vecs = model.encode_queries(queries) # Encode the queries using the model
+    results = search(queries, query_vecs, ngram_vecs=ngram_vecs, radius=0.3)
+    ```
+    The `radius` parameter can be adjusted to find n-grams within the specified cosine distance of the query.
+
+### Optimizations
+
+#### Using ApproxPhraseFoundry
+
+If you are working with more than a couple thousand documents, it is recommended to use the `ApproxPhraseFoundry` class. This class uses PCA to dynamically reduce the dimensionality of each batch of n-gram embeddings. This class fits PCA incrementally until it has seen the specified number of n-gram embeddings, at which point it stops updating the PCA transformation and begins applying it to each batch (including retroactively). This can significantly reduce the memory requirements of the model without sacrificing too much accuracy. Be sure to set the `n_pca_components` parameter to a value that balances memory efficiency and accuracy for your use case. Also be sure to set the `n_pca_training_samples` parameter to a value that is large enough to learn the transformation but small enough to allow the training to complete early on in the encoding process. Initialize the model like so:
 
 ```python
 import torch
+from PhraseFoundry import ApproxPhraseFoundry
 
-samp_idx, ngrams, ngram_vecs = model.encode_extract(
-    docs,
-    batch_size=512, # Model batch size set larger since AMP is enabled
-    ngram_range=(4, 6),
+model = ApproxPhraseFoundry(
+    "sentence-transformers/paraphrase-MiniLM-L3-v2", # Lightweight model
+    n_pca_components=64, # 64 components is likely to capture a lot of the variance
+    n_pca_training_samples=int(5e6), # 5 million n-grams (set according to the size of your dataset)
+)
+```
+#### Using Automatic Mixed Precision (AMP)
+
+To enable automatic mixed precision, set the `amp` parameter to `True` during initialization. This will automatically lower the numerical precision of the most numerically stable layers, reducing the memory footprint of the model and increasing inference speed. You may also want to adjust the `amp_dtype` parameter to select the lower-precision data type.
+
+```python
+import torch
+from PhraseFoundry import PhraseFoundry
+
+model = PhraseFoundry(
+    "sentence-transformers/paraphrase-MiniLM-L3-v2",
     amp=True,
     amp_dtype=torch.bfloat16,
 )
 ```
+
+The same is true when using `ApproxPhraseFoundry`:
+
+```python
+import torch
+from PhraseFoundry import ApproxPhraseFoundry
+
+model = ApproxPhraseFoundry(
+    "sentence-transformers/paraphrase-MiniLM-L3-v2",
+    n_pca_components=64,
+    n_pca_training_samples=int(5e6),
+    amp=True,
+    amp_dtype=torch.bfloat16,
+)
+```
+
+#### Quantizing the Embeddings to 16-bit Floating Point
+
+To further reduce the memory footprint of the final embeddings, Phrase Foundry makes it convenient to quantize them to 16-bit floating point. This can be done by setting the `quantize_embeds` parameter to `True` during initialization. This will quantize the embeddings to 16-bit floating point after they are extracted from the model and all transformations have been applied. This can be useful when working with large datasets or when memory is a concern, and generally not much accuracy is lost.
+
+#### High Efficiency Configuration
+
+The most memory-efficient configuration is to use `ApproxPhraseFoundry` with automatic mixed precision and quantized embeddings. This configuration is ideal for working with large datasets on a machine with limited memory. Here is an example of how to initialize the model with this configuration:
+
+```python
+import torch
+from PhraseFoundry import ApproxPhraseFoundry
+
+model = ApproxPhraseFoundry(
+    "sentence-transformers/paraphrase-MiniLM-L3-v2", # Lightweight model
+    n_pca_components=64, # Likely to capture a lot of the variance
+    n_pca_training_samples=int(5e6), # 5 million n-grams; good for a large dataset
+    amp=True, # Enable automatic mixed precision
+    amp_dtype=torch.bfloat16, # Use bfloat16 for better numerical stability
+    quantize_embeds=True, # Quantize the final embeddings to 16-bit floating point
+)
+```
+
 ## Known Limitations
 
 #### Memory Requirements
 
-Since each document can contain thousands of n-grams, the memory requirements for this approach can be quite high. Currently, it is limited to usage on small datasets, or processing small batches of large datasets incrementally. In the future, I may add features to make it more convenient to work with large datasets.
+Since each document can contain thousands of n-grams, the memory requirements for this approach can be quite high.
 
 #### Sequence Length
 
