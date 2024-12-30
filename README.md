@@ -18,7 +18,7 @@ For example, suppose that your documents are lengthy movie reviews, and you are 
 
 ### Advantages and Limitations
 
-One of the key advantages of this approach is the efficiency of deriving n-gram embeddings downstream of the model. Rather than finding n-grams first and running each n-gram through the model as a separate sequence, the entire document is run through the model at once. Since running sequences through the model is computationally intensive, it is much faster to run through a small number of documents through than a large number of short sequences.
+One of the key advantages of this approach is the efficiency of deriving n-gram embeddings downstream of the model. Rather than finding n-grams first and running each n-gram through the model as a separate sequence, the entire document is run through the model at once. Since running sequences through the model is computationally intensive, it is much faster to run a small number of documents through than a massive number of short sequences.
 
 The most obvious limitation of this approach is that extracting thousands of embeddings per document (all possible n-grams) is extremely memory intensive. Hence, a considerable amount of engineering has gone into making this process as memory efficient as possible. This includes using the `transformers` library for efficient model loading, using PyTorch for efficient GPU memory management, and dynamically fitting PCA during inference to reduce the dimensionality of the embeddings.
 
