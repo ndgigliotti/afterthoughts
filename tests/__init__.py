@@ -1,1 +1,1 @@
-"""Unit test package for Phrase Foundry."""
+"""Unit test package for FinePhrase."""

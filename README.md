@@ -1,14 +1,26 @@
-# Phrase Foundry
+# FinePhrase
 
-Forge n-gram embeddings using state-of-the-art transformers.
+Generate fine-grained n-gram embeddings with state-of-the-art transformers.
 
 This is a new project that is heavily under development. Please check back soon for updates.
 
 ## Concept
 
-Phrase Foundry provides a fast and context-aware method of embedding n-grams using transformers. It can be used for a variety of tasks, including semantic search, search-based classification, clustering, cluster interpretation, and more. Its primary feature is the ability to "melt down" the transformer's contextually enriched token embeddings and "cast" them into n-gram embeddings. This is done by calculating all the possible token n-grams and averaging the corresponding token embeddings from the model's final hidden state. The result is a set of contextually enriched n-gram embeddings.
+FinePhrase provides a fast, memory efficient, and context-aware method of generating massive numbers of n-gram embeddings using transformers. It can be used for a variety of tasks, including semantic search, rules-based classification, clustering, cluster interpretation, and more. Its primary feature is the ability to efficiently combine the transformer's contextually enriched token embeddings to derive n-gram embeddings. This is done by calculating all the possible token n-grams and averaging the corresponding token embeddings from the model's final hidden state. The result is a set of contextually enriched n-gram embeddings.
 
-One of the key advantages of this approach is the efficiency of deriving n-gram embeddings downstream of the model. Rather than finding n-grams using e.g. `nltk` and running each n-gram through the model as a separate sequence, the entire document is run through the model at once. Since running sequences through the model is the bottleneck of the process, it is much faster to run through a small number of documents than a large number of short sequences.
+Unlike tools like [KeyBERT](https://github.com/MaartenGr/KeyBERT), the purpose of FinePhrase is not to extract the top key-phrases from a document, nor even to extract their embeddings. Rather, the purpose is to extract *all* the n-gram embeddings to facilitate fine-grained analysis. FinePhrase is designed to be highly memory efficient, allowing you to generate n-gram embeddings for tens of thousands of documents of without running out of memory. That means holding tens of millions of n-gram embeddings in memory at once, depending on the configuration.
+
+### Motivation
+
+Typically data scientists opt to use document-level embeddings for tasks like semantic search, clustering, and classification. This is generally much faster, more memory efficient, and more scalable. However, these embeddings can be too coarse to capture the nuances of the data, representing the "overall meaning" at the expense of the details. By using n-gram embeddings, you can capture the meaning of the data at a much finer level of granularity. This can be particularly useful when working with long or complex documents, where there are multiple topics discussed in different parts of the document.
+
+For example, suppose that your documents are lengthy movie reviews, and you are looking for one particular claim of interest, such as "the characters are one-dimensional". If you use document-level embeddings, you may find that you miss reviews where character development is a minor concern and not the central topic of the review. However, if you use n-gram embeddings, you can find any part of the review where one-dimensional characters are mentioned.
+
+### Advantages and Limitations
+
+One of the key advantages of this approach is the efficiency of deriving n-gram embeddings downstream of the model. Rather than finding n-grams first and running each n-gram through the model as a separate sequence, the entire document is run through the model at once. Since running sequences through the model is computationally intensive, it is much faster to run through a small number of documents through than a large number of short sequences.
+
+The most obvious limitation of this approach is that extracting thousands of embeddings per document (all possible n-grams) is extremely memory intensive. Hence, a considerable amount of engineering has gone into making this process as memory efficient as possible. This includes using the `transformers` library for efficient model loading, using PyTorch for efficient GPU memory management, and dynamically fitting PCA during inference to reduce the dimensionality of the embeddings.
 
 ## Features
 
@@ -22,17 +34,19 @@ One of the key advantages of this approach is the efficiency of deriving n-gram 
 1. Install the package using pip:
 
     ```bash
-    pip install pip@git+https://github.com/ndgigliotti/phrase-foundry.git
+    pip install TBD
     ```
 
-2. Create a `PhraseFoundry` object and load a transformer model:
+2. Create a `FinePhrasePCA` object and load a transformer model. I generally recommend using the PCA variant of `FinePhrase`, as it is more memory efficient and scalable to datasets of tens of thousands of documents. The `FinePhrasePCA` class dynamically fits PCA to reduce the dimensionality of the n-gram embeddings, which can significantly reduce the pipeline's memory usage. For a small dataset of only a couple thousand documents, you can use the more precise `FinePhrase` class. Here is an example of how to initialize the model:
 
     ```python
-    from phrase_foundry import PhraseFoundry
+    from finephrase import FinePhrasePCA
 
-    model = PhraseFoundry(
+    model = FinePhrasePCA(
         # Choose a model which works well with mean-tokens pooling
         "sentence-transformers/paraphrase-MiniLM-L3-v2",
+        pca_components=64, # Number of PCA components to use
+        pca_training_samples=int(3e6), # Number of n-grams to use for PCA training
         device="cuda",
         # Disallow n-grams that start with a subword token
         invalid_start_token_pattern=r"^##",
@@ -111,15 +125,15 @@ define a quick search function:
 
 ### Optimizations
 
-#### Using ApproxPhraseFoundry
+#### Using FinePhrasePCA
 
-If you are working with more than a couple thousand documents, it is recommended to use the `ApproxPhraseFoundry` class. This class uses PCA to dynamically reduce the dimensionality of each batch of n-gram embeddings. This class fits PCA incrementally until it has seen the specified number of n-gram embeddings, at which point it stops updating the PCA transformation and begins applying it to each batch (including retroactively). This can significantly reduce the memory requirements of the model without sacrificing too much accuracy. Be sure to set the `n_pca_components` parameter to a value that balances memory efficiency and accuracy for your use case. Also be sure to set the `n_pca_training_samples` parameter to a value that is large enough to learn the transformation but small enough to allow the training to complete early on in the encoding process. Initialize the model like so:
+If you are working with more than a couple thousand documents, it is recommended to use the `FinePhrasePCA` class. This class uses PCA to dynamically reduce the dimensionality of each batch of n-gram embeddings. This class fits PCA incrementally until it has seen the specified number of n-grams, at which point it stops updating the PCA transformation and begins applying it to each batch (including retroactively). This can significantly reduce the memory requirements of the pipeline without sacrificing too much accuracy. Be sure to set the `n_pca_components` parameter to a value that balances memory efficiency and accuracy for your use case. Also be sure to set the `n_pca_training_samples` parameter to a value that is large enough to learn the transformation but small enough to allow the training to complete early on in the encoding process. Initialize the model like so:
 
 ```python
 import torch
-from PhraseFoundry import ApproxPhraseFoundry
+from FinePhrase import FinePhrasePCA
 
-model = ApproxPhraseFoundry(
+model = FinePhrasePCA(
     "sentence-transformers/paraphrase-MiniLM-L3-v2", # Lightweight model
     n_pca_components=64, # 64 components is likely to capture a lot of the variance
     n_pca_training_samples=int(5e6), # 5 million n-grams (set according to the size of your dataset)
@@ -131,22 +145,22 @@ To enable automatic mixed precision, set the `amp` parameter to `True` during in
 
 ```python
 import torch
-from PhraseFoundry import PhraseFoundry
+from FinePhrase import FinePhrase
 
-model = PhraseFoundry(
+model = FinePhrase(
     "sentence-transformers/paraphrase-MiniLM-L3-v2",
     amp=True,
     amp_dtype=torch.bfloat16,
 )
 ```
 
-The same is true when using `ApproxPhraseFoundry`:
+The same is true when using `FinePhrasePCA`:
 
 ```python
 import torch
-from PhraseFoundry import ApproxPhraseFoundry
+from FinePhrase import FinePhrasePCA
 
-model = ApproxPhraseFoundry(
+model = FinePhrasePCA(
     "sentence-transformers/paraphrase-MiniLM-L3-v2",
     n_pca_components=64,
     n_pca_training_samples=int(5e6),
@@ -155,19 +169,19 @@ model = ApproxPhraseFoundry(
 )
 ```
 
-#### Quantizing the Embeddings to 16-bit Floating Point
+#### Quantizing the Embeddings to 16-bit
 
-To further reduce the memory footprint of the final embeddings, Phrase Foundry makes it convenient to quantize them to 16-bit floating point. This can be done by setting the `quantize_embeds` parameter to `True` during initialization. This will quantize the embeddings to 16-bit floating point after they are extracted from the model and all transformations have been applied. This can be useful when working with large datasets or when memory is a concern, and generally not much accuracy is lost.
+To further reduce the memory footprint of the final embeddings, FinePhrase makes it convenient to quantize them to 16-bit floating point. This can be done by setting the `quantize_embeds` parameter to `True` during initialization. This will quantize the embeddings to 16-bit floating point after they are extracted from the model and all transformations have been applied. This can be useful when working with large datasets or when memory is a concern, and generally not much accuracy is lost.
 
 #### High Efficiency Configuration
 
-The most memory-efficient configuration is to use `ApproxPhraseFoundry` with automatic mixed precision and quantized embeddings. This configuration is ideal for working with large datasets on a machine with limited memory. Here is an example of how to initialize the model with this configuration:
+The most memory-efficient configuration is to use `FinePhrasePCA` with automatic mixed precision and quantized embeddings. This configuration is ideal for working with large datasets on a machine with limited memory. Here is an example of how to initialize the model with this configuration:
 
 ```python
 import torch
-from PhraseFoundry import ApproxPhraseFoundry
+from FinePhrase import FinePhrasePCA
 
-model = ApproxPhraseFoundry(
+model = FinePhrasePCA(
     "sentence-transformers/paraphrase-MiniLM-L3-v2", # Lightweight model
     n_pca_components=64, # Likely to capture a lot of the variance
     n_pca_training_samples=int(5e6), # 5 million n-grams; good for a large dataset
@@ -186,6 +200,12 @@ Since each document can contain thousands of n-grams, the memory requirements fo
 #### Sequence Length
 
 The context-awareness is limited by the maximum sequence length of the model. Currently, documents that exceed the maximum sequence length are handled by chunking the sequence into smaller overlapping sequences. This can lead to a loss of context at the boundaries of the chunks and also results in duplicate n-grams.
+
+## Future Ideas
+
+* Add optional normalization for the n-gram embeddings
+* Add features for deduping the n-grams
+* Add features for filtering n-grams
 
 ## License
 

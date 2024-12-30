@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Phrase Foundry is a library for extracting n-grams from text using transformer models."""
+"""FinePhrase is a library for extracting n-grams from text using transformer models."""
 
 import re
 import numpy as np
@@ -117,7 +117,7 @@ def get_ngram_idx(
     return ngram_idx
 
 
-class PhraseFoundry:
+class FinePhrase:
     def __init__(
         self,
         model_name: str,
@@ -128,7 +128,7 @@ class PhraseFoundry:
         invalid_start_token_pattern: str | None = r"^##",
         exclude_tokens: list[str] | list[int] | None = None,
     ) -> None:
-        """Initialize a PhraseFoundry model.
+        """Initialize a FinePhrase model.
 
         Parameters
         ----------
@@ -168,7 +168,7 @@ class PhraseFoundry:
         """Returns the device the model is on."""
         return self.model.device
 
-    def to(self, device: torch.device | str | int) -> "PhraseFoundry":
+    def to(self, device: torch.device | str | int) -> "FinePhrase":
         """Move the model to a new device.
 
         Parameters
@@ -178,7 +178,7 @@ class PhraseFoundry:
 
         Returns
         -------
-        PhraseFoundry
+        FinePhrase
             Returns the model instance.
         """
         self.model.to(device)
@@ -488,7 +488,7 @@ class PhraseFoundry:
         return query_embeds
 
 
-class ApproxPhraseFoundry(PhraseFoundry):
+class FinePhrasePCA(FinePhrase):
     def __init__(
         self,
         model_name: str,
@@ -501,7 +501,7 @@ class ApproxPhraseFoundry(PhraseFoundry):
         invalid_start_token_pattern: str | None = r"^##",
         exclude_tokens: list[str] | list[int] | None = None,
     ) -> None:
-        """Initialize an ApproxPhraseFoundry model.
+        """Initialize an FinePhrasePCA model.
 
         Parameters
         ----------

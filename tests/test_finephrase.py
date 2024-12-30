@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for `Phrase Foundry` package."""
+"""Tests for `FinePhrase` package."""
 
 import re
 import numpy as np
 import torch
 import pytest
-from phrase_foundry.phrase_foundry import TokenizedDataset, PhraseFoundry, get_ngram_idx
+from finephrase.finephrase import TokenizedDataset, FinePhrase, get_ngram_idx
 
 
 def test_tokenized_dataset_init_valid_inputs():
@@ -312,13 +312,13 @@ def test_get_ngram_idx_ngram_range_out_of_bounds():
     assert output == expected_output
 
 
-def test_phrase_foundry_init_valid_model_name():
+def test_finephrase_init_valid_model_name():
     """
-    Test the initialization of the PhraseFoundry class with a valid model name.
+    Test the initialization of the FinePhrase class with a valid model name.
 
-    This test verifies that the PhraseFoundry class is correctly initialized with
+    This test verifies that the FinePhrase class is correctly initialized with
     the provided model name. It checks that the tokenizer and model within the
-    PhraseFoundry instance are set to the correct paths, and that the default
+    FinePhrase instance are set to the correct paths, and that the default
     values for `invalid_start_token_pattern` and `exclude_tokens` are set as
     expected.
 
@@ -329,167 +329,165 @@ def test_phrase_foundry_init_valid_model_name():
         - The `exclude_tokens` attribute is set to None.
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
-    phrase_foundry = PhraseFoundry(model_name)
-    assert phrase_foundry.tokenizer.name_or_path == model_name
-    assert phrase_foundry.model.name_or_path == model_name
-    assert phrase_foundry.invalid_start_token_pattern == r"^##"
-    assert phrase_foundry.exclude_tokens is None
+    fp = FinePhrase(model_name)
+    assert fp.tokenizer.name_or_path == model_name
+    assert fp.model.name_or_path == model_name
+    assert fp.invalid_start_token_pattern == r"^##"
+    assert fp.exclude_tokens is None
 
 
-def test_phrase_foundry_init_invalid_model_name():
+def test_finephrase_init_invalid_model_name():
     """
-    Test the initialization of the PhraseFoundry class with an invalid model name.
+    Test the initialization of the FinePhrase class with an invalid model name.
 
     This test verifies that an OSError is raised when attempting to initialize
-    the PhraseFoundry class with a model name that does not exist or is invalid.
+    the FinePhrase class with a model name that does not exist or is invalid.
 
     Raises:
         OSError: If the model name provided is invalid.
     """
     model_name = "invalid-model-name"
     with pytest.raises(OSError):
-        PhraseFoundry(model_name)
+        FinePhrase(model_name)
 
 
-def test_phrase_foundry_init_custom_device():
+def test_finephrase_init_custom_device():
     """
-    Test the initialization of the PhraseFoundry class with a custom device.
+    Test the initialization of the FinePhrase class with a custom device.
 
-    This test verifies that the PhraseFoundry class can be initialized with a
+    This test verifies that the FinePhrase class can be initialized with a
     specified model name and device, and checks that the device attribute of
-    the PhraseFoundry instance is correctly set to the specified device.
+    the FinePhrase instance is correctly set to the specified device.
 
     Assertions:
-        - The device type of the PhraseFoundry instance should be "cpu".
+        - The device type of the FinePhrase instance should be "cpu".
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
     device = "cpu"
-    phrase_foundry = PhraseFoundry(model_name, device=device)
-    assert phrase_foundry.device.type == "cpu"
+    fp = FinePhrase(model_name, device=device)
+    assert fp.device.type == "cpu"
 
 
-def test_phrase_foundry_init_custom_invalid_start_token_pattern():
+def test_finephrase_init_custom_invalid_start_token_pattern():
     """
-    Test the initialization of the PhraseFoundry class with a custom invalid start token pattern.
+    Test the initialization of the FinePhrase class with a custom invalid start token pattern.
 
-    This test verifies that the PhraseFoundry instance correctly initializes with a given
+    This test verifies that the FinePhrase instance correctly initializes with a given
     invalid start token pattern and that the corresponding invalid start token IDs are set
     as expected.
 
     Steps:
     1. Define the model name and an invalid start token pattern.
-    2. Initialize the PhraseFoundry instance with the provided model name and invalid start token pattern.
-    3. Verify that the invalid start token pattern is correctly set in the PhraseFoundry instance.
+    2. Initialize the FinePhrase instance with the provided model name and invalid start token pattern.
+    3. Verify that the invalid start token pattern is correctly set in the FinePhrase instance.
     4. Verify that the invalid start token IDs match the expected values.
 
     Assertions:
-    - The invalid start token pattern in the PhraseFoundry instance should match the provided pattern.
-    - The invalid start token IDs in the PhraseFoundry instance should match the expected IDs.
+    - The invalid start token pattern in the FinePhrase instance should match the provided pattern.
+    - The invalid start token IDs in the FinePhrase instance should match the expected IDs.
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
     invalid_start_token_pattern = r"^@"
-    phrase_foundry = PhraseFoundry(
-        model_name, invalid_start_token_pattern=invalid_start_token_pattern
-    )
+    fp = FinePhrase(model_name, invalid_start_token_pattern=invalid_start_token_pattern)
     expected_ids = [1030]
-    assert phrase_foundry.invalid_start_token_pattern == invalid_start_token_pattern
-    np.testing.assert_array_equal(phrase_foundry.invalid_start_token_ids, expected_ids)
+    assert fp.invalid_start_token_pattern == invalid_start_token_pattern
+    np.testing.assert_array_equal(fp.invalid_start_token_ids, expected_ids)
 
 
-def test_phrase_foundry_init_custom_exclude_tokens():
+def test_finephrase_init_custom_exclude_tokens():
     """
-    Test the initialization of the PhraseFoundry class with custom exclude tokens.
+    Test the initialization of the FinePhrase class with custom exclude tokens.
 
-    This test verifies that the PhraseFoundry class is correctly initialized with
+    This test verifies that the FinePhrase class is correctly initialized with
     a specified model name and a list of tokens to exclude. It checks that the
-    exclude_tokens attribute of the PhraseFoundry instance matches the provided
+    exclude_tokens attribute of the FinePhrase instance matches the provided
     exclude_tokens list.
 
     Assertions:
-        - The exclude_tokens attribute of the PhraseFoundry instance should be equal
+        - The exclude_tokens attribute of the FinePhrase instance should be equal
           to the provided exclude_tokens list.
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
     exclude_tokens = ["[CLS]", "[SEP]"]
-    phrase_foundry = PhraseFoundry(model_name, exclude_tokens=exclude_tokens)
-    assert phrase_foundry.exclude_tokens == exclude_tokens
+    fp = FinePhrase(model_name, exclude_tokens=exclude_tokens)
+    assert fp.exclude_tokens == exclude_tokens
 
 
-def test_phrase_foundry_to_cpu():
+def test_finephrase_to_cpu():
     """
-    Test the `to` method of the `PhraseFoundry` class to ensure that the model is moved to the CPU.
+    Test the `to` method of the `FinePhrase` class to ensure that the model is moved to the CPU.
 
-    This test initializes a `PhraseFoundry` instance with a specified model name and sets the device to "cuda".
+    This test initializes a `FinePhrase` instance with a specified model name and sets the device to "cuda".
     It then calls the `to` method to move the model to the CPU and asserts that the device type is "cpu".
 
     Raises:
         AssertionError: If the device type is not "cpu" after calling the `to` method.
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
-    phrase_foundry = PhraseFoundry(model_name, device="cuda")
-    phrase_foundry.to("cpu")
-    assert phrase_foundry.device.type == "cpu"
+    fp = FinePhrase(model_name, device="cuda")
+    fp.to("cpu")
+    assert fp.device.type == "cpu"
 
 
-def test_phrase_foundry_to_cuda():
+def test_finephrase_to_cuda():
     """
-    Test the `to` method of the `PhraseFoundry` class to ensure that the model is correctly moved to the CUDA device.
+    Test the `to` method of the `FinePhrase` class to ensure that the model is correctly moved to the CUDA device.
 
-    This test initializes a `PhraseFoundry` instance with a specified model name and sets the device to "cpu".
-    It then moves the model to the "cuda" device and asserts that the device type of the `PhraseFoundry` instance is "cuda".
+    This test initializes a `FinePhrase` instance with a specified model name and sets the device to "cpu".
+    It then moves the model to the "cuda" device and asserts that the device type of the `FinePhrase` instance is "cuda".
 
     Raises:
-        AssertionError: If the device type of the `PhraseFoundry` instance is not "cuda".
+        AssertionError: If the device type of the `FinePhrase` instance is not "cuda".
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
-    phrase_foundry = PhraseFoundry(model_name, device="cpu")
-    phrase_foundry.to("cuda")
-    assert phrase_foundry.device.type == "cuda"
+    fp = FinePhrase(model_name, device="cpu")
+    fp.to("cuda")
+    assert fp.device.type == "cuda"
 
 
-def test_phrase_foundry_to_invalid_device():
+def test_finephrase_to_invalid_device():
     """
-    Test the PhraseFoundry model's behavior when attempting to move it to an invalid device.
+    Test the FinePhrase model's behavior when attempting to move it to an invalid device.
 
-    This test initializes a PhraseFoundry instance with a specified model name and sets the device to "cpu".
+    This test initializes a FinePhrase instance with a specified model name and sets the device to "cpu".
     It then attempts to move the model to an invalid device and expects a RuntimeError to be raised.
 
     Raises:
         RuntimeError: If the model is moved to an invalid device.
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
-    phrase_foundry = PhraseFoundry(model_name, device="cpu")
+    fp = FinePhrase(model_name, device="cpu")
     with pytest.raises(RuntimeError):
-        phrase_foundry.to("invalid_device")
+        fp.to("invalid_device")
 
 
-def test_phrase_foundry_exclude_token_ids_none():
+def test_finephrase_exclude_token_ids_none():
     """
-    Test the `exclude_token_ids` attribute of the `PhraseFoundry` class when no token IDs are excluded.
+    Test the `exclude_token_ids` attribute of the `FinePhrase` class when no token IDs are excluded.
 
-    This test initializes a `PhraseFoundry` instance with a specified model name and checks that the
+    This test initializes a `FinePhrase` instance with a specified model name and checks that the
     `exclude_token_ids` attribute matches the `all_special_ids` attribute of the tokenizer.
 
     Assertions:
         - The `exclude_token_ids` attribute should be equal to the `all_special_ids` attribute of the tokenizer.
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
-    phrase_foundry = PhraseFoundry(model_name)
-    expected_ids = phrase_foundry.tokenizer.all_special_ids
-    np.testing.assert_array_equal(phrase_foundry.exclude_token_ids, expected_ids)
+    fp = FinePhrase(model_name)
+    expected_ids = fp.tokenizer.all_special_ids
+    np.testing.assert_array_equal(fp.exclude_token_ids, expected_ids)
 
 
-def test_phrase_foundry_exclude_token_ids_str_list():
+def test_finephrase_exclude_token_ids_str_list():
     """
-    Test the PhraseFoundry class to ensure that the exclude_token_ids attribute is correctly set
+    Test the FinePhrase class to ensure that the exclude_token_ids attribute is correctly set
     when a list of token strings is provided.
 
-    This test initializes a PhraseFoundry instance with a specified model and a list of tokens
-    to exclude. It then verifies that the exclude_token_ids attribute of the PhraseFoundry instance
+    This test initializes a FinePhrase instance with a specified model and a list of tokens
+    to exclude. It then verifies that the exclude_token_ids attribute of the FinePhrase instance
     matches the expected token IDs converted from the provided token strings.
 
     Assertions:
-        - The exclude_token_ids attribute of the PhraseFoundry instance should match the expected
+        - The exclude_token_ids attribute of the FinePhrase instance should match the expected
           token IDs converted from the provided token strings.
 
     Raises:
@@ -497,40 +495,40 @@ def test_phrase_foundry_exclude_token_ids_str_list():
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
     exclude_tokens = ["[CLS]", "[SEP]"]
-    phrase_foundry = PhraseFoundry(model_name, exclude_tokens=exclude_tokens)
-    expected_ids = phrase_foundry.tokenizer.convert_tokens_to_ids(exclude_tokens)
-    np.testing.assert_array_equal(phrase_foundry.exclude_token_ids, expected_ids)
+    fp = FinePhrase(model_name, exclude_tokens=exclude_tokens)
+    expected_ids = fp.tokenizer.convert_tokens_to_ids(exclude_tokens)
+    np.testing.assert_array_equal(fp.exclude_token_ids, expected_ids)
 
 
-def test_phrase_foundry_exclude_token_ids_int_list():
+def test_finephrase_exclude_token_ids_int_list():
     """
-    Test the PhraseFoundry class to ensure that the exclude_token_ids attribute is correctly set
+    Test the FinePhrase class to ensure that the exclude_token_ids attribute is correctly set
     when provided with a list of integer token IDs.
 
-    This test initializes a PhraseFoundry instance with a specified model name and a list of
+    This test initializes a FinePhrase instance with a specified model name and a list of
     token IDs to exclude. It then asserts that the exclude_token_ids attribute of the instance
     matches the provided list of token IDs.
 
     Tested attributes:
-    - model_name: The name of the model to be used by the PhraseFoundry instance.
+    - model_name: The name of the model to be used by the FinePhrase instance.
     - exclude_tokens: A list of integer token IDs to be excluded.
-    - phrase_foundry.exclude_token_ids: The attribute that should match the exclude_tokens list.
+    - fp.exclude_token_ids: The attribute that should match the exclude_tokens list.
 
     Assertions:
-    - The exclude_token_ids attribute of the PhraseFoundry instance should be equal to the
+    - The exclude_token_ids attribute of the FinePhrase instance should be equal to the
         exclude_tokens list.
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
     exclude_tokens = [101, 102]
-    phrase_foundry = PhraseFoundry(model_name, exclude_tokens=exclude_tokens)
-    np.testing.assert_array_equal(phrase_foundry.exclude_token_ids, exclude_tokens)
+    fp = FinePhrase(model_name, exclude_tokens=exclude_tokens)
+    np.testing.assert_array_equal(fp.exclude_token_ids, exclude_tokens)
 
 
-def test_phrase_foundry_exclude_token_ids_invalid_type():
+def test_finephrase_exclude_token_ids_invalid_type():
     """
-    Test that PhraseFoundry raises a TypeError when `exclude_tokens` is not a list.
+    Test that FinePhrase raises a TypeError when `exclude_tokens` is not a list.
 
-    This test verifies that the PhraseFoundry class correctly raises a TypeError
+    This test verifies that the FinePhrase class correctly raises a TypeError
     when the `exclude_tokens` parameter is provided as a string instead of a list.
     The expected error message should indicate that `exclude_tokens` must be a
     list of token IDs or tokens.
@@ -543,72 +541,70 @@ def test_phrase_foundry_exclude_token_ids_invalid_type():
     with pytest.raises(
         TypeError, match="`exclude_tokens` must be a list of token IDs or tokens."
     ):
-        PhraseFoundry(model_name, exclude_tokens=exclude_tokens)
+        FinePhrase(model_name, exclude_tokens=exclude_tokens)
 
 
-def test_phrase_foundry_invalid_start_token_ids():
+def test_finephrase_invalid_start_token_ids():
     """
-    Test the PhraseFoundry class for handling invalid start token IDs.
+    Test the FinePhrase class for handling invalid start token IDs.
 
-    This test initializes a PhraseFoundry instance with a specific model and
+    This test initializes a FinePhrase instance with a specific model and
     invalid start token pattern. It then verifies that the invalid start token
-    IDs in the PhraseFoundry instance match the expected token IDs derived from
+    IDs in the FinePhrase instance match the expected token IDs derived from
     the tokenizer's vocabulary.
 
     The test checks:
-    - The model name used for the PhraseFoundry instance.
+    - The model name used for the FinePhrase instance.
     - The pattern used to identify invalid start tokens.
     - The expected invalid start token IDs based on the pattern.
-    - The actual invalid start token IDs in the PhraseFoundry instance.
+    - The actual invalid start token IDs in the FinePhrase instance.
 
     Assertions:
-    - The invalid start token IDs in the PhraseFoundry instance should match
+    - The invalid start token IDs in the FinePhrase instance should match
       the expected token IDs.
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
     invalid_start_token_pattern = r"^##"
-    phrase_foundry = PhraseFoundry(
-        model_name, invalid_start_token_pattern=invalid_start_token_pattern
-    )
+    fp = FinePhrase(model_name, invalid_start_token_pattern=invalid_start_token_pattern)
     expected_ids = [
         v
-        for k, v in phrase_foundry.tokenizer.vocab.items()
+        for k, v in fp.tokenizer.vocab.items()
         if re.search(invalid_start_token_pattern, k)
     ]
-    np.testing.assert_array_equal(phrase_foundry.invalid_start_token_ids, expected_ids)
+    np.testing.assert_array_equal(fp.invalid_start_token_ids, expected_ids)
 
 
-def test_phrase_foundry_invalid_start_token_ids_none():
+def test_finephrase_invalid_start_token_ids_none():
     """
-    Test the PhraseFoundry class with an invalid start token pattern set to None.
+    Test the FinePhrase class with an invalid start token pattern set to None.
 
     This test verifies that when the invalid_start_token_pattern is set to None,
-    the PhraseFoundry instance initializes with an empty list for invalid_start_token_ids.
+    the FinePhrase instance initializes with an empty list for invalid_start_token_ids.
 
     Steps:
-    1. Initialize a PhraseFoundry instance with a specified model name and invalid_start_token_pattern set to None.
+    1. Initialize a FinePhrase instance with a specified model name and invalid_start_token_pattern set to None.
     2. Define the expected invalid_start_token_ids as an empty list.
-    3. Assert that the invalid_start_token_ids attribute of the PhraseFoundry instance matches the expected empty list.
+    3. Assert that the invalid_start_token_ids attribute of the FinePhrase instance matches the expected empty list.
 
     Expected Result:
     The invalid_start_token_ids attribute should be an empty list.
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
-    phrase_foundry = PhraseFoundry(model_name, invalid_start_token_pattern=None)
+    fp = FinePhrase(model_name, invalid_start_token_pattern=None)
     expected_ids = []
-    np.testing.assert_array_equal(phrase_foundry.invalid_start_token_ids, expected_ids)
+    np.testing.assert_array_equal(fp.invalid_start_token_ids, expected_ids)
 
 
-def test_phrase_foundry_extract_ngrams():
+def test_finephrase_extract_ngrams():
     """
-    Test the `extract_ngrams` method of the `PhraseFoundry` class.
+    Test the `extract_ngrams` method of the `FinePhrase` class.
 
     This test verifies that the `extract_ngrams` method correctly extracts n-grams
     from the input token IDs and token embeddings, and that the resulting n-grams,
     sequence indices, and n-gram vectors have the expected properties.
 
     The test uses the following parameters:
-    - `model_name`: The name of the model to be used by `PhraseFoundry`.
+    - `model_name`: The name of the model to be used by `FinePhrase`.
     - `input_ids`: A numpy array representing the token IDs of the input sequence.
     - `token_embeds`: A numpy array representing the token embeddings of the input sequence.
     - `ngram_range`: A tuple specifying the range of n-grams to be extracted.
@@ -618,26 +614,26 @@ def test_phrase_foundry_extract_ngrams():
     - The second dimension of `ngram_vecs` should be 384, which corresponds to the embedding size.
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
-    phrase_foundry = PhraseFoundry(model_name)
+    fp = FinePhrase(model_name)
     input_ids = np.array([[101, 2003, 1037, 2742, 102]])
     token_embeds = np.random.rand(1, 5, 384)
     ngram_range = (2, 3)
-    seq_idx, ngrams, ngram_vecs = phrase_foundry.extract_ngrams(
+    seq_idx, ngrams, ngram_vecs = fp.extract_ngrams(
         input_ids, token_embeds, ngram_range
     )
     assert len(seq_idx) == len(ngrams) == len(ngram_vecs)
     assert ngram_vecs.shape[1] == 384
 
 
-def test_phrase_foundry_encode():
+def test_finephrase_encode():
     """
-    Test the `encode` method of the `PhraseFoundry` class.
+    Test the `encode` method of the `FinePhrase` class.
 
     This test verifies that the `encode` method correctly processes a list of documents
     and returns the expected inputs and token embeddings.
 
     Steps:
-    1. Initialize a `PhraseFoundry` instance with a specified model name.
+    1. Initialize a `FinePhrase` instance with a specified model name.
     2. Define a list of documents to be encoded.
     3. Call the `encode` method with the documents, specifying `max_length`, `batch_size`, and `stride`.
     4. Assert that the returned inputs contain the key "input_ids".
@@ -647,9 +643,9 @@ def test_phrase_foundry_encode():
         AssertionError: If the inputs do not contain "input_ids" or if the shape of the token embeddings is incorrect.
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
-    phrase_foundry = PhraseFoundry(model_name)
+    fp = FinePhrase(model_name)
     docs = ["This is a test document."]
-    encodings = phrase_foundry._encode(docs, max_length=10, batch_size=1, stride=3)
+    encodings = fp._encode(docs, max_length=10, batch_size=1, stride=3)
     assert "input_ids" in encodings
     assert len(encodings["token_embeds"]) == len(docs)
     assert len(encodings["input_ids"]) == len(docs)
@@ -657,9 +653,9 @@ def test_phrase_foundry_encode():
     assert len(encodings["overflow_to_sample_mapping"]) == len(docs)
 
 
-def test_phrase_foundry_encode_extract():
+def test_finephrase_encode_extract():
     """
-    Test the `encode_extract` method of the `PhraseFoundry` class.
+    Test the `encode_extract` method of the `FinePhrase` class.
 
     This test verifies that the `encode_extract` method correctly processes a list of documents
     and returns the expected sequence indices, n-grams, and n-gram vectors.
@@ -680,24 +676,24 @@ def test_phrase_foundry_encode_extract():
             None
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
-    phrase_foundry = PhraseFoundry(model_name)
+    fp = FinePhrase(model_name)
     docs = ["This is a test document."]
-    seq_idx, ngrams, ngram_vecs = phrase_foundry.encode_extract(
+    seq_idx, ngrams, ngram_vecs = fp.encode_extract(
         docs, max_length=10, batch_size=1, ngram_range=(2, 3), stride=3
     )
     assert len(seq_idx) == len(ngrams) == len(ngram_vecs)
     assert ngram_vecs.shape[1] == 384
 
 
-def test_phrase_foundry_encode_queries():
+def test_finephrase_encode_queries():
     """
-    Test the `encode_queries` method of the `PhraseFoundry` class.
+    Test the `encode_queries` method of the `FinePhrase` class.
 
     This test verifies that the `encode_queries` method correctly encodes a list of queries
     into embeddings of the expected shape.
 
     Steps:
-    1. Initialize a `PhraseFoundry` instance with a specified model name.
+    1. Initialize a `FinePhrase` instance with a specified model name.
     2. Define a list of queries to be encoded.
     3. Encode the queries using the `encode_queries` method with specified parameters.
     4. Assert that the shape of the resulting embeddings matches the expected dimensions.
@@ -710,8 +706,8 @@ def test_phrase_foundry_encode_queries():
     - AssertionError: If the shape of the embeddings does not match the expected dimensions.
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
-    phrase_foundry = PhraseFoundry(model_name)
+    fp = FinePhrase(model_name)
     queries = ["test query"]
-    query_embeds = phrase_foundry.encode_queries(queries, max_length=10, batch_size=1)
+    query_embeds = fp.encode_queries(queries, max_length=10, batch_size=1)
     assert query_embeds.shape[0] == len(queries)
     assert query_embeds.shape[1] == 384
