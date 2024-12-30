@@ -214,15 +214,15 @@ class PhraseFoundry:
         return self.quantize_embeds and token_embeds.dtype in high_dtypes
 
     def quantize_if_needed(
-        self, token_embeds: torch.Tensor | np.ndarray
+        self, embeds: torch.Tensor | np.ndarray
     ) -> torch.Tensor | np.ndarray:
         """Quantize the embeddings if needed."""
-        if self.should_quantize(token_embeds):
-            if isinstance(token_embeds, torch.Tensor):
-                token_embeds = token_embeds.to(torch.float16)
+        if self.should_quantize(embeds):
+            if isinstance(embeds, torch.Tensor):
+                embeds = embeds.to(torch.float16)
             else:
-                token_embeds = token_embeds.astype(np.float16)
-        return token_embeds
+                embeds = embeds.astype(np.float16)
+        return embeds
 
     def extract_ngrams(
         self,
