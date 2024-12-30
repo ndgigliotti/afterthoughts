@@ -8,7 +8,7 @@ This is a new project that is heavily under development. Please check back soon 
 
 FinePhrase provides a fast, memory efficient, and context-aware method of generating massive numbers of n-gram embeddings using transformers. It can be used for a variety of tasks, including semantic search, rules-based classification, clustering, cluster interpretation, and more. Its primary feature is the ability to efficiently combine the transformer's contextually enriched token embeddings to derive n-gram embeddings. This is done by calculating all the possible token n-grams and averaging the corresponding token embeddings from the model's final hidden state. The result is a set of contextually enriched n-gram embeddings.
 
-Unlike tools like [KeyBERT](https://github.com/MaartenGr/KeyBERT), the purpose of FinePhrase is not to extract the top key-phrases from a document, nor even to extract their embeddings. Rather, the purpose is to extract *all* the n-gram embeddings to facilitate fine-grained analysis. FinePhrase is designed to be highly memory efficient, allowing you to generate n-gram embeddings for tens of thousands of documents of without running out of memory. That means holding tens of millions of n-gram embeddings in memory at once, depending on the configuration.
+Unlike tools like [KeyBERT](https://github.com/MaartenGr/KeyBERT), the purpose of FinePhrase is not to extract the top key-phrases from a document, nor even to extract their embeddings. Rather, the purpose is to extract *all* the n-gram embeddings to facilitate fine-grained analysis. FinePhrase is designed to be highly memory efficient, allowing you to generate n-gram embeddings for tens of thousands of documents without running out of memory. That means holding tens of millions of n-gram embeddings in memory at once, depending on the configuration.
 
 ### Motivation
 
@@ -25,6 +25,7 @@ The most obvious limitation of this approach is that extracting thousands of emb
 ## Features
 
 * Efficiently derive n-gram embeddings from state-of-the-art transformer models
+* Dynamically fit PCA to reduce the dimensionality of the embeddings
 * Easily embed queries or other strings in the same space as the n-grams
 * Uses the `transformers` library for easy integration with the Hugging Face model hub
 * Built in support for automatic mixed precision (AMP)
