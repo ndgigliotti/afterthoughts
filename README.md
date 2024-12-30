@@ -6,7 +6,7 @@ This is a new project that is heavily under development. Please check back soon 
 
 ## Concept
 
-FinePhrase provides a fast, memory efficient, and context-aware method of generating massive numbers of n-gram embeddings using transformers. It can be used for a variety of tasks, including semantic search, rules-based classification, clustering, cluster interpretation, and more. Its primary feature is the ability to efficiently combine the transformer's contextually enriched token embeddings to derive n-gram embeddings. This is done by calculating all the possible token n-grams and averaging the corresponding token embeddings from the model's final hidden state. The result is a set of contextually enriched n-gram embeddings.
+FinePhrase provides a fast, memory efficient, and context-aware method of generating massive numbers of n-gram embeddings using transformers. It can be used for a variety of tasks, including semantic search, rules-based classification, clustering, and more. Its primary feature is the ability to efficiently combine the transformer's contextually enriched token embeddings to derive n-gram embeddings. This is done by calculating all the possible token n-grams and averaging the corresponding token embeddings from the model's final hidden state. The result is a set of contextually enriched n-gram embeddings.
 
 Unlike tools like [KeyBERT](https://github.com/MaartenGr/KeyBERT), the purpose of FinePhrase is not to extract the top key-phrases from a document, nor even to extract their embeddings. Rather, the purpose is to extract *all* the n-gram embeddings to facilitate fine-grained analysis. FinePhrase is designed to be highly memory efficient, allowing you to generate n-gram embeddings for tens of thousands of documents without running out of memory. That means holding tens of millions of n-gram embeddings in memory at once, depending on the configuration.
 
@@ -35,7 +35,7 @@ The most obvious limitation of this approach is that extracting thousands of emb
 1. Install the package using pip:
 
     ```bash
-    pip install TBD
+    pip install git+https://github.com/ndgigliotti/finephrase.git
     ```
 
 2. Create a `FinePhrasePCA` object and load a transformer model. I generally recommend using the PCA variant of `FinePhrase`, as it is more memory efficient and scalable to datasets of tens of thousands of documents. The `FinePhrasePCA` class dynamically fits PCA to reduce the dimensionality of the n-gram embeddings, which can significantly reduce the pipeline's memory usage. For a small dataset of only a couple thousand documents, you can use the more precise `FinePhrase` class. Here is an example of how to initialize the model:
