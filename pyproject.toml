@@ -5,8 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "FinePhrase"
 version = "0.1.0"
-description = "Fast n-gram embeddings using transformers."
-readme = "README.rst"
+description = "Generate fine-grained n-gram embeddings with transformers."
+readme = "README.md"
 authors = [
   {name = "Nicholas Gigliotti", email = "ndgigliotti@gmail.com"}
 ]
@@ -16,7 +16,7 @@ maintainers = [
 classifiers = [
 
 ]
-license = {text = "MIT license"}
+license = {text = "Apache-2.0"}
 dependencies = [
   
 ]
@@ -31,12 +31,12 @@ dev = [
 
 [project.urls]
 
-bugs = "https://github.com/ndgigliotti/phrase-foundry/issues"
-changelog = "https://github.com/ndgigliotti/phrase-foundry/blob/master/changelog.md"
-homepage = "https://github.com/ndgigliotti/phrase-foundry"
+bugs = "https://github.com/ndgigliotti/finephrase/issues"
+changelog = "https://github.com/ndgigliotti/finephrase/blob/master/changelog.md"
+homepage = "https://github.com/ndgigliotti/finephrase"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+packages = ["finephrase"]
 
 [tool.setuptools.package-data]
 "*" = ["*.*"]
@@ -58,6 +58,4 @@ warn_no_return = true
 [[tool.mypy.overrides]]
 # Don't require test functions to include types
 module = "tests.*"
-allow_untyped_defs = true
-disable_error_code = "attr-defined"
-
+ignore_missing_imports = true
