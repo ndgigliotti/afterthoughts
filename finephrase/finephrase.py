@@ -119,6 +119,52 @@ def get_ngram_idx(
     return ngram_idx
 
 
+def get_phrase_idx(
+    seq_length,
+    phrase_sizes: list | tuple = (6, 12),
+    overlap: int | float = 0.5,
+) -> np.ndarray:
+    """Get phrase indices for a batch of input sequences.
+
+    This is a future feature which is not yet finished.
+
+    Parameters
+    ----------
+    seq_length : int
+        Length of the input sequences.
+    phrase_sizes : list, tuple, optional
+        Phrase sizes to find indices for, by default (6, 12). Can specify
+        any values, for example [4, 8, 16, 32] would find indices for phrases
+        of size 4, 8, 16, and 32.
+    overlap : int, float, optional
+        Number or fraction of tokens to overlap between phrases, by default 0.5.
+        If a float, it is interpreted as a fraction of the phrase size, rounding up.
+        For maximum overlap, simply set it to 0.999, as it will be forced to be one
+        shorter than the phrase size. If an integer, it is interpreted as the number of
+        tokens to overlap.
+    Returns
+    -------
+    np.ndarray
+        Array of phrase starts and stops.
+    """
+    start_idx = []
+    stop_idx = []
+    for size in phrase_sizes:
+        if isinstance(overlap, float):
+            if overlap < 0 or overlap >= 1:
+                raise ValueError("`overlap` must be in [0, 1).")
+            overlap_tokens = int(np.ceil(size * overlap))
+            if overlap_tokens == size:
+                overlap_tokens -= 1
+        else:
+            overlap_tokens = overlap
+        starts = np.arange(0, seq_length - size + 1, size - overlap_tokens)
+        stops = starts + size
+        start_idx.append(starts)
+        stop_idx.append(stops)
+    return np.vstack((np.hstack(start_idx), np.hstack(stop_idx))).T
+
+
 class FinePhrase:
     def __init__(
         self,
@@ -785,8 +831,8 @@ class FinePhrasePCA(FinePhrase):
         )
         # Determine number of batches to use for PCA training
         if isinstance(self.n_pca_training_batches, float):
-            self.n_pca_training_batches_ = round(
-                self.n_pca_training_batches * len(loader)
+            self.n_pca_training_batches_ = int(
+                np.ceil(self.n_pca_training_batches * len(loader))
             )
         else:
             self.n_pca_training_batches_ = self.n_pca_training_batches

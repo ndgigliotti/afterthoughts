@@ -207,7 +207,8 @@ The context-awareness is limited by the maximum sequence length of the model. Cu
 
 ## Future Ideas
 
-* Add optional normalization for the n-gram embeddings
+* Introduce n-gram overlap to reduce redundant n-grams
+* ~~Add optional normalization for the n-gram embeddings~~
 * Add features for deduping the n-grams
 * Add features for filtering n-grams
 * Features for large datasets and persistent storage
