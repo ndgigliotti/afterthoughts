@@ -43,38 +43,43 @@ The most obvious limitation of this approach is that extracting thousands of emb
     ```python
     from finephrase import FinePhrasePCA
 
+    # Choose a model which works well with mean-tokens pooling
     model = FinePhrasePCA(
-        # Choose a model which works well with mean-tokens pooling
-        "sentence-transformers/paraphrase-MiniLM-L3-v2",
-        pca_components=64, # Number of PCA components to use
-        pca_training_samples=int(3e6), # Number of n-grams to use for PCA training
-        device="cuda",
-        # Disallow n-grams that start with a subword token
-        invalid_start_token_pattern=r"^##",
+        "sentence-transformers/paraphrase-MiniLM-L3-v2"
     )
     ```
 
 3. Prepare a list of documents `docs` (strings) from which to extract n-gram embeddings.
 
+    ```python
+    docs = [
+        "I am a document.",
+        "I am another document.",
+        "I am yet another document.",
+        "I'm not like the others.",
+    ]
+    ```
+
 4. Encode and extract n-gram embeddings:
 
     ```python
-    samp_idx, ngrams, ngram_vecs = model.encode_extract(
+    results = model.encode_extract(
         docs,
         batch_size=512, # Model batch size, can set larger if AMP is enabled
         ngram_range=(4, 6), # Range of n-gram sizes to extract
     )
     ```
-    Three outputs are returned:
-    * `samp_idx`: A 1-d array of sample indices corresponding to the input documents
+    The outputs are returned as a dictionary with the following keys:
+    * `sequence_idx`: A 1-d array of sample indices corresponding to the input *sequences*
+    * `sample_idx`: A 1-d array of n-gram indices corresponding to the input documents
     * `ngrams`: A 1-d array of n-gram strings extracted from the documents
-    * `ngram_vecs`: A 2-d matrix of n-gram embeddings
+    * `ngram_embeds`: A 2-d matrix of n-gram embeddings
 
     To access the n-grams from the `i`-th document, use the following:
 
     ```python
-    doc_ngrams = ngrams[samp_idx == i]
-    doc_ngram_vecs = ngram_vecs[samp_idx == i]
+    doc_ngrams = results["ngrams"][results["sample_idx"] == i]
+    doc_ngram_embeds = results["ngram_embeds"][results["sample_idx"] == i]
     ```
 
 5. Optionally, encode query strings and find n-grams within a nearby radius. First 
@@ -86,20 +91,20 @@ define a quick search function:
 
     def search(
         queries: list[str],
-        query_vecs: np.ndarray,
-        ngrams: np.ndarray = ngrams,
-        ngram_vecs: np.ndarray = ngram_vecs,
-        samp_idx: np.ndarray = samp_idx,
-        radius: float = 0.5,
+        query_embeds: np.ndarray,
+        ngrams: np.ndarray,
+        ngram_embeds: np.ndarray,
+        sample_idx: np.ndarray,
+        radius: float = 0.3,
         metric: str = "cosine",
     ):
         search_index = nb.NearestNeighbors(radius=radius, metric=metric)
-        search_index.fit(ngram_vecs)
-        dists, idx = search_index.radius_neighbors(query_vecs, return_distance=True)
+        search_index.fit(ngram_embeds)
+        dists, idx = search_index.radius_neighbors(query_embeds, return_distance=True)
         rankings = [np.argsort(d) for d in dists]
         idx = [i[r] for i, r in zip(idx, rankings)]
         return {
-            queries[i]: (ngrams[idx[i]], np.unique(samp_idx[idx[i]]))
+            queries[i]: (ngrams[idx[i]], np.unique(sample_idx[idx[i]]))
             for i in range(len(queries))
         }
     ```
@@ -108,19 +113,19 @@ define a quick search function:
 
     ```python
     queries = [
-        "close my account",
-        "credit card fraud",
-        "debt collection",
-        "identity theft",
-        "mortgage fraud",
-        "overdraft fees",
-        "payday loan",
-        "student loan",
-        "unauthorized transaction",
-        "vehicle loan",
+        "I am a query.",
+        "I am another query.",
+        "I am yet another query.",
+        "I'm a little bit different.",
     ]
-    query_vecs = model.encode_queries(queries) # Encode the queries using the model
-    results = search(queries, query_vecs, ngram_vecs=ngram_vecs, radius=0.3)
+    # Encode the queries using the model
+    query_embeds = model.encode_queries(queries) 
+    search_results = search(queries,
+                            query_embeds,
+                            ngram_embeds=results["ngram_embeds"],
+                            ngrams=results["ngrams"],
+                            sample_idx=results["sample_idx"]
+    )
     ```
     The `radius` parameter can be adjusted to find n-grams within the specified cosine distance of the query.
 
@@ -136,8 +141,8 @@ from FinePhrase import FinePhrasePCA
 
 model = FinePhrasePCA(
     "sentence-transformers/paraphrase-MiniLM-L3-v2", # Lightweight model
-    n_pca_components=64, # 64 components is likely to capture a lot of the variance
-    n_pca_training_samples=int(5e6), # 5 million n-grams (set according to the size of your dataset)
+    n_pca_components=64, # 64 components will capture a lot of the variance
+    n_pca_training_batches=0.33, # The first 33% of batches will be used to fit PCA
 )
 ```
 #### Using Automatic Mixed Precision (AMP)
@@ -163,8 +168,6 @@ from FinePhrase import FinePhrasePCA
 
 model = FinePhrasePCA(
     "sentence-transformers/paraphrase-MiniLM-L3-v2",
-    n_pca_components=64,
-    n_pca_training_samples=int(5e6),
     amp=True,
     amp_dtype=torch.bfloat16,
 )
@@ -184,8 +187,8 @@ from FinePhrase import FinePhrasePCA
 
 model = FinePhrasePCA(
     "sentence-transformers/paraphrase-MiniLM-L3-v2", # Lightweight model
-    n_pca_components=64, # Likely to capture a lot of the variance
-    n_pca_training_samples=int(5e6), # 5 million n-grams; good for a large dataset
+    n_pca_components=64, # Will capture a lot of the variance
+    n_pca_training_batches=0.25, # Use the first 25% of batches for PCA
     amp=True, # Enable automatic mixed precision
     amp_dtype=torch.bfloat16, # Use bfloat16 for better numerical stability
     quantize_embeds=True, # Quantize the final embeddings to 16-bit floating point
@@ -207,6 +210,7 @@ The context-awareness is limited by the maximum sequence length of the model. Cu
 * Add optional normalization for the n-gram embeddings
 * Add features for deduping the n-grams
 * Add features for filtering n-grams
+* Features for large datasets and persistent storage
 
 ## License
 

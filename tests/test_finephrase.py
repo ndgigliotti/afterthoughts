@@ -610,19 +610,24 @@ def test_finephrase_extract_ngrams():
     - `ngram_range`: A tuple specifying the range of n-grams to be extracted.
 
     Assertions:
-    - The lengths of `seq_idx`, `ngrams`, and `ngram_vecs` should be equal.
-    - The second dimension of `ngram_vecs` should be 384, which corresponds to the embedding size.
+    - The lengths of `sequence_idx`, `ngrams`, and `ngram_embeds` should be equal.
+    - The second dimension of `ngram_embeds` should be 384, which corresponds to the embedding size.
     """
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
     fp = FinePhrase(model_name)
-    input_ids = np.array([[101, 2003, 1037, 2742, 102]])
-    token_embeds = np.random.rand(1, 5, 384)
-    ngram_range = (2, 3)
-    seq_idx, ngrams, ngram_vecs = fp.extract_ngrams(
-        input_ids, token_embeds, ngram_range
+    sequence_idx = np.array([0, 1, 2])
+    input_ids = np.array(
+        [[101, 2003, 1037, 2742, 102] for _ in range(len(sequence_idx))]
     )
-    assert len(seq_idx) == len(ngrams) == len(ngram_vecs)
-    assert ngram_vecs.shape[1] == 384
+    token_embeds = np.random.rand(len(sequence_idx), 5, 384)
+    ngram_range = (2, 3)
+    result = fp._extract_ngrams(sequence_idx, input_ids, token_embeds, ngram_range)
+    assert (
+        len(result["sequence_idx"])
+        == len(result["ngrams"])
+        == len(result["ngram_embeds"])
+    )
+    assert result["ngram_embeds"].shape[1] == 384
 
 
 def test_finephrase_encode():
@@ -649,7 +654,7 @@ def test_finephrase_encode():
     assert "input_ids" in encodings
     assert len(encodings["token_embeds"]) == len(docs)
     assert len(encodings["input_ids"]) == len(docs)
-    assert len(encodings["seq_idx"]) == len(docs)
+    assert len(encodings["sequence_idx"]) == len(docs)
     assert len(encodings["overflow_to_sample_mapping"]) == len(docs)
 
 
@@ -661,8 +666,8 @@ def test_finephrase_encode_extract():
     and returns the expected sequence indices, n-grams, and n-gram vectors.
 
     The test checks the following:
-    - The lengths of the returned `seq_idx`, `ngrams`, and `ngram_vecs` are equal.
-    - The second dimension of the `ngram_vecs` array is 384, which corresponds to the expected
+    - The lengths of the returned `sequence_idx`, `ngrams`, and `ngram_embeds` are equal.
+    - The second dimension of the `ngram_embeds` array is 384, which corresponds to the expected
         embedding size of the model.
 
     The `encode_extract` method is called with the following parameters:
@@ -678,11 +683,15 @@ def test_finephrase_encode_extract():
     model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"
     fp = FinePhrase(model_name)
     docs = ["This is a test document."]
-    seq_idx, ngrams, ngram_vecs = fp.encode_extract(
+    results = fp.encode_extract(
         docs, max_length=10, batch_size=1, ngram_range=(2, 3), stride=3
     )
-    assert len(seq_idx) == len(ngrams) == len(ngram_vecs)
-    assert ngram_vecs.shape[1] == 384
+    assert (
+        len(results["sequence_idx"])
+        == len(results["ngrams"])
+        == len(results["ngram_embeds"])
+    )
+    assert results["ngram_embeds"].shape[1] == 384
 
 
 def test_finephrase_encode_queries():
