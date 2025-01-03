@@ -120,49 +120,67 @@ def get_ngram_idx(
 
 
 def get_phrase_idx(
-    seq_length,
-    phrase_sizes: list | tuple = (6, 12),
-    overlap: int | float = 0.5,
-) -> np.ndarray:
-    """Get phrase indices for a batch of input sequences.
-
-    This is a future feature which is not yet finished.
-
-    Parameters
-    ----------
-    seq_length : int
-        Length of the input sequences.
-    phrase_sizes : list, tuple, optional
-        Phrase sizes to find indices for, by default (6, 12). Can specify
-        any values, for example [4, 8, 16, 32] would find indices for phrases
-        of size 4, 8, 16, and 32.
-    overlap : int, float, optional
-        Number or fraction of tokens to overlap between phrases, by default 0.5.
-        If a float, it is interpreted as a fraction of the phrase size, rounding up.
-        For maximum overlap, simply set it to 0.999, as it will be forced to be one
-        shorter than the phrase size. If an integer, it is interpreted as the number of
-        tokens to overlap.
-    Returns
-    -------
-    np.ndarray
-        Array of phrase starts and stops.
-    """
-    start_idx = []
-    stop_idx = []
-    for size in phrase_sizes:
+    input_ids,
+    attention_mask,
+    phrase_sizes: list | tuple | int,
+    overlap: int | float | list | dict = 0.5,
+    end_min_token_ratio: float = 0.5,
+    sequence_idx: np.ndarray | None = None,
+) -> dict[str, np.ndarray]:
+    if sequence_idx is not None and len(sequence_idx) != input_ids.shape[0]:
+        raise ValueError(
+            f"`sequence_idx` must have the same number of rows as `input_ids` "
+            f"({len(sequence_idx)} != {input_ids.shape[0]})."
+        )
+    results = {
+        "phrase_idx": [],
+        "phrase_ids": [],
+        "valid_phrase_mask": [],
+        "sequence_idx": [],
+    }
+    if isinstance(phrase_sizes, int):
+        phrase_sizes = [phrase_sizes]
+    for i, size in enumerate(phrase_sizes):
+        # Check if `overlap` is a float in [0, 1)
         if isinstance(overlap, float):
             if overlap < 0 or overlap >= 1:
                 raise ValueError("`overlap` must be in [0, 1).")
+            # Calculate the number of tokens to overlap
             overlap_tokens = int(np.ceil(size * overlap))
             if overlap_tokens == size:
                 overlap_tokens -= 1
-        else:
+        elif isinstance(overlap, (list, tuple)):
+            overlap_tokens = overlap[i]
+        elif isinstance(overlap, dict):
+            overlap_tokens = overlap[size]
+        elif isinstance(overlap, int):
             overlap_tokens = overlap
-        starts = np.arange(0, seq_length - size + 1, size - overlap_tokens)
-        stops = starts + size
-        start_idx.append(starts)
-        stop_idx.append(stops)
-    return np.vstack((np.hstack(start_idx), np.hstack(stop_idx))).T
+        else:
+            raise ValueError("`overlap` must be a float, list, tuple, dict, or int.")
+        # Create generic phrase indices based on the shape of `input_ids`
+        start_idx = np.arange(1, input_ids.shape[1] - size + 1, size - overlap_tokens)
+        stop_idx = start_idx + size
+        phrase_idx = np.vstack(
+            [np.arange(start, stop) for start, stop in zip(start_idx, stop_idx)]
+        )
+        phrase_ids = input_ids[:, phrase_idx]
+        end_minimum_tokens = int(np.ceil(end_min_token_ratio * size))
+        if end_minimum_tokens == 0:
+            raise ValueError("`end_min_token_ratio` must be greater than 0.")
+        valid_phrase_mask = (
+            attention_mask[:, phrase_idx].sum(axis=2) >= end_minimum_tokens
+        )
+        phrase_ids = phrase_ids[valid_phrase_mask]
+        if sequence_idx is None:
+            phrase_sequence_idx = np.arange(input_ids.shape[0])
+        else:
+            phrase_sequence_idx = np.asarray(sequence_idx).copy()
+        phrase_sequence_idx = phrase_sequence_idx.repeat(valid_phrase_mask.sum(axis=1))
+        results["phrase_idx"].append(phrase_idx)
+        results["phrase_ids"].append(phrase_ids)
+        results["valid_phrase_mask"].append(valid_phrase_mask)
+        results["sequence_idx"].append(phrase_sequence_idx)
+    return results
 
 
 class FinePhrase:
@@ -322,6 +340,94 @@ class FinePhrase:
         """
         return self.quantize_if_needed(self.normalize_if_needed(embeds))
 
+    def _extract_phrases(
+        self,
+        sequence_idx: np.ndarray,
+        input_ids: np.ndarray,
+        attention_mask: np.ndarray,
+        token_embeds: np.ndarray,
+        phrase_sizes: list | tuple = (12, 24, 48),
+        overlap: int | float | list | dict = 0.5,
+        end_min_token_ratio: float = 0.5,
+    ) -> dict[str, np.ndarray]:
+        """Extract the sub-sequences and sub-sequence embeddings from token embeddings.
+
+        Parameters
+        ----------
+        sequence_idx : np.ndarray
+            Sequence indices.
+        input_ids : np.ndarray
+            Tokenized input sequences with no special tokens (except padding).
+        attention_mask : np.ndarray
+            Attention mask for the input sequences.
+        token_embeds : np.ndarray
+            Token embeddings.
+        phrase_sizes : list, tuple, optional
+            List of sub-sequence sizes to extract, by default (12, 24, 48).
+            For example, if `phrase_sizes` is set to `(12, 24, 48)`, sub-sequences
+            of sizes 12, 24, and 48 will be extracted from the input sequences.
+        overlap : int, float, list, dict, optional
+            Overlap for the sub-sequences, by default 0.5.
+            If a float, it is interpreted as a fraction of the phrase size.
+            If an integer, it is interpreted as the number of tokens to overlap.
+            If a list or tuple, it should contain the overlap for each phrase size.
+            If a dictionary, it should map phrase sizes to overlaps.
+        end_min_token_ratio : float, optional
+            Minimum ratio of tokens that must be present in the short last sub-sequences,
+            by default 0.5. Usually this does not have to be adjusted from the default
+            value.
+        Returns
+        -------
+        dict[str, np.ndarray]
+            Dictionary containing the sample indices, n-grams, and n-gram embeddings.
+
+        Notes
+        -----
+        1. The phrase embeddings are obtained by averaging the token embeddings for each
+        token in each phrase. This is known as the "mean-tokens" embedding method.
+
+        2. Special tokens are not included in the phrase embeddings. This is because special
+        tokens such as [CLS], [SEP], and [PAD] do not contribute to the local fine-grained meaning
+        of phrases. Even if there was an argument for including tokens such as [UNK], it is easier
+        for model compatibility reasons to simply exclude all special tokens.
+
+        3. To extract all possible n-grams, set `overlap` to 0.999999.
+
+        """
+        phrase_data = get_phrase_idx(
+            input_ids,
+            attention_mask,
+            phrase_sizes=phrase_sizes,
+            overlap=overlap,
+            end_min_token_ratio=end_min_token_ratio,
+            sequence_idx=sequence_idx,
+        )
+        # Mask all special tokens
+        attention_mask = np.isin(
+            input_ids, self.tokenizer.all_special_ids, invert=True
+        ).astype("uint8")
+        results = defaultdict(list)
+        for i, idx in enumerate(phrase_data["phrase_idx"]):
+            attn_factor = np.expand_dims(attention_mask[:, idx], axis=3)
+            phrase_embeds = np.sum(token_embeds[:, idx] * attn_factor, axis=2) / (
+                np.clip(attn_factor.sum(axis=2), 1, None)
+            )
+            phrase_embeds = phrase_embeds[phrase_data["valid_phrase_mask"][i]]
+            phrases = self.tokenizer.batch_decode(
+                phrase_data["phrase_ids"][i],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True,
+            )
+            results["sequence_idx"].append(phrase_data["sequence_idx"][i])
+            results["phrases"].extend(phrases)
+            results["phrase_embeds"].append(phrase_embeds)
+
+        # Combine results
+        results["sequence_idx"] = np.hstack(results["sequence_idx"])
+        results["phrases"] = np.array(results["phrases"], dtype="U")
+        results["phrase_embeds"] = np.vstack(results["phrase_embeds"])
+        return dict(results)
+
     def _extract_ngrams(
         self,
         sequence_idx: np.ndarray,
@@ -406,6 +512,32 @@ class FinePhrase:
                         "token_embeds": outputs.last_hidden_state.cpu().numpy(),
                     }
 
+    def _tokenize(
+        self,
+        docs: list[str],
+        max_length: int | None = None,
+        do_chunking=True,
+        stride: int = 0,
+    ) -> dict[str, np.ndarray]:
+        if max_length is None:
+            if self.tokenizer.model_max_length is None:
+                raise ValueError(
+                    "max_length must be specified if tokenizer.model_max_length is None"
+                )
+            max_length = self.tokenizer.model_max_length
+        inputs = self.tokenizer(
+            docs,
+            max_length=max_length,
+            padding="longest",
+            truncation=True,
+            return_overflowing_tokens=do_chunking,
+            stride=stride,
+            return_tensors="pt",
+            add_special_tokens=True,
+            return_attention_mask=True,
+        )
+        return inputs
+
     def _encode(
         self,
         docs: list[str],
@@ -440,20 +572,9 @@ class FinePhrase:
             The batches are left intact, meaning that, for example, the token embeddings
             are stored as a list of arrays, where each array corresponds to a batch.
         """
-        if max_length is None:
-            if self.tokenizer.model_max_length is None:
-                raise ValueError(
-                    "max_length must be specified if tokenizer.model_max_length is None"
-                )
-            max_length = self.tokenizer.model_max_length
-        inputs = self.tokenizer(
-            docs,
-            max_length=max_length,
-            padding="longest",
-            truncation=True,
-            return_overflowing_tokens=do_chunking,
-            stride=stride,
-            return_tensors="pt",
+
+        inputs = self._tokenize(
+            docs, max_length=max_length, do_chunking=do_chunking, stride=stride
         )
         data = TokenizedDataset(inputs)
         loader = DataLoader(
@@ -470,10 +591,103 @@ class FinePhrase:
             results["input_ids"].append(
                 inputs["input_ids"][batch["sequence_idx"]].numpy()
             )
+            results["attention_mask"].append(
+                inputs["attention_mask"][batch["sequence_idx"]].numpy()
+            )
         if do_chunking:
             results["overflow_to_sample_mapping"] = inputs[
                 "overflow_to_sample_mapping"
             ].numpy()
+        return dict(results)
+
+    def encode_extract2(
+        self,
+        docs: list[str],
+        max_length: int | None = None,
+        batch_size: int = 32,
+        phrase_sizes: list | tuple = (12, 24, 48),
+        overlap: int | float | list | dict = 0.5,
+        end_min_token_ratio: float = 0.5,
+        do_chunking: bool = True,
+        stride: int = 0,
+    ) -> dict[str, np.ndarray]:
+        """Obtain the n-grams and n-gram embeddings from a list of documents.
+
+        This is equivalent to calling `encode` followed by `extract_ngrams`.
+        It first encodes the input documents, then extracts the n-grams and
+        n-gram embeddings from the token embeddings.
+
+        Parameters
+        ----------
+        docs : list[str]
+            List of documents to encode.
+        max_length : int, optional
+            Maximum length of the input sequences, by default None.
+        batch_size : int, optional
+            Batch size for encoding, by default 32.
+        phrase_sizes : list, tuple, optional
+            List of sub-sequence sizes to extract, by default (12, 24, 48).
+            For example, if `phrase_sizes` is set to `(12, 24, 48)`, sub-sequences
+            of sizes 12, 24, and 48 will be extracted from the input sequences.
+        overlap : int, float, list, dict, optional
+            Overlap for the sub-sequences, by default 0.5.
+            If a float, it is interpreted as a fraction of the phrase size.
+            If an integer, it is interpreted as the number of tokens to overlap.
+            If a list or tuple, it should contain the overlap for each phrase size.
+            If a dictionary, it should map phrase sizes to overlaps.
+        end_min_token_ratio : float, optional
+            Minimum ratio of tokens that must be present in the short last sub-sequences,
+            by default 0.5. Usually this does not have to be adjusted from the default
+            value.
+        do_chunking : bool, optional
+            Enable chunking of documents into overlapping sequences, by default True.
+        stride : int, optional
+            Stride for splitting documents into overlapping sequences, by default 0.
+            Only used if `do_chunking` is True.
+
+        Returns
+        -------
+        dict[str, np.ndarray]
+            Dictionary containing the sample indices, phrases, and phrase embeddings.
+
+        Raises
+        ------
+        ValueError
+            If `max_length` is not specified and `tokenizer.model_max_length` is None.
+
+        """
+        encodings = self._encode(
+            docs,
+            max_length=max_length,
+            batch_size=batch_size,
+            do_chunking=do_chunking,
+            stride=stride,
+        )
+        results = defaultdict(list)
+        # Work backwards and pop from the encodings to conserve memory
+        for batch_id in tqdm(encodings["batch_id"][::-1], desc="Extracting"):
+            phrase_batch = self._extract_phrases(
+                encodings["sequence_idx"].pop(batch_id),
+                encodings["input_ids"].pop(batch_id),
+                encodings["attention_mask"].pop(batch_id),
+                encodings["token_embeds"].pop(batch_id),
+                phrase_sizes=phrase_sizes,
+                overlap=overlap,
+                end_min_token_ratio=end_min_token_ratio,
+            )
+            results["sequence_idx"].append(phrase_batch["sequence_idx"])
+            results["phrases"].append(phrase_batch["phrases"])
+            results["phrase_embeds"].append(
+                self.postprocess(phrase_batch["phrase_embeds"])
+            )
+        results["sequence_idx"] = np.hstack(results["sequence_idx"][::-1])
+        results["phrases"] = np.hstack(results["phrases"][::-1])
+        results["phrase_embeds"] = np.vstack(results["phrase_embeds"][::-1])
+        if do_chunking:
+            mapping = encodings["overflow_to_sample_mapping"]
+            results["sample_idx"] = mapping[results["sequence_idx"]]
+        else:
+            results["sample_idx"] = results["sequence_idx"]
         return dict(results)
 
     def encode_extract(
@@ -805,20 +1019,11 @@ class FinePhrasePCA(FinePhrase):
         For example, if `ngram_range` is set to `(4, 6)`, token n-grams of sizes 4, 5, and 6
         will be extracted from the input sequences.
         """
-        if max_length is None:
-            if self.tokenizer.model_max_length is None:
-                raise ValueError(
-                    "max_length must be specified if tokenizer.model_max_length is None"
-                )
-            max_length = self.tokenizer.model_max_length
-        inputs = self.tokenizer(
+        inputs = self._tokenize(
             docs,
             max_length=max_length,
-            padding="longest",
-            truncation=True,
-            return_overflowing_tokens=do_chunking,
+            do_chunking=do_chunking,
             stride=stride,
-            return_tensors="pt",
         )
         data = TokenizedDataset(
             inputs, shuffle=not self.pca_training_complete, random_state=random_state
