@@ -82,7 +82,7 @@ The most obvious limitation of this approach is that extracting thousands of emb
     doc_phrase_embeds = results["phrase_embeds"][results["sample_idx"] == i]
     ```
 
-5. Optionally, encode query strings and find phrases within a nearby radius. First 
+5. Optionally, encode query strings and find phrases within a nearby radius. First
 define a quick search function:
 
     ```python
@@ -119,7 +119,7 @@ define a quick search function:
         "I'm a little bit different.",
     ]
     # Encode the queries using the model
-    query_embeds = model.encode_queries(queries) 
+    query_embeds = model.encode_queries(queries)
     search_results = search(queries,
                             query_embeds,
                             phrase_embeds=results["phrase_embeds"],

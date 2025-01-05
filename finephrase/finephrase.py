@@ -14,13 +14,15 @@
 
 """FinePhrase is a library for extracting n-grams from text using transformer models."""
 
+import math
 import warnings
+
 import numpy as np
 import torch
-import math
-from torch.utils.data import Dataset, DataLoader
-from transformers import AutoTokenizer, AutoModel
+from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
+from transformers import AutoModel, AutoTokenizer
+
 from finephrase.pca import IncrementalPCA
 from finephrase.utils import normalize, reduce_precision
 
@@ -95,6 +97,39 @@ def get_phrase_idx(
     phrase_min_token_ratio: float = 0.5,
     sequence_idx: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
+    """Extract the indices of sub-sequences from input sequences.
+
+    Parameters
+    ----------
+    input_ids : torch.Tensor
+        Tensor containing the tokenized input sequences.
+    attention_mask : torch.Tensor
+        Tensor containing the attention mask for the input sequences.
+    phrase_sizes : list | tuple | int
+        Size or list of sizes of the phrases to extract.
+    overlap : int | float | list | dict, optional
+        Overlap between phrases, by default 0.5.
+    phrase_min_token_ratio : float, optional
+        Minimum ratio of tokens that must be present in each phrase, by default 0.5.
+    sequence_idx : torch.Tensor | None, optional
+        Tensor containing the sequence indices, by default None.
+
+    Returns
+    -------
+    dict[str, torch.Tensor]
+        Dictionary containing the phrase indices, phrase IDs, valid phrase mask, and sequence indices.
+
+    Raises
+    ------
+    ValueError
+        If `sequence_idx` has a different number of rows than `input_ids`.
+    ValueError
+        If `overlap` is not in the range [0, 1).
+    ValueError
+        If `phrase_min_token_ratio` is not greater than 0.
+    ValueError
+        If `overlap` is not a float, list, tuple, dict, or int.
+    """
     if sequence_idx is not None:
         if len(sequence_idx) != input_ids.shape[0]:
             raise ValueError(
@@ -158,7 +193,30 @@ def get_phrase_idx(
     return results
 
 
-def _move_or_convert_results(results, return_tensors="pt", move_results_to_cpu=False):
+def _move_or_convert_results(
+    results: dict, return_tensors: str = "pt", move_results_to_cpu: bool = False
+):
+    """Move or convert the results to the specified format.
+
+    Parameters
+    ----------
+    results : dict
+        Dictionary containing the results to move or convert.
+    return_tensors : str, optional
+        Format to return the tensors in, either 'pt' for PyTorch tensors or 'np' for NumPy arrays, by default "pt".
+    move_results_to_cpu : bool, optional
+        Whether to move the results to CPU, by default False.
+
+    Returns
+    -------
+    dict
+        Dictionary containing the moved or converted results.
+
+    Raises
+    ------
+    ValueError
+        If `return_tensors` is not 'np' or 'pt'.
+    """
     if move_results_to_cpu:
         for key, value in results.items():
             if isinstance(value, torch.Tensor):
@@ -591,10 +649,10 @@ class FinePhrase:
         doc_overlap: float | int = 0.5,
         convert_to_numpy: bool = True,
     ) -> dict[str, np.ndarray | torch.Tensor]:
-        """Obtain the n-grams and n-gram embeddings from a list of documents.
+        """Obtain the phrases and phrase embeddings from a list of documents.
 
-        This first encodes the input documents, then extracts the n-grams and
-        n-gram embeddings from the token embeddings.
+        This first encodes the input documents, then extracts phrase embeddings
+        from the token embeddings.
 
         Parameters
         ----------
