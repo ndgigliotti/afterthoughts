@@ -14,15 +14,15 @@
 
 """FinePhrase is a library for extracting n-grams from text using transformer models."""
 
-from collections import defaultdict
-import re
+import warnings
 import numpy as np
 import torch
+import math
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModel
 from tqdm.auto import tqdm
-from sklearn.decomposition import IncrementalPCA
-from sklearn.preprocessing import normalize
+from finephrase.pca import IncrementalPCA
+from finephrase.utils import normalize, reduce_precision
 
 
 class TokenizedDataset(Dataset):
@@ -87,51 +87,22 @@ class TokenizedDataset(Dataset):
         return true_idx, data
 
 
-def get_ngram_idx(
-    input_ids: np.ndarray | torch.Tensor, ngram_range: tuple[int, int] = (5, 5)
-) -> list[np.ndarray]:
-    """Get n-gram indices for a batch of input sequences.
-
-    Parameters
-    ----------
-    input_ids : np.ndarray, torch.Tensor
-        Tokenized input sequences.
-    ngram_range : tuple[int, int], optional
-        Range of n-gram sizes to extract, by default (5, 5).
-
-    Returns
-    -------
-    list[np.ndarray]
-        List of n-gram indices for each n-gram size.
-    """
-    if isinstance(input_ids, torch.Tensor):
-        input_ids = input_ids.cpu().numpy()
-    ngram_idx = []
-    for ngram_size in range(ngram_range[0], ngram_range[1] + 1):
-        idx = np.vstack(
-            [np.arange(input_ids.shape[1]) + i for i in range(ngram_size)]
-        ).T
-        idx = idx[(idx[:, -1] < input_ids.shape[1])]
-        # Continue if empty
-        if idx.size == 0:
-            continue
-        ngram_idx.append(idx)
-    return ngram_idx
-
-
 def get_phrase_idx(
-    input_ids,
-    attention_mask,
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
     phrase_sizes: list | tuple | int,
     overlap: int | float | list | dict = 0.5,
-    end_min_token_ratio: float = 0.5,
-    sequence_idx: np.ndarray | None = None,
-) -> dict[str, np.ndarray]:
-    if sequence_idx is not None and len(sequence_idx) != input_ids.shape[0]:
-        raise ValueError(
-            f"`sequence_idx` must have the same number of rows as `input_ids` "
-            f"({len(sequence_idx)} != {input_ids.shape[0]})."
-        )
+    phrase_min_token_ratio: float = 0.5,
+    sequence_idx: torch.Tensor | None = None,
+) -> dict[str, torch.Tensor]:
+    if sequence_idx is not None:
+        if len(sequence_idx) != input_ids.shape[0]:
+            raise ValueError(
+                f"`sequence_idx` must have the same number of rows as `input_ids` "
+                f"({len(sequence_idx)} != {input_ids.shape[0]})."
+            )
+        if sequence_idx.device != input_ids.device:
+            sequence_idx = sequence_idx.to(input_ids.device)
     results = {
         "phrase_idx": [],
         "phrase_ids": [],
@@ -146,7 +117,7 @@ def get_phrase_idx(
             if overlap < 0 or overlap >= 1:
                 raise ValueError("`overlap` must be in [0, 1).")
             # Calculate the number of tokens to overlap
-            overlap_tokens = int(np.ceil(size * overlap))
+            overlap_tokens = math.ceil(size * overlap)
             if overlap_tokens == size:
                 overlap_tokens -= 1
         elif isinstance(overlap, (list, tuple)):
@@ -158,28 +129,46 @@ def get_phrase_idx(
         else:
             raise ValueError("`overlap` must be a float, list, tuple, dict, or int.")
         # Create generic phrase indices based on the shape of `input_ids`
-        start_idx = np.arange(1, input_ids.shape[1] - size + 1, size - overlap_tokens)
+        start_idx = torch.arange(
+            1, input_ids.shape[1] - size + 1, size - overlap_tokens
+        )
         stop_idx = start_idx + size
-        phrase_idx = np.vstack(
-            [np.arange(start, stop) for start, stop in zip(start_idx, stop_idx)]
+        phrase_idx = torch.stack(
+            [torch.arange(start, stop) for start, stop in zip(start_idx, stop_idx)]
         )
         phrase_ids = input_ids[:, phrase_idx]
-        end_minimum_tokens = int(np.ceil(end_min_token_ratio * size))
-        if end_minimum_tokens == 0:
-            raise ValueError("`end_min_token_ratio` must be greater than 0.")
-        valid_phrase_mask = (
-            attention_mask[:, phrase_idx].sum(axis=2) >= end_minimum_tokens
-        )
+        min_tokens = math.ceil(phrase_min_token_ratio * size)
+        if min_tokens == 0:
+            raise ValueError("`phrase_min_token_ratio` must be greater than 0.")
+        valid_phrase_mask = attention_mask[:, phrase_idx].sum(dim=2) >= min_tokens
         phrase_ids = phrase_ids[valid_phrase_mask]
         if sequence_idx is None:
-            phrase_sequence_idx = np.arange(input_ids.shape[0])
+            phrase_sequence_idx = torch.arange(
+                input_ids.shape[0], device=input_ids.device
+            )
         else:
-            phrase_sequence_idx = np.asarray(sequence_idx).copy()
-        phrase_sequence_idx = phrase_sequence_idx.repeat(valid_phrase_mask.sum(axis=1))
+            phrase_sequence_idx = sequence_idx.clone()
+        phrase_sequence_idx = phrase_sequence_idx.repeat_interleave(
+            valid_phrase_mask.sum(dim=1)
+        )
         results["phrase_idx"].append(phrase_idx)
         results["phrase_ids"].append(phrase_ids)
         results["valid_phrase_mask"].append(valid_phrase_mask)
         results["sequence_idx"].append(phrase_sequence_idx)
+    return results
+
+
+def _move_or_convert_results(results, return_tensors="pt", move_results_to_cpu=False):
+    if move_results_to_cpu:
+        for key, value in results.items():
+            if isinstance(value, torch.Tensor):
+                results[key] = value.cpu()
+    if return_tensors == "np":
+        for key, value in results.items():
+            if isinstance(value, torch.Tensor):
+                results[key] = value.numpy()
+    elif not return_tensors == "pt":
+        raise ValueError("`return_tensors` must be 'np' or 'pt'.")
     return results
 
 
@@ -189,11 +178,11 @@ class FinePhrase:
         model_name: str,
         amp: bool = True,
         amp_dtype: torch.dtype = torch.float16,
-        quantize_embeds: bool = True,
+        reduce_precision: bool = False,
         normalize_embeds: bool = False,
+        pca: int | None = None,
+        pca_fit_batch_count: int | float = 1.0,
         device: torch.device | str | int = "cuda",
-        invalid_start_token_pattern: str | None = r"^##",
-        exclude_tokens: list[str] | list[int] | None = None,
     ) -> None:
         """Initialize a FinePhrase model.
 
@@ -205,7 +194,7 @@ class FinePhrase:
             Enable automatic mixed precision, by default False.
         amp_dtype : torch.dtype, optional
             Data type for automatic mixed precision, by default torch.float16.
-        quantize_embeds : bool, optional
+        reduce_precision : bool, optional
             Reduce the embedding precision to float16 if they are float32 or float64,
             by default False.
         normalize_embeds : bool, optional
@@ -214,12 +203,17 @@ class FinePhrase:
             the dot product of two unit vectors is equal to the cosine similarity.
             It is also useful if you want downstream Euclidean distance calculations
             to consider only the direction of the vectors, not their magnitude.
+        pca : int, None, optional
+            Number of principal components to keep after PCA, by default None.
+            If None, PCA is not fit or applied.
+        pca_fit_batch_count : int, float, optional
+            Number of batches to use for fitting the PCA model, by default 1.0.
+            If an integer, it is the number of batches to use. If a float, it is the
+            fraction of the dataset to use (on the first call to `encode()`). If 1.0,
+            the entire dataset passed to the `encode()` method is used. Once the PCA
+            transformation is fit, it is applied to all embeddings.
         device : torch.device, str, int, optional
             Device to use for inference, by default "cuda".
-        invalid_start_token_pattern : str, None, optional
-            Regular expression pattern for invalid start tokens, by default r"^##".
-        exclude_tokens : list[str], list[int], None, optional
-            List of tokens to exclude from n-gram extraction, by default None.
         """
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name, clean_up_tokenization_spaces=True
@@ -227,15 +221,11 @@ class FinePhrase:
         self.model = AutoModel.from_pretrained(model_name)
         self.amp = amp
         self.amp_dtype = amp_dtype
-        self.quantize_embeds = quantize_embeds
+        self.quantize_embeds = reduce_precision
         self.normalize_embeds = normalize_embeds
+        self.pca = pca
+        self.pca_fit_batch_count = pca_fit_batch_count
         self.model.eval().to(device)
-        if not isinstance(invalid_start_token_pattern, (str, type(None))):
-            raise TypeError("`invalid_start_token_pattern` must be a string.")
-        self.invalid_start_token_pattern = invalid_start_token_pattern
-        if not isinstance(exclude_tokens, (list, tuple, set, np.ndarray, type(None))):
-            raise TypeError("`exclude_tokens` must be a list of token IDs or tokens.")
-        self.exclude_tokens = exclude_tokens
 
     @property
     def device(self) -> torch.device:
@@ -258,67 +248,33 @@ class FinePhrase:
         self.model.to(device)
         return self
 
-    @property
-    def exclude_token_ids(self) -> np.ndarray:
-        """Converts `exclude_tokens` to token IDs."""
-        if self.exclude_tokens is None:
-            ids = self.tokenizer.all_special_ids
-        elif isinstance(self.exclude_tokens, (str, int)):
-            raise TypeError("`exclude_tokens` must be a list of token IDs or tokens.")
-        elif isinstance(self.exclude_tokens[0], str):
-            ids = self.tokenizer.convert_tokens_to_ids(self.exclude_tokens)
-        elif isinstance(self.exclude_tokens[0], int):
-            ids = self.exclude_tokens
-        else:
-            raise ValueError(f"Unknown `exclude_tokens` value: {self.exclude_tokens}")
-        return np.asarray(ids)
-
-    @property
-    def invalid_start_token_ids(self) -> np.ndarray:
-        """Returns token IDs that cannot be the start of a ngram."""
-        ids = []
-        if self.invalid_start_token_pattern is not None:
-            search = re.compile(self.invalid_start_token_pattern).search
-            ids = [v for k, v in self.tokenizer.vocab.items() if search(k)]
-        return np.array(ids)
-
-    def should_quantize(self, token_embeds: torch.Tensor | np.ndarray) -> bool:
-        """Returns True if the embeddings should be quantized."""
-        high_dtypes = (torch.float32, torch.float64, np.float32, np.float64)
-        return self.quantize_embeds and token_embeds.dtype in high_dtypes
-
-    def quantize_if_needed(
+    def reduce_precision_if_needed(
         self, embeds: torch.Tensor | np.ndarray
     ) -> torch.Tensor | np.ndarray:
         """Quantize the embeddings if needed."""
-        if self.should_quantize(embeds):
-            if isinstance(embeds, torch.Tensor):
-                embeds = embeds.to(torch.float16)
-            else:
-                embeds = embeds.astype(np.float16)
+        if self.quantize_embeds:
+            embeds = reduce_precision(embeds)
         return embeds
 
-    def normalize_if_needed(self, embeds: np.ndarray, copy=False) -> np.ndarray:
+    def normalize_if_needed(
+        self, embeds: torch.Tensor | np.ndarray, dim: int = 1
+    ) -> torch.Tensor | np.ndarray:
         """Normalize the embeddings if needed.
 
         Parameters
         ----------
-        embeds : np.ndarray
+        embeds : torch.Tensor or np.ndarray
             Embeddings to normalize.
-        copy : bool, optional
-            Whether to copy the matrix before normalizing, by default False.
-            If false, will try to do the normalization in-place. Does nothing
-            if normalization is not needed.
+        dim : int
+            Dimension to normalize.
 
         Returns
         -------
-        np.ndarray
+        torch.Tensor or np.ndarray
             Normalized embeddings.
         """
-        if embeds.ndim != 2:
-            raise ValueError("Embeddings must be 2D.")
         if self.normalize_embeds:
-            embeds = normalize(embeds, axis=1, copy=copy, norm="l2")
+            embeds = normalize(embeds, dim=dim)
         return embeds
 
     def postprocess(self, embeds: np.ndarray) -> np.ndarray:
@@ -326,7 +282,7 @@ class FinePhrase:
 
         The steps are:
         1. Normalize embeddings to unit length, if enabled.
-        2. Quantize embeddings to float16, if enabled.
+        2. Reduce precision to float16, if enabled.
 
         Parameters
         ----------
@@ -338,32 +294,32 @@ class FinePhrase:
         np.ndarray
             Postprocessed embeddings.
         """
-        return self.quantize_if_needed(self.normalize_if_needed(embeds))
+        return self.reduce_precision_if_needed(self.normalize_if_needed(embeds))
 
     def _extract_phrases(
         self,
-        sequence_idx: np.ndarray,
-        input_ids: np.ndarray,
-        attention_mask: np.ndarray,
-        token_embeds: np.ndarray,
-        phrase_sizes: list | tuple = (12, 24, 48),
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        token_embeds: torch.Tensor,
+        sequence_idx: torch.Tensor,
+        phrase_sizes: int | list | tuple = 12,
         overlap: int | float | list | dict = 0.5,
-        end_min_token_ratio: float = 0.5,
-    ) -> dict[str, np.ndarray]:
+        phrase_min_token_ratio: float = 0.5,
+    ) -> dict[str, torch.Tensor]:
         """Extract the sub-sequences and sub-sequence embeddings from token embeddings.
 
         Parameters
         ----------
-        sequence_idx : np.ndarray
-            Sequence indices.
-        input_ids : np.ndarray
+        input_ids : torch.Tensor
             Tokenized input sequences with no special tokens (except padding).
-        attention_mask : np.ndarray
+        attention_mask : torch.Tensor
             Attention mask for the input sequences.
-        token_embeds : np.ndarray
+        token_embeds : torch.Tensor
             Token embeddings.
+        sequence_idx : torch.Tensor
+            Sequence indices.
         phrase_sizes : list, tuple, optional
-            List of sub-sequence sizes to extract, by default (12, 24, 48).
+            Sub-sequence size or list of sub-sequence sizes to extract, by default 12.
             For example, if `phrase_sizes` is set to `(12, 24, 48)`, sub-sequences
             of sizes 12, 24, and 48 will be extracted from the input sequences.
         overlap : int, float, list, dict, optional
@@ -372,13 +328,14 @@ class FinePhrase:
             If an integer, it is interpreted as the number of tokens to overlap.
             If a list or tuple, it should contain the overlap for each phrase size.
             If a dictionary, it should map phrase sizes to overlaps.
-        end_min_token_ratio : float, optional
-            Minimum ratio of tokens that must be present in the short last sub-sequences,
-            by default 0.5. Usually this does not have to be adjusted from the default
-            value.
+        phrase_min_token_ratio : float, optional
+            Minimum ratio of tokens that must be present in each sub-sequence,
+            by default 0.5. This mainly pertains to the last short sub-sequence.
+            Typically the default value works well.
+
         Returns
         -------
-        dict[str, np.ndarray]
+        dict[str, torch.Tensor]
             Dictionary containing the sample indices, n-grams, and n-gram embeddings.
 
         Notes
@@ -399,18 +356,20 @@ class FinePhrase:
             attention_mask,
             phrase_sizes=phrase_sizes,
             overlap=overlap,
-            end_min_token_ratio=end_min_token_ratio,
+            phrase_min_token_ratio=phrase_min_token_ratio,
             sequence_idx=sequence_idx,
         )
         # Mask all special tokens
-        attention_mask = np.isin(
-            input_ids, self.tokenizer.all_special_ids, invert=True
-        ).astype("uint8")
-        results = defaultdict(list)
+        attention_mask = torch.isin(
+            input_ids,
+            torch.tensor(self.tokenizer.all_special_ids, device=input_ids.device),
+            invert=True,
+        ).to(torch.uint8)
+        results = {"sequence_idx": [], "phrases": [], "phrase_embeds": []}
         for i, idx in enumerate(phrase_data["phrase_idx"]):
-            attn_factor = np.expand_dims(attention_mask[:, idx], axis=3)
-            phrase_embeds = np.sum(token_embeds[:, idx] * attn_factor, axis=2) / (
-                np.clip(attn_factor.sum(axis=2), 1, None)
+            attn_factor = attention_mask[:, idx].unsqueeze(3)
+            phrase_embeds = torch.sum(token_embeds[:, idx] * attn_factor, dim=2) / (
+                torch.clamp(attn_factor.sum(dim=2), min=1)
             )
             phrase_embeds = phrase_embeds[phrase_data["valid_phrase_mask"][i]]
             phrases = self.tokenizer.batch_decode(
@@ -423,198 +382,218 @@ class FinePhrase:
             results["phrase_embeds"].append(phrase_embeds)
 
         # Combine results
-        results["sequence_idx"] = np.hstack(results["sequence_idx"])
-        results["phrases"] = np.array(results["phrases"], dtype="U")
-        results["phrase_embeds"] = np.vstack(results["phrase_embeds"])
+        results["sequence_idx"] = torch.hstack(results["sequence_idx"])
+        results["phrase_embeds"] = torch.vstack(results["phrase_embeds"])
         return dict(results)
-
-    def _extract_ngrams(
-        self,
-        sequence_idx: np.ndarray,
-        input_ids: np.ndarray,
-        token_embeds: np.ndarray,
-        ngram_range: tuple[int, int] = (5, 5),
-    ) -> dict[str, np.ndarray]:
-        """Extract the n-grams and n-gram embeddings from token embeddings.
-
-        Parameters
-        ----------
-        sequence_idx : np.ndarray
-            Sequence indices.
-        input_ids : np.ndarray
-            Tokenized input sequences.
-        token_embeds : np.ndarray
-            Token embeddings.
-        ngram_range : tuple[int, int], optional
-            Range of n-gram sizes to extract, by default (5, 5).
-
-        Returns
-        -------
-        dict[str, np.ndarray]
-            Dictionary containing the sample indices, n-grams, and n-gram embeddings.
-
-        Notes
-        -----
-        1. The n-gram embeddings are obtained by averaging the token embeddings for each
-        token in each n-gram. This is known as the "mean-tokens" embedding method.
-
-        2. The `ngram_range` parameter specifies the range of n-gram sizes to extract.
-        For example, if `ngram_range` is set to `(4, 6)`, token n-grams of sizes 4, 5, and 6
-        will be extracted from the input sequences.
-
-        3. The `overflow_to_sample_mapping` parameter is used to map overflow indices to sample indices.
-        This is useful when chunking documents into overlapping sequences, as the n-grams extracted
-        from the overflow sequences need to be mapped back to the original sample indices.
-        """
-        ngram_idx = get_ngram_idx(input_ids, ngram_range=ngram_range)
-        valid_token_mask = np.isin(input_ids, self.exclude_token_ids, invert=True)
-        valid_start_token_mask = np.isin(
-            input_ids, self.invalid_start_token_ids, invert=True
-        )
-        results = defaultdict(list)
-        for idx in ngram_idx:
-            ngram_token_ids = input_ids[:, idx]
-            # Create mask of valid ngrams
-            # (valid ngrams must not contain any excluded tokens
-            #  and must start with a valid start token)
-            valid_ngrams = (
-                np.all(valid_token_mask[:, idx], axis=2)
-                & valid_start_token_mask[:, idx[:, 0]]
-            )
-            ngram_token_ids = ngram_token_ids[valid_ngrams]
-            ngrams = self.tokenizer.batch_decode(ngram_token_ids)
-            ngram_embeds = token_embeds[:, idx][valid_ngrams].mean(axis=1)
-            results["sequence_idx"].append(
-                np.repeat(sequence_idx, valid_ngrams.sum(axis=1))
-            )
-            results["ngrams"].extend(ngrams)
-            results["ngram_embeds"].append(ngram_embeds)
-
-        # Combine results
-        results["sequence_idx"] = np.hstack(results["sequence_idx"])
-        results["ngrams"] = np.array(results["ngrams"], dtype="U")
-        results["ngram_embeds"] = np.vstack(results["ngram_embeds"])
-        return dict(results)
-
-    def _generate_embeddings(self, loader: DataLoader):
-        """Obtain the token embeddings for a list of documents, one batch at at time."""
-        with torch.no_grad():
-            with torch.cuda.amp.autocast(enabled=self.amp, dtype=self.amp_dtype):
-                for batch_id, (idx, batch) in enumerate(tqdm(loader, desc="Encoding")):
-                    batch = {
-                        k: v.to(self.device, non_blocking=True)
-                        for k, v in batch.items()
-                    }
-                    outputs = self.model(**batch)
-                    yield {
-                        "batch_id": batch_id,
-                        "sequence_idx": idx,
-                        "token_embeds": outputs.last_hidden_state.cpu().numpy(),
-                    }
 
     def _tokenize(
         self,
         docs: list[str],
         max_length: int | None = None,
-        do_chunking=True,
-        stride: int = 0,
+        chunk_docs: bool = True,
+        doc_overlap: float | int = 0.5,
     ) -> dict[str, np.ndarray]:
+        """Tokenize a list of documents into input sequences for the model.
+
+        Parameters
+        ----------
+        docs : list[str]
+            List of documents to tokenize.
+        max_length : int, optional
+            Maximum length of the input sequences, by default None.
+        chunk_docs : bool, optional
+            Enable chunking of documents into overlapping sequences, by default True.
+        doc_overlap : float, int, optional
+            Overlap for splitting long documents into overlapping sequences due to the
+            model's max sequence length limit, by default 0.5. Tokenized documents which fit
+            within `max_length` will not be chunked. If a float, it is interpreted as a
+            fraction of the maximum sequence length. If an integer, it is interpreted
+            as the number of tokens to overlap. Does nothing if `chunk_docs` is False.
+
+        Returns
+        -------
+        dict[str, np.ndarray]
+            Dictionary containing the tokenized input sequences.
+
+        Raises
+        ------
+        ValueError
+            If `max_length` is not specified and `tokenizer.model_max_length` is None.
+        """
         if max_length is None:
             if self.tokenizer.model_max_length is None:
                 raise ValueError(
-                    "max_length must be specified if tokenizer.model_max_length is None"
+                    "`max_length` must be specified if `tokenizer.model_max_length` is None"
                 )
             max_length = self.tokenizer.model_max_length
+        if chunk_docs:
+            if isinstance(doc_overlap, float):
+                if doc_overlap < 0 or doc_overlap >= 1:
+                    raise ValueError("`doc_overlap` must be in [0, 1).")
+                doc_overlap = math.ceil(max_length * doc_overlap)
+                if doc_overlap == max_length:
+                    doc_overlap -= 1
+            elif isinstance(doc_overlap, int):
+                if doc_overlap >= max_length:
+                    raise ValueError("`doc_overlap` must be less than `max_length`.")
+                elif doc_overlap < 0:
+                    raise ValueError(
+                        "`doc_overlap` must be greater than or equal to 0."
+                    )
+            else:
+                raise ValueError("`doc_overlap` must be a float or an integer.")
+        else:
+            doc_overlap = 0
         inputs = self.tokenizer(
             docs,
             max_length=max_length,
             padding="longest",
             truncation=True,
-            return_overflowing_tokens=do_chunking,
-            stride=stride,
+            return_overflowing_tokens=chunk_docs,
+            stride=doc_overlap,
             return_tensors="pt",
             add_special_tokens=True,
             return_attention_mask=True,
         )
         return inputs
 
-    def _encode(
+    def _generate_token_embeds(
         self,
-        docs: list[str],
-        max_length: int | None = None,
-        batch_size: int = 32,
-        do_chunking: bool = True,
-        stride: int = 0,
-    ) -> dict[str, np.ndarray]:
-        """Obtain the token embeddings for a list of documents.
+        loader: DataLoader,
+        move_results_to_cpu: bool = False,
+        return_tensors: str = "pt",
+    ):
+        """Obtain the token embeddings for a list of documents, one batch at at time."""
+        with torch.no_grad():
+            with torch.cuda.amp.autocast(enabled=self.amp, dtype=self.amp_dtype):
+                progress_loader = tqdm(loader, desc="Encoding")
+                for batch_id, (sequence_idx, batch) in enumerate(progress_loader):
+                    batch = {
+                        k: v.to(self.device, non_blocking=True)
+                        for k, v in batch.items()
+                    }
+                    outputs = self.model(**batch)
+                    results = {
+                        "sequence_idx": sequence_idx,
+                        "input_ids": batch["input_ids"],
+                        "attention_mask": batch["attention_mask"],
+                        "token_embeds": outputs.last_hidden_state,
+                        "batch_id": torch.full(sequence_idx.shape, batch_id),
+                    }
+                    _move_or_convert_results(
+                        results,
+                        return_tensors=return_tensors,
+                        move_results_to_cpu=move_results_to_cpu,
+                    )
+                    yield results
 
-        This is a low-level method that encodes the input documents into token embeddings.
+    def _generate_phrase_embeds(
+        self,
+        loader: DataLoader,
+        phrase_sizes: int | list | tuple,
+        phrase_overlap: int | float | list | dict,
+        phrase_min_token_ratio: float,
+        move_results_to_cpu: bool = False,
+        return_tensors: str = "pt",
+    ):
+        """Obtain the phrase embeddings for a list of documents, one batch at at time."""
+        batches = self._generate_token_embeds(
+            loader, move_results_to_cpu=False, return_tensors="pt"
+        )
+        for batch in batches:
+            results = self._extract_phrases(
+                batch["input_ids"],
+                attention_mask=batch["attention_mask"],
+                token_embeds=batch["token_embeds"],
+                sequence_idx=batch["sequence_idx"].to(self.device),
+                phrase_sizes=phrase_sizes,
+                overlap=phrase_overlap,
+                phrase_min_token_ratio=phrase_min_token_ratio,
+            )
+            results["batch_id"] = torch.full(
+                results["sequence_idx"].shape, batch["batch_id"][0]
+            )
+            _move_or_convert_results(
+                results,
+                return_tensors=return_tensors,
+                move_results_to_cpu=move_results_to_cpu,
+            )
+            yield results
+
+    @property
+    def pca_mode(self) -> bool:
+        """Returns True if PCA is enabled."""
+        return self.pca is not None
+
+    @property
+    def pca_is_ready(self) -> bool:
+        """Returns True if PCA has seen enough batches to be applied."""
+        return (
+            hasattr(self, "pca_transform_")
+            and hasattr(self, "pca_fit_batch_count_")
+            and hasattr(self.pca_transform_, "n_batches_seen_")
+            and self.pca_transform_.n_batches_seen_ >= self.pca_fit_batch_count_
+        )
+
+    def update_pca(self, phrase_embeds: torch.Tensor) -> None:
+        """Update the PCA transformation with a batch of token embeddings.
 
         Parameters
         ----------
-        docs : list[str]
-            List of documents to encode.
-        max_length : int, optional
-            Maximum length of the input sequences, by default None.
-        batch_size : int, optional
-            Batch size for encoding, by default 32.
-        do_chunking : bool, optional
-            Enable chunking of documents into overlapping sequences, by default True.
-        stride : int, optional
-            Stride for splitting documents into overlapping sequences, by default 0.
-            Only used if `do_chunking` is True.
+        phrase_embeds : torch.Tensor
+            Phrase embeddings to update the PCA model with.
+        """
+        if not hasattr(self, "pca_transform_"):
+            self.pca_transform_ = IncrementalPCA(
+                n_components=self.pca, device=self.device
+            )
+        self.pca_transform_.partial_fit(phrase_embeds)
+        if hasattr(self.pca_transform_, "n_batches_seen_"):
+            self.pca_transform_.n_batches_seen_ += 1
+        else:
+            self.pca_transform_.n_batches_seen_ = 1
+
+    def apply_pca(self, phrase_embeds: torch.Tensor) -> torch.Tensor:
+        """Apply PCA transformation to embeddings.
+
+        Parameters
+        ----------
+        phrase_embeds : torch.Tensor
+            Phrase embeddings to apply PCA to.
 
         Returns
         -------
-        dict[str, np.ndarray]
-            Dictionary containing the batch indices, sequence indices, input IDs,
-            token embeddings, and overflow to sample mapping (if chunking is enabled).
-            The batches are left intact, meaning that, for example, the token embeddings
-            are stored as a list of arrays, where each array corresponds to a batch.
+        torch.Tensor
+            PCA-transformed embeddings.
         """
+        if not hasattr(self, "pca_transform_"):
+            raise AttributeError("PCA must be fitted first.")
+        if not self.pca_is_ready:
+            raise RuntimeError("PCA has not seen enough batches to be applied yet.")
+        return self.pca_transform_.transform(phrase_embeds)
 
-        inputs = self._tokenize(
-            docs, max_length=max_length, do_chunking=do_chunking, stride=stride
-        )
-        data = TokenizedDataset(inputs)
-        loader = DataLoader(
-            data,
-            batch_size=batch_size,
-            shuffle=False,
-            pin_memory=True,
-        )
-        results = defaultdict(list)
-        for batch in self._generate_embeddings(loader):
-            results["batch_id"].append(batch["batch_id"])
-            results["sequence_idx"].append(batch["sequence_idx"])
-            results["token_embeds"].append(batch["token_embeds"])
-            results["input_ids"].append(
-                inputs["input_ids"][batch["sequence_idx"]].numpy()
-            )
-            results["attention_mask"].append(
-                inputs["attention_mask"][batch["sequence_idx"]].numpy()
-            )
-        if do_chunking:
-            results["overflow_to_sample_mapping"] = inputs[
-                "overflow_to_sample_mapping"
-            ].numpy()
-        return dict(results)
+    def clear_pca(self) -> None:
+        """Clear the fitted PCA transformation."""
+        if hasattr(self, "pca_transform_"):
+            del self.pca_transform_
+        if hasattr(self, "pca_fit_batch_count_"):
+            del self.pca_fit_batch_count_
 
-    def encode_extract2(
+    def encode(
         self,
         docs: list[str],
         max_length: int | None = None,
         batch_size: int = 32,
-        phrase_sizes: list | tuple = (12, 24, 48),
-        overlap: int | float | list | dict = 0.5,
-        end_min_token_ratio: float = 0.5,
-        do_chunking: bool = True,
-        stride: int = 0,
-    ) -> dict[str, np.ndarray]:
+        phrase_sizes: int | list | tuple = 12,
+        phrase_overlap: int | float | list | dict = 0.5,
+        phrase_min_token_ratio: float = 0.5,
+        chunk_docs: bool = True,
+        doc_overlap: float | int = 0.5,
+        convert_to_numpy: bool = True,
+    ) -> dict[str, np.ndarray | torch.Tensor]:
         """Obtain the n-grams and n-gram embeddings from a list of documents.
 
-        This is equivalent to calling `encode` followed by `extract_ngrams`.
-        It first encodes the input documents, then extracts the n-grams and
+        This first encodes the input documents, then extracts the n-grams and
         n-gram embeddings from the token embeddings.
 
         Parameters
@@ -626,7 +605,7 @@ class FinePhrase:
         batch_size : int, optional
             Batch size for encoding, by default 32.
         phrase_sizes : list, tuple, optional
-            List of sub-sequence sizes to extract, by default (12, 24, 48).
+            Sub-sequence size or list of sub-sequence sizes to extract, by default 12.
             For example, if `phrase_sizes` is set to `(12, 24, 48)`, sub-sequences
             of sizes 12, 24, and 48 will be extracted from the input sequences.
         overlap : int, float, list, dict, optional
@@ -635,19 +614,27 @@ class FinePhrase:
             If an integer, it is interpreted as the number of tokens to overlap.
             If a list or tuple, it should contain the overlap for each phrase size.
             If a dictionary, it should map phrase sizes to overlaps.
-        end_min_token_ratio : float, optional
-            Minimum ratio of tokens that must be present in the short last sub-sequences,
-            by default 0.5. Usually this does not have to be adjusted from the default
-            value.
-        do_chunking : bool, optional
+        phrase_min_token_ratio : float, optional
+            Minimum ratio of tokens that must be present in each sub-sequence,
+            by default 0.5. This mainly pertains to the last short sub-sequence.
+            Typically the default value works well.
+        chunk_docs : bool, optional
             Enable chunking of documents into overlapping sequences, by default True.
-        stride : int, optional
-            Stride for splitting documents into overlapping sequences, by default 0.
-            Only used if `do_chunking` is True.
+            This is useful for long documents that exceed the model's maximum sequence length,
+            as it allows the model to process the document in overlapping chunks. Documents
+            that fit within the maximum sequence length will not be chunked.
+        doc_overlap : float or int, optional
+            Overlap for splitting long documents into overlapping sequences due to the
+            model's max sequence length limit, by default 0.5. Tokenized documents which fit
+            within `max_length` will not be chunked. If a float, it is interpreted as a
+            fraction of the maximum sequence length. If an integer, it is interpreted
+            as the number of tokens to overlap. Does nothing if `chunk_docs` is False.
+        convert_to_numpy : bool, optional
+            Convert the tensors to numpy arrays before returning, by default True.
 
         Returns
         -------
-        dict[str, np.ndarray]
+        dict[str, np.ndarray or torch.Tensor]
             Dictionary containing the sample indices, phrases, and phrase embeddings.
 
         Raises
@@ -656,123 +643,93 @@ class FinePhrase:
             If `max_length` is not specified and `tokenizer.model_max_length` is None.
 
         """
-        encodings = self._encode(
-            docs,
-            max_length=max_length,
-            batch_size=batch_size,
-            do_chunking=do_chunking,
-            stride=stride,
+        inputs = self._tokenize(
+            docs, max_length=max_length, chunk_docs=chunk_docs, doc_overlap=doc_overlap
         )
-        results = defaultdict(list)
-        # Work backwards and pop from the encodings to conserve memory
-        for batch_id in tqdm(encodings["batch_id"][::-1], desc="Extracting"):
-            phrase_batch = self._extract_phrases(
-                encodings["sequence_idx"].pop(batch_id),
-                encodings["input_ids"].pop(batch_id),
-                encodings["attention_mask"].pop(batch_id),
-                encodings["token_embeds"].pop(batch_id),
-                phrase_sizes=phrase_sizes,
-                overlap=overlap,
-                end_min_token_ratio=end_min_token_ratio,
+        data = TokenizedDataset(inputs)
+        loader = DataLoader(
+            data,
+            batch_size=batch_size,
+            shuffle=False,
+            pin_memory=True,
+        )
+        batches = self._generate_phrase_embeds(
+            loader,
+            phrase_sizes=phrase_sizes,
+            phrase_overlap=phrase_overlap,
+            phrase_min_token_ratio=phrase_min_token_ratio,
+            move_results_to_cpu=False,
+            return_tensors="pt",
+        )
+        if self.pca_mode:
+            if isinstance(self.pca_fit_batch_count, float):
+                self.pca_fit_batch_count_ = math.ceil(
+                    len(loader) * self.pca_fit_batch_count
+                )
+            else:
+                self.pca_fit_batch_count_ = self.pca_fit_batch_count
+        results = {
+            "batch_id": [],
+            "sequence_idx": [],
+            "phrases": [],
+            "phrase_embeds": [],
+        }
+        for batch in batches:
+            if not self.pca_mode:
+                # Postprocess on the fly to potentially conserve memory
+                batch["phrase_embeds"] = self.postprocess(batch["phrase_embeds"])
+            else:
+                if self.pca_is_ready:
+                    # Apply PCA and postprocess to potentially conserve memory
+                    batch["phrase_embeds"] = self.postprocess(
+                        self.apply_pca(batch["phrase_embeds"])
+                    )
+                else:
+                    # Update PCA if not ready yet
+                    self.update_pca(batch["phrase_embeds"])
+            # Offload batch to CPU
+            batch = _move_or_convert_results(
+                batch, return_tensors="pt", move_results_to_cpu=True
             )
-            results["sequence_idx"].append(phrase_batch["sequence_idx"])
-            results["phrases"].append(phrase_batch["phrases"])
-            results["phrase_embeds"].append(
-                self.postprocess(phrase_batch["phrase_embeds"])
-            )
-        results["sequence_idx"] = np.hstack(results["sequence_idx"][::-1])
-        results["phrases"] = np.hstack(results["phrases"][::-1])
-        results["phrase_embeds"] = np.vstack(results["phrase_embeds"][::-1])
-        if do_chunking:
-            mapping = encodings["overflow_to_sample_mapping"]
+            results["batch_id"].append(batch["batch_id"])
+            results["sequence_idx"].append(batch["sequence_idx"])
+            results["phrases"].extend(batch["phrases"])
+            results["phrase_embeds"].append(batch["phrase_embeds"])
+        # Process early batches with PCA if necessary
+        if self.pca_mode:
+            if self.pca_is_ready:
+                self.pca_transform_.to("cpu")  # Temporarily move to CPU
+                for i in range(self.pca_fit_batch_count_):
+                    results["phrase_embeds"][i] = self.postprocess(
+                        self.apply_pca(results["phrase_embeds"][i])
+                    )
+                self.pca_transform_.to(self.device)  # Move back to device
+            else:
+                warnings.warn("PCA did not finish fitting and will not be applied.")
+        # Combine results
+        for key, value in results.items():
+            if isinstance(value[0], torch.Tensor):
+                if value[0].ndim == 1:
+                    results[key] = torch.hstack(value)
+                elif value[0].ndim == 2:
+                    results[key] = torch.vstack(value)
+                else:
+                    raise ValueError(f"Unsupported dimension {value[0].ndim}.")
+        if chunk_docs:
+            mapping = inputs["overflow_to_sample_mapping"]
             results["sample_idx"] = mapping[results["sequence_idx"]]
         else:
             results["sample_idx"] = results["sequence_idx"]
-        return dict(results)
-
-    def encode_extract(
-        self,
-        docs: list[str],
-        max_length: int | None = None,
-        batch_size: int = 32,
-        do_chunking: bool = True,
-        stride: int = 0,
-        ngram_range: tuple[int, int] = (5, 5),
-    ) -> dict[str, np.ndarray]:
-        """Obtain the n-grams and n-gram embeddings from a list of documents.
-
-        This is equivalent to calling `encode` followed by `extract_ngrams`.
-        It first encodes the input documents, then extracts the n-grams and
-        n-gram embeddings from the token embeddings.
-
-        Parameters
-        ----------
-        docs : list[str]
-            List of documents to encode.
-        max_length : int, optional
-            Maximum length of the input sequences, by default None.
-        batch_size : int, optional
-            Batch size for encoding, by default 32.
-        do_chunking : bool, optional
-            Enable chunking of documents into overlapping sequences, by default True.
-        stride : int, optional
-            Stride for splitting documents into overlapping sequences, by default 0.
-            Only used if `do_chunking` is True.
-        ngram_range : tuple[int, int], optional
-            Range of n-gram sizes to extract, by default (5, 5).
-
-        Returns
-        -------
-        dict[str, np.ndarray]
-            Dictionary containing the sample indices, n-grams, and n-gram embeddings.
-
-        Raises
-        ------
-        ValueError
-            If `max_length` is not specified and `tokenizer.model_max_length` is None.
-
-        Notes
-        -----
-        The `ngram_range` parameter specifies the range of n-gram sizes to extract.
-        For example, if `ngram_range` is set to `(4, 6)`, token n-grams of sizes 4, 5, and 6
-        will be extracted from the input sequences.
-        """
-        encodings = self._encode(
-            docs,
-            max_length=max_length,
-            batch_size=batch_size,
-            do_chunking=do_chunking,
-            stride=stride,
-        )
-        results = defaultdict(list)
-        # Work backwards and pop from the encodings to conserve memory
-        for batch_id in tqdm(encodings["batch_id"][::-1], desc="Extracting"):
-            ngram_batch = self._extract_ngrams(
-                encodings["sequence_idx"].pop(batch_id),
-                encodings["input_ids"].pop(batch_id),
-                encodings["token_embeds"].pop(batch_id),
-                ngram_range=ngram_range,
-            )
-            results["sequence_idx"].append(ngram_batch["sequence_idx"])
-            results["ngrams"].append(ngram_batch["ngrams"])
-            results["ngram_embeds"].append(
-                self.postprocess(ngram_batch["ngram_embeds"])
-            )
-        results["sequence_idx"] = np.hstack(results["sequence_idx"][::-1])
-        results["ngrams"] = np.hstack(results["ngrams"][::-1])
-        results["ngram_embeds"] = np.vstack(results["ngram_embeds"][::-1])
-        if do_chunking:
-            mapping = encodings["overflow_to_sample_mapping"]
-            results["sample_idx"] = mapping[results["sequence_idx"]]
-        else:
-            results["sample_idx"] = results["sequence_idx"]
-        return dict(results)
+        if convert_to_numpy:
+            _move_or_convert_results(results, return_tensors="np")
+        return results
 
     def encode_queries(
         self,
         queries: list[str],
         max_length: int | None = None,
         batch_size: int = 32,
+        convert_to_numpy: bool = True,
     ) -> np.ndarray:
         """Obtain the mean-tokens embeddings for a list of query strings.
 
@@ -788,307 +745,43 @@ class FinePhrase:
             Maximum length of the input sequences, by default None.
         batch_size : int, optional
             Batch size for encoding, by default 32.
+        convert_to_numpy : bool, optional
+            Convert the tensors to numpy arrays before returning, by default True.
 
         Returns
         -------
         np.ndarray
             Mean-token embeddings for each query.
         """
-        encodings = self._encode(
-            queries,
-            max_length=max_length,
-            batch_size=batch_size,
-            do_chunking=False,
-            stride=0,
-        )
-        hidden_size = encodings["token_embeds"][0].shape[2]
-        query_embeds = []
-        # Work backwards and pop from the encodings to conserve memory
-        for batch_id in tqdm(encodings["batch_id"][::-1], desc="Pooling"):
-            token_embeds = encodings["token_embeds"].pop(batch_id)
-            input_ids = encodings["input_ids"].pop(batch_id)
-            valid_token_mask = np.isin(
-                input_ids, self.exclude_token_ids, invert=True
-            ).astype("uint8")
-            valid_token_weight = valid_token_mask[:, :, np.newaxis].repeat(
-                hidden_size, axis=2
-            )
-            query_embeds.append(
-                np.sum(token_embeds * valid_token_weight, axis=1)
-                / valid_token_weight.sum(axis=1)
-            )
-        query_embeds = self.postprocess(np.vstack(query_embeds[::-1]))
-        return query_embeds
-
-
-class FinePhrasePCA(FinePhrase):
-    def __init__(
-        self,
-        model_name: str,
-        n_pca_components: int = 64,
-        n_pca_training_batches: float | int = 0.25,
-        amp: bool = True,
-        amp_dtype: torch.dtype = torch.float16,
-        quantize_embeds: bool = True,
-        normalize_embeds: bool = False,
-        device: torch.device | str | int = "cuda",
-        invalid_start_token_pattern: str | None = r"^##",
-        exclude_tokens: list[str] | list[int] | None = None,
-    ) -> None:
-        """Initialize an FinePhrasePCA model.
-
-        Parameters
-        ----------
-        model_name : str
-            Name of the pretrained model to use.
-        n_pca_components : int, optional
-            Number of components for PCA, by default 64.
-        n_pca_training_batches : float, int, optional
-            Number or fraction of batches to use for training PCA, by default 0.25.
-            If a float, it is interpreted as a fraction of the total number of batches
-            at the initial calling of `encode_extract`. If an integer, it is interpreted
-            as the number of batches. After PCA has seen at least this number of batches,
-            it will no longer be updated and will instead be applied to all token embeddings.
-            This is true even if `encode_extract` is called a second time on new data.
-        amp : bool, optional
-            Enable automatic mixed precision, by default False.
-        amp_dtype : torch.dtype, optional
-            Data type for automatic mixed precision, by default torch.float16.
-        quantize_embeds : bool, optional
-            Reduce the embedding precision to float16 if they are float32 or float64,
-            by default True.
-        normalize_embeds : bool, optional
-            Normalize the embeddings to unit length, by default False.
-        device : torch.device, str, int, optional
-            Device to use for inference, by default "cuda".
-        invalid_start_token_pattern : str, None, optional
-            Regular expression pattern for invalid start tokens, by default r"^##".
-        exclude_tokens : list[str], list[int], None, optional
-            List of tokens to exclude from n-gram extraction, by default None.
-        """
-        super().__init__(
-            model_name,
-            amp=amp,
-            amp_dtype=amp_dtype,
-            quantize_embeds=quantize_embeds,
-            normalize_embeds=normalize_embeds,
-            device=device,
-            invalid_start_token_pattern=invalid_start_token_pattern,
-            exclude_tokens=exclude_tokens,
-        )
-        self.n_pca_components = n_pca_components
-        self.n_pca_training_batches = n_pca_training_batches
-
-    @property
-    def pca_training_complete(self) -> bool:
-        """Returns True if PCA has seen enough samples to be applied."""
-        return (
-            hasattr(self, "pca_")
-            and hasattr(self, "n_pca_training_batches_")
-            and hasattr(self.pca_, "n_batches_seen_")
-            and self.pca_.n_batches_seen_ >= self.n_pca_training_batches_
-        )
-
-    def update_pca(self, token_embeds: np.ndarray) -> None:
-        """Update the PCA model with a batch of token embeddings.
-
-        Parameters
-        ----------
-        token_embeds : np.ndarray
-            Token embeddings to update the PCA model with.
-        """
-        if not hasattr(self, "pca_"):
-            self.pca_ = IncrementalPCA(n_components=self.n_pca_components)
-        if token_embeds.ndim == 3:
-            token_embeds = token_embeds.reshape(-1, token_embeds.shape[2])
-        self.pca_.partial_fit(token_embeds)
-        if hasattr(self.pca_, "n_batches_seen_"):
-            self.pca_.n_batches_seen_ += 1
-        else:
-            self.pca_.n_batches_seen_ = 1
-
-    def apply_pca(self, embeds: np.ndarray) -> np.ndarray:
-        """Apply PCA to embeddings.
-
-        Parameters
-        ----------
-        embeds : np.ndarray
-            Embeddings to apply PCA to.
-
-        Returns
-        -------
-        np.ndarray
-            PCA-transformed embeddings.
-        """
-        if not hasattr(self, "pca_"):
-            raise AttributeError("PCA must be fitted first.")
-        if not self.pca_.n_samples_seen_ >= self.n_pca_training_batches:
-            raise RuntimeError("PCA has not seen enough samples to be applied yet.")
-        ndim = embeds.ndim
-        if ndim == 3:
-            seq_len = embeds.shape[1]
-            embeds = embeds.reshape(-1, embeds.shape[2])
-        low = self.pca_.transform(embeds)
-        if ndim == 3:
-            low = low.reshape(-1, seq_len, low.shape[1])
-        return low
-
-    def clear_pca(self) -> None:
-        """Clear the PCA model."""
-        if hasattr(self, "pca_"):
-            del self.pca_
-        if hasattr(self, "n_pca_training_batches_"):
-            del self.n_pca_training_batches_
-
-    def postprocess(self, embeds):
-        """Apply all postprocessing steps to the embeddings.
-
-        The steps are:
-        1. Normalize embeddings to unit length, if enabled.
-        2. Apply PCA to the embeddings.
-        3. Normalize embeddings to unit length again, if enabled.
-        4. Quantize embeddings to float16, if enabled.
-
-        Parameters
-        ----------
-        embeds : np.ndarray
-            Embeddings to postprocess.
-
-        Returns
-        -------
-        np.ndarray
-            Postprocessed embeddings.
-        """
-        steps = (
-            self.normalize_if_needed,
-            self.apply_pca,
-            self.normalize_if_needed,
-            self.quantize_if_needed,
-        )
-        for step in steps:
-            embeds = step(embeds)
-        return embeds
-
-    def encode_extract(
-        self,
-        docs: list[str],
-        max_length: int | None = None,
-        batch_size: int = 32,
-        do_chunking: bool = True,
-        stride: int = 0,
-        ngram_range: tuple[int, int] = (5, 5),
-        random_state: int | None = None,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Obtain the n-grams and n-gram embeddings from a list of documents.
-
-        This is equivalent to calling `encode` followed by `extract_ngrams`.
-        It first encodes the input documents, then extracts the n-grams and
-        n-gram embeddings from the token embeddings.
-
-        Parameters
-        ----------
-        docs : list[str]
-            List of documents to encode.
-        max_length : int, optional
-            Maximum length of the input sequences, by default None.
-        batch_size : int, optional
-            Batch size for encoding, by default 32.
-        do_chunking : bool, optional
-            Enable chunking of documents into overlapping sequences, by default True.
-        stride : int, optional
-            Stride for splitting documents into overlapping sequences, by default 0.
-            Only used if `do_chunking` is True.
-        ngram_range : tuple[int, int], optional
-            Range of n-gram sizes to extract, by default (5, 5).
-        random_state : int, None, optional
-            Random seed for shuffling, by default None. Only used if PCA is not yet trained.
-
-        Returns
-        -------
-        tuple[np.ndarray, np.ndarray, np.ndarray]
-            Tuple containing the sequence indices, n-grams, and n-gram embeddings
-
-        Raises
-        ------
-        ValueError
-            If `max_length` is not specified and `tokenizer.model_max_length` is None.
-
-        Notes
-        -----
-        The `ngram_range` parameter specifies the range of n-gram sizes to extract.
-        For example, if `ngram_range` is set to `(4, 6)`, token n-grams of sizes 4, 5, and 6
-        will be extracted from the input sequences.
-        """
-        inputs = self._tokenize(
-            docs,
-            max_length=max_length,
-            do_chunking=do_chunking,
-            stride=stride,
-        )
-        data = TokenizedDataset(
-            inputs, shuffle=not self.pca_training_complete, random_state=random_state
-        )
+        inputs = self._tokenize(queries, max_length=max_length, chunk_docs=False)
         loader = DataLoader(
-            data,
+            TokenizedDataset(inputs),
             batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
         )
-        # Determine number of batches to use for PCA training
-        if isinstance(self.n_pca_training_batches, float):
-            self.n_pca_training_batches_ = int(
-                np.ceil(self.n_pca_training_batches * len(loader))
+        batches = self._generate_token_embeds(
+            loader, move_results_to_cpu=False, return_tensors="pt"
+        )
+        query_embeds = []
+        for batch in batches:
+            token_embeds = batch["token_embeds"]
+            input_ids = batch["input_ids"]
+            valid_token_mask = torch.isin(
+                input_ids,
+                torch.tensor(self.tokenizer.all_special_ids, device=self.device),
+                invert=True,
             )
-        else:
-            self.n_pca_training_batches_ = self.n_pca_training_batches
-        if self.n_pca_training_batches_ > len(loader):
-            raise ValueError(
-                f"n_pca_training_batches must be less than or equal to the number of batches ({len(loader)})"
-            )
-        results = defaultdict(list)
-        for batch in self._generate_embeddings(loader):
-            ngram_batch = self._extract_ngrams(
-                batch["sequence_idx"],
-                inputs["input_ids"][batch["sequence_idx"]].numpy(),
-                batch["token_embeds"],
-                ngram_range=ngram_range,
-            )
-            if self.pca_training_complete:
-                ngram_batch["ngram_embeds"] = self.postprocess(
-                    ngram_batch["ngram_embeds"]
-                )
-            else:
-                self.update_pca(self.normalize_if_needed(ngram_batch["ngram_embeds"]))
-                # Retroactively apply PCA when training completes
-                if self.pca_training_complete:
-                    print(
-                        f"PCA training complete after {self.pca_.n_batches_seen_} batches."
-                    )
-                    print("Applying PCA to all n-gram embeddings.")
-                    results["ngram_embeds"] = [
-                        self.postprocess(e) for e in results["ngram_embeds"]
-                    ]
-                    ngram_batch["ngram_embeds"] = self.postprocess(
-                        ngram_batch["ngram_embeds"]
-                    )
-            results["sequence_idx"].append(ngram_batch["sequence_idx"])
-            results["ngrams"].append(ngram_batch["ngrams"])
-            results["ngram_embeds"].append(ngram_batch["ngram_embeds"])
-        if not self.pca_training_complete:
-            raise RuntimeError("PCA training failed to complete.")
-        # Combine results
-        results["sequence_idx"] = np.hstack(results["sequence_idx"])
-        results["ngrams"] = np.hstack(results["ngrams"])
-        results["ngram_embeds"] = np.vstack(results["ngram_embeds"])
-        # Reorder results if shuffling was enabled
-        if data.shuffle:
-            reorder_idx = np.argsort(results["sequence_idx"])
-            results["sequence_idx"] = results["sequence_idx"][reorder_idx]
-            results["ngrams"] = results["ngrams"][reorder_idx]
-            results["ngram_embeds"] = results["ngram_embeds"][reorder_idx]
-        if do_chunking:
-            mapping = inputs["overflow_to_sample_mapping"].numpy()
-            results["sample_idx"] = mapping[results["sequence_idx"]]
-        else:
-            results["sample_idx"] = results["sequence_idx"]
-        return dict(results)
+            valid_token_weight = valid_token_mask.unsqueeze(2).float()
+            mean_tokens = (token_embeds * valid_token_weight).sum(
+                dim=1
+            ) / valid_token_weight.sum(dim=1)
+            if self.pca_mode and self.pca_is_ready:
+                self.pca_transform_.to(self.device)
+                mean_tokens = self.apply_pca(mean_tokens)
+            mean_tokens = self.postprocess(mean_tokens)
+            query_embeds.append(mean_tokens.cpu())
+        query_embeds = torch.vstack(query_embeds)
+        if convert_to_numpy:
+            query_embeds = query_embeds.numpy()
+        return query_embeds
