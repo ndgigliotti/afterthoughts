@@ -18,13 +18,14 @@ import math
 import warnings
 
 import numpy as np
+import pyarrow as pa
 import torch
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 from transformers import AutoModel, AutoTokenizer
 
 from finephrase.pca import IncrementalPCA
-from finephrase.utils import normalize, reduce_precision
+from finephrase.utils import normalize, reduce_precision, timer, truncate_dims
 
 
 class TokenizedDataset(Dataset):
@@ -217,14 +218,26 @@ def _move_or_convert_results(
     ValueError
         If `return_tensors` is not 'np' or 'pt'.
     """
-    if move_results_to_cpu:
+    if move_results_to_cpu or return_tensors == "np":
         for key, value in results.items():
             if isinstance(value, torch.Tensor):
                 results[key] = value.cpu()
+            if (
+                isinstance(value, list)
+                and len(value)
+                and isinstance(value[0], torch.Tensor)
+            ):
+                results[key] = [v.cpu() for v in value]
     if return_tensors == "np":
         for key, value in results.items():
             if isinstance(value, torch.Tensor):
                 results[key] = value.numpy()
+            elif (
+                isinstance(value, list)
+                and len(value)
+                and isinstance(value[0], torch.Tensor)
+            ):
+                results[key] = [v.numpy() for v in value]
     elif not return_tensors == "pt":
         raise ValueError("`return_tensors` must be 'np' or 'pt'.")
     return results
@@ -237,6 +250,7 @@ class FinePhrase:
         amp: bool = True,
         amp_dtype: torch.dtype = torch.float16,
         reduce_precision: bool = False,
+        truncate_dims: int | None = None,
         normalize_embeds: bool = False,
         pca: int | None = None,
         pca_fit_batch_count: int | float = 1.0,
@@ -255,6 +269,9 @@ class FinePhrase:
         reduce_precision : bool, optional
             Reduce the embedding precision to float16 if they are float32 or float64,
             by default False.
+        truncate_dims : int, None, optional
+            Truncate the dimensions of the embeddings to the specified value, by default None.
+            If None, the embeddings are not truncated.
         normalize_embeds : bool, optional
             Normalize the embeddings to unit length, by default False.
             This is useful for quick cosine similarity calculations downstream, since
@@ -274,16 +291,21 @@ class FinePhrase:
             Device to use for inference, by default "cuda".
         """
         self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name, clean_up_tokenization_spaces=True
+            model_name,
+            clean_up_tokenization_spaces=True,
         )
         self.model = AutoModel.from_pretrained(model_name)
         self.amp = amp
         self.amp_dtype = amp_dtype
-        self.quantize_embeds = reduce_precision
+        self.reduce_precision = reduce_precision
+        self.truncate_dims = truncate_dims
         self.normalize_embeds = normalize_embeds
         self.pca = pca
         self.pca_fit_batch_count = pca_fit_batch_count
         self.model.eval().to(device)
+        if truncate_dims is not None and pca is not None:
+            if truncate_dims < pca:
+                raise ValueError("`truncate_dims` must be greater than `pca`.")
 
     @property
     def device(self) -> torch.device:
@@ -310,8 +332,25 @@ class FinePhrase:
         self, embeds: torch.Tensor | np.ndarray
     ) -> torch.Tensor | np.ndarray:
         """Quantize the embeddings if needed."""
-        if self.quantize_embeds:
+        if self.reduce_precision:
             embeds = reduce_precision(embeds)
+        return embeds
+
+    def truncate_dims_if_needed(self, embeds: torch.Tensor | np.ndarray):
+        """Truncate the dimensions of the embeddings if needed.
+
+        Parameters
+        ----------
+        embeds : torch.Tensor or np.ndarray
+            Embeddings to truncate.
+
+        Returns
+        -------
+        torch.Tensor or np.ndarray
+            Truncated embeddings.
+        """
+        if self.truncate_dims is not None:
+            embeds = truncate_dims(embeds, dim=self.truncate_dims)
         return embeds
 
     def normalize_if_needed(
@@ -339,8 +378,8 @@ class FinePhrase:
         """Apply all postprocessing steps to the embeddings.
 
         The steps are:
-        1. Normalize embeddings to unit length, if enabled.
-        2. Reduce precision to float16, if enabled.
+        1. Reduce precision to float16, if enabled.
+        2. Normalize embeddings to unit length, if enabled.
 
         Parameters
         ----------
@@ -352,9 +391,39 @@ class FinePhrase:
         np.ndarray
             Postprocessed embeddings.
         """
-        return self.reduce_precision_if_needed(self.normalize_if_needed(embeds))
+        steps = [
+            self.reduce_precision_if_needed,
+            self.normalize_if_needed,
+        ]
+        for step in steps:
+            embeds = step(embeds)
+        return embeds
 
-    def _extract_phrases(
+    def _decode_phrases(self, phrase_ids: list[torch.Tensor]) -> pa.Array:
+        """Decode the phrase IDs into human-readable phrases.
+
+        Parameters
+        ----------
+        phrase_ids : list[torch.Tensor]
+            List of phrase IDs to decode.
+
+        Returns
+        -------
+        pa.Array
+            PyArrow array containing the decoded phrases.
+        """
+        phrases = []
+        for ids in tqdm(phrase_ids, desc="Detokenizing"):
+            phrases.extend(
+                self.tokenizer.batch_decode(
+                    ids.cpu(),
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=True,
+                )
+            )
+        return pa.array(phrases)
+
+    def _compute_phrase_embeddings(
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
@@ -423,20 +492,15 @@ class FinePhrase:
             torch.tensor(self.tokenizer.all_special_ids, device=input_ids.device),
             invert=True,
         ).to(torch.uint8)
-        results = {"sequence_idx": [], "phrases": [], "phrase_embeds": []}
+        results = {"sequence_idx": [], "phrase_ids": [], "phrase_embeds": []}
         for i, idx in enumerate(phrase_data["phrase_idx"]):
             attn_factor = attention_mask[:, idx].unsqueeze(3)
             phrase_embeds = torch.sum(token_embeds[:, idx] * attn_factor, dim=2) / (
                 torch.clamp(attn_factor.sum(dim=2), min=1)
             )
             phrase_embeds = phrase_embeds[phrase_data["valid_phrase_mask"][i]]
-            phrases = self.tokenizer.batch_decode(
-                phrase_data["phrase_ids"][i],
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=True,
-            )
             results["sequence_idx"].append(phrase_data["sequence_idx"][i])
-            results["phrases"].extend(phrases)
+            results["phrase_ids"].append(phrase_data["phrase_ids"][i])
             results["phrase_embeds"].append(phrase_embeds)
 
         # Combine results
@@ -444,6 +508,7 @@ class FinePhrase:
         results["phrase_embeds"] = torch.vstack(results["phrase_embeds"])
         return dict(results)
 
+    @timer(readout="Finished tokenizing in {time:.4f} seconds.")
     def _tokenize(
         self,
         docs: list[str],
@@ -535,7 +600,9 @@ class FinePhrase:
                         "sequence_idx": sequence_idx,
                         "input_ids": batch["input_ids"],
                         "attention_mask": batch["attention_mask"],
-                        "token_embeds": outputs.last_hidden_state,
+                        "token_embeds": self.truncate_dims_if_needed(
+                            outputs.last_hidden_state
+                        ),
                         "batch_id": torch.full(sequence_idx.shape, batch_id),
                     }
                     _move_or_convert_results(
@@ -559,7 +626,7 @@ class FinePhrase:
             loader, move_results_to_cpu=False, return_tensors="pt"
         )
         for batch in batches:
-            results = self._extract_phrases(
+            results = self._compute_phrase_embeddings(
                 batch["input_ids"],
                 attention_mask=batch["attention_mask"],
                 token_embeds=batch["token_embeds"],
@@ -632,10 +699,11 @@ class FinePhrase:
 
     def clear_pca(self) -> None:
         """Clear the fitted PCA transformation."""
-        if hasattr(self, "pca_transform_"):
-            del self.pca_transform_
-        if hasattr(self, "pca_fit_batch_count_"):
-            del self.pca_fit_batch_count_
+        pca_attrs = ["pca_transform_", "pca_fit_batch_count_"]
+        for attr in pca_attrs:
+            if hasattr(self, attr):
+                delattr(self, attr)
+        print("PCA cleared.")
 
     def encode(
         self,
@@ -729,7 +797,7 @@ class FinePhrase:
         results = {
             "batch_id": [],
             "sequence_idx": [],
-            "phrases": [],
+            "phrase_ids": [],
             "phrase_embeds": [],
         }
         for batch in batches:
@@ -751,7 +819,7 @@ class FinePhrase:
             )
             results["batch_id"].append(batch["batch_id"])
             results["sequence_idx"].append(batch["sequence_idx"])
-            results["phrases"].extend(batch["phrases"])
+            results["phrase_ids"].extend(batch["phrase_ids"])
             results["phrase_embeds"].append(batch["phrase_embeds"])
         # Process early batches with PCA if necessary
         if self.pca_mode:
@@ -765,6 +833,7 @@ class FinePhrase:
             else:
                 warnings.warn("PCA did not finish fitting and will not be applied.")
         # Combine results
+        results["phrases"] = self._decode_phrases(results.pop("phrase_ids"))
         for key, value in results.items():
             if isinstance(value[0], torch.Tensor):
                 if value[0].ndim == 1:

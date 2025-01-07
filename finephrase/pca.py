@@ -634,39 +634,6 @@ def _add_to_diagonal(array, value):
 
 
 @torch.no_grad()
-def _safe_accumulator_op(op, x, *args, **kwargs):
-    """
-    This function provides PyTorch accumulator functions with a float64 dtype
-    when used on a floating point input. This prevents accumulator overflow on
-    smaller floating point dtypes.
-
-    Adapted from scikit-learn's `_safe_accumulator_op` (BSD 3-Clause License).
-
-    Parameters
-    ----------
-    op : function
-        A PyTorch accumulator function such as torch.mean or torch.sum.
-    x : Tensor
-        A PyTorch tensor to apply the accumulator function.
-    *args : positional arguments
-        Positional arguments passed to the accumulator function after the
-        input x.
-    **kwargs : keyword arguments
-        Keyword arguments passed to the accumulator function.
-
-    Returns
-    -------
-    result
-        The output of the accumulator function passed to this function.
-    """
-    if x.dtype.is_floating_point and x.element_size() < 8:
-        result = op(x.to(torch.float64), *args, **kwargs)
-    else:
-        result = op(x, *args, **kwargs)
-    return result
-
-
-@torch.no_grad()
 def _incremental_mean_and_var(
     X, last_mean, last_variance, last_sample_count, sample_weight=None
 ):
