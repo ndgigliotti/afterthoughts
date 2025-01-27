@@ -182,14 +182,19 @@ class IncrementalPCA:
 
     def to(self, device):
         self.device = device
-        self.n_samples_seen_ = self.n_samples_seen_.to(device)
-        self.components_ = self.components_.to(device)
-        self.mean_ = self.mean_.to(device)
-        self.singular_values_ = self.singular_values_.to(device)
-        self.explained_variance_ = self.explained_variance_.to(device)
-        self.explained_variance_ratio_ = self.explained_variance_ratio_.to(device)
-        self.var_ = self.var_.to(device)
-        self.noise_variance_ = self.noise_variance_.to(device)
+        fitted_attrs = [
+            "n_samples_seen_",
+            "components_",
+            "mean_",
+            "singular_values_",
+            "explained_variance_",
+            "explained_variance_ratio_",
+            "var_",
+            "noise_variance_",
+        ]
+        for attr in fitted_attrs:
+            if hasattr(self, attr):
+                setattr(self, attr, getattr(self, attr).to(device))
         return self
 
     @torch.no_grad()
@@ -749,3 +754,111 @@ def _incremental_mean_and_var(
         updated_variance = updated_unnormalized_variance / updated_sample_count
 
     return updated_mean, updated_variance, updated_sample_count
+
+
+class PCA:
+    def __init__(self, n_components=None, *, whiten=False, copy=True, device="cuda"):
+        self.n_components = n_components
+        self.whiten = whiten
+        self.copy = copy
+        self.device = device
+        return self
+
+    @torch.no_grad()
+    def fit(self, X):
+        """Fit the model with X using torch.pca_lowrank.
+
+        Parameters
+        ----------
+        X : Tensor of shape (n_samples, n_features)
+            Training data, where `n_samples` is the number of samples and
+            `n_features` is the number of features.
+
+        Returns
+        -------
+        self : object
+            Returns the instance itself.
+        """
+        X = X.to(self.device)
+        n_samples, n_features = X.shape
+
+        if self.n_components is None:
+            self.n_components_ = min(n_samples, n_features)
+        else:
+            self.n_components_ = self.n_components
+
+        U, S, V = torch.pca_lowrank(X - X.mean(dim=0), q=self.n_components_)
+        U, V = svd_flip(U, V.T, u_based_decision=False)
+
+        self.components_ = V[: self.n_components_]
+        self.singular_values_ = S[: self.n_components_]
+        self.explained_variance_ = (S**2 / (n_samples - 1))[: self.n_components_]
+        self.explained_variance_ratio_ = (
+            self.explained_variance_ / self.explained_variance_.sum()
+        )
+        self.mean_ = X.mean(dim=0)
+        self.var_ = X.var(dim=0, unbiased=False)
+        self.noise_variance_ = 0.0
+
+        return self
+
+    @torch.no_grad()
+    def transform(self, X):
+        """Apply dimensionality reduction to X.
+
+        Parameters
+        ----------
+        X : Tensor of shape (n_samples, n_features)
+            New data, where `n_samples` is the number of samples
+            and `n_features` is the number of features.
+
+        Returns
+        -------
+        X_new : Tensor of shape (n_samples, n_components)
+            Projection of X in the first principal components.
+        """
+        X = X.to(self.device)
+        X_transformed = (X - self.mean_) @ self.components_.T
+        if self.whiten:
+            X_transformed /= torch.sqrt(self.explained_variance_)
+        return X_transformed
+
+    @torch.no_grad()
+    def inverse_transform(self, X):
+        """Transform data back to its original space.
+
+        Parameters
+        ----------
+        X : Tensor of shape (n_samples, n_components)
+            New data, where `n_samples` is the number of samples
+            and `n_components` is the number of components.
+
+        Returns
+        -------
+        X_original : Tensor of shape (n_samples, n_features)
+            Original data.
+        """
+        X = X.to(self.device)
+        if self.whiten:
+            return (
+                X @ (self.components_ * torch.sqrt(self.explained_variance_))
+                + self.mean_
+            )
+        else:
+            return X @ self.components_ + self.mean_
+
+    @torch.no_grad()
+    def fit_transform(self, X):
+        """Fit the model with X and apply the dimensionality reduction on X.
+
+        Parameters
+        ----------
+        X : Tensor of shape (n_samples, n_features)
+            Training data.
+
+        Returns
+        -------
+        X_new : Tensor of shape (n_samples, n_components)
+            Projection of X in the first principal components.
+        """
+        return self.fit(X).transform(X)

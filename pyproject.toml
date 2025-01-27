@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "FinePhrase"
 version = "0.1.0"
-description = "Generate fine-grained n-gram embeddings with transformers."
+description = "Generate fine-grained contextualized phrase embeddings with transformers."
 readme = "README.md"
 authors = [
   {name = "Nicholas Gigliotti", email = "ndgigliotti@gmail.com"}
@@ -59,3 +59,6 @@ warn_no_return = true
 # Don't require test functions to include types
 module = "tests.*"
 ignore_missing_imports = true
+
+[tool.isort]
+profile = "black"

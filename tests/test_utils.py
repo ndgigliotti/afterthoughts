@@ -1,21 +1,18 @@
-import pytest
-import numpy as np
-import pyarrow as pa
-import torch
-import pytest
-import numpy as np
-import pyarrow as pa
-import torch
 import time
 
+import numpy as np
+import pyarrow as pa
+import pytest
+import torch
+
 from finephrase.utils import (
-    timer,
-    get_memory_size,
     format_memory_size,
     get_memory_report,
-    normalize,
+    get_memory_size,
     get_torch_dtype,
+    normalize,
     reduce_precision,
+    timer,
     truncate_dims,
 )
 
@@ -62,7 +59,7 @@ def test_get_memory_report():
     assert "pa_array" in report
     assert "np_array" in report
     assert "torch_tensor" in report
-    assert "total" in report
+    assert "_total_" in report
 
 
 def test_normalize_numpy():

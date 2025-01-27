@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 from transformers import AutoModel, AutoTokenizer
 
+from finephrase.data import DocPhrases
 from finephrase.pca import IncrementalPCA
 from finephrase.utils import normalize, reduce_precision, timer, truncate_dims
 
@@ -590,7 +591,7 @@ class FinePhrase:
         with torch.no_grad():
             with torch.cuda.amp.autocast(enabled=self.amp, dtype=self.amp_dtype):
                 progress_loader = tqdm(loader, desc="Encoding")
-                for batch_id, (sequence_idx, batch) in enumerate(progress_loader):
+                for batch_idx, (sequence_idx, batch) in enumerate(progress_loader):
                     batch = {
                         k: v.to(self.device, non_blocking=True)
                         for k, v in batch.items()
@@ -603,7 +604,7 @@ class FinePhrase:
                         "token_embeds": self.truncate_dims_if_needed(
                             outputs.last_hidden_state
                         ),
-                        "batch_id": torch.full(sequence_idx.shape, batch_id),
+                        "batch_idx": torch.full(sequence_idx.shape, batch_idx),
                     }
                     _move_or_convert_results(
                         results,
@@ -635,8 +636,8 @@ class FinePhrase:
                 overlap=phrase_overlap,
                 phrase_min_token_ratio=phrase_min_token_ratio,
             )
-            results["batch_id"] = torch.full(
-                results["sequence_idx"].shape, batch["batch_id"][0]
+            results["batch_idx"] = torch.full(
+                results["sequence_idx"].shape, batch["batch_idx"][0]
             )
             _move_or_convert_results(
                 results,
@@ -787,15 +788,20 @@ class FinePhrase:
             move_results_to_cpu=False,
             return_tensors="pt",
         )
+        pca_ready_at_start = self.pca_is_ready
         if self.pca_mode:
-            if isinstance(self.pca_fit_batch_count, float):
-                self.pca_fit_batch_count_ = math.ceil(
-                    len(loader) * self.pca_fit_batch_count
-                )
-            else:
-                self.pca_fit_batch_count_ = self.pca_fit_batch_count
+            if hasattr(self, "pca_transform_"):
+                self.pca_transform_.to(self.device)
+            if not pca_ready_at_start:
+                if isinstance(self.pca_fit_batch_count, float):
+                    self.pca_fit_batch_count_ = math.ceil(
+                        len(loader) * self.pca_fit_batch_count
+                    )
+                else:
+                    self.pca_fit_batch_count_ = self.pca_fit_batch_count
+
         results = {
-            "batch_id": [],
+            "batch_idx": [],
             "sequence_idx": [],
             "phrase_ids": [],
             "phrase_embeds": [],
@@ -817,18 +823,20 @@ class FinePhrase:
             batch = _move_or_convert_results(
                 batch, return_tensors="pt", move_results_to_cpu=True
             )
-            results["batch_id"].append(batch["batch_id"])
+            results["batch_idx"].append(batch["batch_idx"])
             results["sequence_idx"].append(batch["sequence_idx"])
             results["phrase_ids"].extend(batch["phrase_ids"])
             results["phrase_embeds"].append(batch["phrase_embeds"])
         # Process early batches with PCA if necessary
-        if self.pca_mode:
+        if self.pca_mode and not pca_ready_at_start:
             if self.pca_is_ready:
                 self.pca_transform_.to("cpu")  # Temporarily move to CPU
                 for i in range(self.pca_fit_batch_count_):
-                    results["phrase_embeds"][i] = self.postprocess(
-                        self.apply_pca(results["phrase_embeds"][i])
-                    )
+                    batch_embeds = results["phrase_embeds"][i]
+                    if batch_embeds.size(1) != self.pca:
+                        results["phrase_embeds"][i] = self.postprocess(
+                            self.apply_pca(batch_embeds)
+                        )
                 self.pca_transform_.to(self.device)  # Move back to device
             else:
                 warnings.warn("PCA did not finish fitting and will not be applied.")
@@ -849,6 +857,14 @@ class FinePhrase:
             results["sample_idx"] = results["sequence_idx"]
         if convert_to_numpy:
             _move_or_convert_results(results, return_tensors="np")
+        # results = DocPhrases(
+        #     doc_idx=results["sample_idx"],
+        #     phrases=results["phrases"],
+        #     embeds=results["phrase_embeds"],
+        #     seq_idx=results["sequence_idx"],
+        #     batch_idx=results["batch_idx"],
+        #     phrases_format="dataframe",
+        # )
         return results
 
     def encode_queries(

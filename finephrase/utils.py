@@ -4,6 +4,7 @@ from functools import singledispatch
 from typing import Callable
 
 import numpy as np
+import pandas as pd
 import pyarrow as pa
 import torch
 import torch.nn.functional as F
@@ -37,12 +38,14 @@ def timer(readout: str = "Execution time: {time:.4f} seconds") -> Callable:
     return decorator
 
 
-def get_memory_size(a: pa.Array | torch.Tensor | np.ndarray) -> int:
+def get_memory_size(
+    a: pa.Array | torch.Tensor | np.ndarray | pd.Series | pd.DataFrame,
+) -> int:
     """Get the size of the array in bytes.
 
     Parameters
     ----------
-    a : pa.Array or torch.Tensor or np.ndarray
+    a : pa.Array or torch.Tensor or np.ndarray or pd.Series or pd.DataFrame
         Array.
 
     Returns
@@ -61,6 +64,10 @@ def get_memory_size(a: pa.Array | torch.Tensor | np.ndarray) -> int:
         return a.nbytes
     elif isinstance(a, torch.Tensor):
         return a.element_size() * a.numel()
+    elif isinstance(a, pd.Series):
+        return a.memory_usage(index=True, deep=True)
+    elif isinstance(a, pd.DataFrame):
+        return a.memory_usage(index=True, deep=True).sum()
     else:
         raise TypeError(f"Invalid input type {type(a).__name__}.")
 
@@ -86,14 +93,19 @@ def format_memory_size(n_bytes: int) -> str:
 
 
 def get_memory_report(
-    results: dict[str, pa.Array | torch.Tensor | np.ndarray]
+    data: dict[str, pa.Array | torch.Tensor | np.ndarray | pd.Series | pd.DataFrame],
+    readable: bool = True,
 ) -> dict[str, str]:
-    """Get the size of the arrays in .
+    """Get the size of the arrays in data.
 
     Parameters
     ----------
-    results : dict[str, pa.Array or torch.Tensor]
+    data : dict[str, pa.Array or torch.Tensor or np.ndarray or pd.Series or pd.DataFrame]
         Dictionary of arrays.
+    readable : bool
+        Whether to format the sizes in human-readable format, by default True.
+        If True, the sizes are formatted in bytes, KB, MB, GB, TB, or PB and
+        returned as strings.
 
     Returns
     -------
@@ -101,14 +113,18 @@ def get_memory_report(
         Dictionary of array sizes in human-readable format.
     """
     report = {}
-    for name, arr in results.items():
-        if not isinstance(arr, (pa.Array, torch.Tensor, np.ndarray)):
+    for name, arr in data.items():
+        if not isinstance(
+            arr, (pa.Array, torch.Tensor, np.ndarray, pd.Series, pd.DataFrame)
+        ):
             warnings.warn(f"Encountered invalid input type {type(arr).__name__}.")
         else:
             n_bytes = get_memory_size(arr)
             report[name] = n_bytes
-    report["total"] = sum(report.values())
-    return {name: format_memory_size(size) for name, size in report.items()}
+    report["_total_"] = sum(report.values())
+    if readable:
+        report = {name: format_memory_size(size) for name, size in report.items()}
+    return report
 
 
 def normalize(

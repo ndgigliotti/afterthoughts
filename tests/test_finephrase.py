@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 import torch
+
 from finephrase import FinePhrase
 from finephrase.finephrase import (
     TokenizedDataset,

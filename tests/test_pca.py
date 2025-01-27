@@ -1,10 +1,34 @@
+import numpy as np
 import pytest
 import torch
-from finephrase.pca import (
-    IncrementalPCA,
-    _add_to_diagonal,
-    gen_batches,
-)
+
+from finephrase.pca import IncrementalPCA, _add_to_diagonal, gen_batches
+
+
+def test_equivalence_with_sklearn():
+    try:
+        from sklearn.decomposition import IncrementalPCA as skIncrementalPCA
+    except ImportError:
+        pytest.skip("scikit-learn is not installed")
+    rng = np.random.default_rng(42)
+    X = rng.standard_normal((1000, 100), dtype=np.float64)
+    chunks = np.array_split(X, 10)
+    ipca = IncrementalPCA(n_components=5, whiten=False, device="cpu")
+    sk_ipca = skIncrementalPCA(n_components=5, whiten=False)
+    for chunk in chunks:
+        ipca.partial_fit(torch.tensor(chunk))
+        sk_ipca.partial_fit(chunk)
+        X_pca = ipca.transform(torch.tensor(X)).numpy()
+    X_pca_sk = sk_ipca.transform(X)
+    assert np.allclose(X_pca, X_pca_sk)
+    assert np.allclose(ipca.components_.numpy(), sk_ipca.components_)
+    assert np.allclose(ipca.explained_variance_.numpy(), sk_ipca.explained_variance_)
+    assert np.allclose(
+        ipca.explained_variance_ratio_.numpy(), sk_ipca.explained_variance_ratio_
+    )
+    assert np.allclose(ipca.singular_values_.numpy(), sk_ipca.singular_values_)
+    assert np.allclose(ipca.mean_.numpy(), sk_ipca.mean_)
+    assert np.allclose(ipca.noise_variance_.numpy(), sk_ipca.noise_variance_)
 
 
 def test_incremental_pca_fit_transform():
