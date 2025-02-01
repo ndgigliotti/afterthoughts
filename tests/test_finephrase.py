@@ -1,10 +1,13 @@
 import numpy as np
+import polars as pl
+import pyarrow as pa
 import pytest
 import torch
 
 from finephrase import FinePhrase
 from finephrase.finephrase import (
     TokenizedDataset,
+    _build_results_dataframe,
     _move_or_convert_results,
     get_phrase_idx,
 )
@@ -283,14 +286,23 @@ def test_finephrase_to_device():
 def test_finephrase_encode():
     docs = ["This is a test document.", "Another test document."]
     finephrase = FinePhrase(model_name=MODEL_NAME, device="cpu", amp=False)
-    results = finephrase.encode(docs, phrase_sizes=3, max_length=10, batch_size=1)
+    df, X = finephrase.encode(docs, phrase_sizes=3, max_length=10, batch_size=1)
+    assert isinstance(df, pl.DataFrame)
+    assert isinstance(X, np.ndarray)
+    assert len(df) == len(X)
 
-    assert "sample_idx" in results
-    assert "phrases" in results
-    assert "phrase_embeds" in results
-    assert len(results["sample_idx"]) > 0
-    assert len(results["phrases"]) > 0
-    assert len(results["phrase_embeds"]) > 0
+
+def test_finephrase_encode_multiple_phrase_sizes():
+    docs = ["This is a test document.", "Another test document."]
+    finephrase = FinePhrase(model_name=MODEL_NAME, device="cpu", amp=False)
+    phrase_sizes = [3, 5]
+    df, X = finephrase.encode(
+        docs, phrase_sizes=phrase_sizes, max_length=10, batch_size=1
+    )
+    assert isinstance(df, pl.DataFrame)
+    assert isinstance(X, np.ndarray)
+    assert len(df) == len(X)
+    assert all(size in df["phrase_size"].unique() for size in phrase_sizes)
 
 
 def test_finephrase_encode_queries():
@@ -335,3 +347,71 @@ def test_finephrase_normalize_if_needed():
     non_normalized_embeds = finephrase.normalize_if_needed(embeds)
     norms = torch.norm(non_normalized_embeds, dim=1)
     assert not torch.allclose(norms, torch.ones_like(norms), atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "return_frame, convert_to_numpy",
+    [
+        ("polars", True),
+        ("arrow", True),
+        ("polars", False),
+        ("teddies", True),
+    ],
+)
+def test_build_results_dataframe(return_frame, convert_to_numpy):
+    # Determine the expected dataframe type based on the return_frame parameter
+    if return_frame == "polars":
+        expected_df_type = pl.DataFrame
+    elif return_frame == "arrow":
+        expected_df_type = pa.Table
+
+    # Determine the expected embeddings type based on the convert_to_numpy parameter
+    expected_embeds_type = torch.Tensor
+    if convert_to_numpy:
+        expected_embeds_type = np.ndarray
+
+    # Define the results dictionary with sample data
+    results = {
+        "sample_idx": torch.tensor([0, 1]),
+        "sequence_idx": torch.tensor([0, 1]),
+        "batch_idx": torch.tensor([0, 1]),
+        "phrase_size": torch.tensor([3, 3]),
+        "phrases": ["phrase1", "phrase2"],
+        "phrase_embeds": torch.randn(2, 10),
+    }
+
+    # Test for invalid return_frame value
+    if return_frame == "teddies":
+        with pytest.raises(ValueError, match="Invalid value for"):
+            _build_results_dataframe(results, return_frame, convert_to_numpy)
+    else:
+        # Build the results dataframe and check the types
+        expected_length = len(results["sample_idx"])
+        df, embeds = _build_results_dataframe(results, return_frame, convert_to_numpy)
+        assert isinstance(df, expected_df_type)
+        assert isinstance(embeds, expected_embeds_type)
+        assert len(df) == len(embeds) == expected_length
+
+
+def test_build_results_dataframe_pandas():
+    pd = pytest.importorskip("pandas")
+    return_frame = "pandas"
+    convert_to_numpy = True
+
+    expected_df_type = pd.DataFrame
+    expected_embeds_type = np.ndarray
+
+    results = {
+        "sample_idx": torch.tensor([0, 1]),
+        "sequence_idx": torch.tensor([0, 1]),
+        "batch_idx": torch.tensor([0, 1]),
+        "phrase_size": torch.tensor([3, 3]),
+        "phrases": ["phrase1", "phrase2"],
+        "phrase_embeds": torch.randn(2, 10),
+    }
+
+    expected_length = len(results["sample_idx"])
+    df, embeds = _build_results_dataframe(results, return_frame, convert_to_numpy)
+    assert isinstance(df, expected_df_type)
+    assert isinstance(embeds, expected_embeds_type)
+    assert len(df) == len(embeds) == expected_length

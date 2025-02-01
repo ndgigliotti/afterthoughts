@@ -4,10 +4,18 @@ from functools import singledispatch
 from typing import Callable
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import pyarrow as pa
 import torch
 import torch.nn.functional as F
+
+try:
+    import pandas as pd
+
+    _HAS_PANDAS = True
+except ImportError:
+    pd = None
+    _HAS_PANDAS = False
 
 
 def timer(readout: str = "Execution time: {time:.4f} seconds") -> Callable:
@@ -39,13 +47,13 @@ def timer(readout: str = "Execution time: {time:.4f} seconds") -> Callable:
 
 
 def get_memory_size(
-    a: pa.Array | torch.Tensor | np.ndarray | pd.Series | pd.DataFrame,
+    a: pa.Array | torch.Tensor | np.ndarray | pl.Series | pl.DataFrame,
 ) -> int:
     """Get the size of the array in bytes.
 
     Parameters
     ----------
-    a : pa.Array or torch.Tensor or np.ndarray or pd.Series or pd.DataFrame
+    a : pa.Array, torch.Tensor, np.ndarray, pl.Series, pl.DataFrame, pd.Series, pd.DataFrame
         Array.
 
     Returns
@@ -64,9 +72,11 @@ def get_memory_size(
         return a.nbytes
     elif isinstance(a, torch.Tensor):
         return a.element_size() * a.numel()
-    elif isinstance(a, pd.Series):
+    elif isinstance(a, (pl.Series, pl.DataFrame)):
+        return a.estimated_size()
+    elif _HAS_PANDAS and isinstance(a, pd.Series):
         return a.memory_usage(index=True, deep=True)
-    elif isinstance(a, pd.DataFrame):
+    elif _HAS_PANDAS and isinstance(a, pd.DataFrame):
         return a.memory_usage(index=True, deep=True).sum()
     else:
         raise TypeError(f"Invalid input type {type(a).__name__}.")
@@ -93,14 +103,14 @@ def format_memory_size(n_bytes: int) -> str:
 
 
 def get_memory_report(
-    data: dict[str, pa.Array | torch.Tensor | np.ndarray | pd.Series | pd.DataFrame],
+    data: dict[str, pa.Array | torch.Tensor | np.ndarray | pl.Series | pl.DataFrame],
     readable: bool = True,
 ) -> dict[str, str]:
     """Get the size of the arrays in data.
 
     Parameters
     ----------
-    data : dict[str, pa.Array or torch.Tensor or np.ndarray or pd.Series or pd.DataFrame]
+    data : dict[str, pa.Array or torch.Tensor or np.ndarray or pl.Series or pl.DataFrame or pd.Series or pd.DataFrame]
         Dictionary of arrays.
     readable : bool
         Whether to format the sizes in human-readable format, by default True.
@@ -109,14 +119,16 @@ def get_memory_report(
 
     Returns
     -------
+
     dict[str, str]
         Dictionary of array sizes in human-readable format.
     """
     report = {}
     for name, arr in data.items():
-        if not isinstance(
-            arr, (pa.Array, torch.Tensor, np.ndarray, pd.Series, pd.DataFrame)
-        ):
+        valid_types = (pa.Array, torch.Tensor, np.ndarray, pl.Series, pl.DataFrame)
+        if _HAS_PANDAS:
+            valid_types += (pd.Series, pd.DataFrame)
+        if not isinstance(arr, valid_types):
             warnings.warn(f"Encountered invalid input type {type(arr).__name__}.")
         else:
             n_bytes = get_memory_size(arr)

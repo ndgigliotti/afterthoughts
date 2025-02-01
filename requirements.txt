@@ -1,5 +1,6 @@
-numpy==2.2.1
+numpy==1.26.4
+polars==1.16.0
 pyarrow==18.1.0
 torch==2.2.2
 tqdm==4.67.1
-transformers==4.46.3
+transformers==4.48.1

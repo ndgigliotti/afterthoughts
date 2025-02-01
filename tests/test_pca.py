@@ -5,30 +5,103 @@ import torch
 from finephrase.pca import IncrementalPCA, _add_to_diagonal, gen_batches
 
 
-def test_equivalence_with_sklearn():
-    try:
-        from sklearn.decomposition import IncrementalPCA as skIncrementalPCA
-    except ImportError:
-        pytest.skip("scikit-learn is not installed")
+@pytest.mark.parametrize(
+    "n_components, whiten",
+    [
+        (2, False),
+        (2, True),
+        (8, False),
+        (8, True),
+        (16, False),
+        (16, True),
+    ],
+)
+def test_equivalence_with_sklearn(n_components, whiten):
+    skIncrementalPCA = pytest.importorskip("sklearn.decomposition").IncrementalPCA
+    # Generate random data and split into chunks
     rng = np.random.default_rng(42)
     X = rng.standard_normal((1000, 100), dtype=np.float64)
     chunks = np.array_split(X, 10)
-    ipca = IncrementalPCA(n_components=5, whiten=False, device="cpu")
-    sk_ipca = skIncrementalPCA(n_components=5, whiten=False)
+
+    # Initialize IncrementalPCA for both custom and sklearn implementations
+    ipca = IncrementalPCA(n_components=n_components, whiten=whiten, device="cpu")
+    sk_ipca = skIncrementalPCA(n_components=n_components, whiten=whiten)
+
+    # Perform partial fit on each chunk
     for chunk in chunks:
         ipca.partial_fit(torch.tensor(chunk))
         sk_ipca.partial_fit(chunk)
-        X_pca = ipca.transform(torch.tensor(X)).numpy()
+
+    # Transform the data using both implementations
+    X_pca = ipca.transform(torch.tensor(X))
     X_pca_sk = sk_ipca.transform(X)
-    assert np.allclose(X_pca, X_pca_sk)
-    assert np.allclose(ipca.components_.numpy(), sk_ipca.components_)
-    assert np.allclose(ipca.explained_variance_.numpy(), sk_ipca.explained_variance_)
-    assert np.allclose(
-        ipca.explained_variance_ratio_.numpy(), sk_ipca.explained_variance_ratio_
-    )
-    assert np.allclose(ipca.singular_values_.numpy(), sk_ipca.singular_values_)
-    assert np.allclose(ipca.mean_.numpy(), sk_ipca.mean_)
-    assert np.allclose(ipca.noise_variance_.numpy(), sk_ipca.noise_variance_)
+
+    # Compare transformed data
+    assert np.allclose(X_pca, X_pca_sk, atol=1e-6)
+
+    # Compare attributes
+    attributes = [
+        "components_",
+        "explained_variance_",
+        "explained_variance_ratio_",
+        "singular_values_",
+        "mean_",
+        "noise_variance_",
+    ]
+    for attr in attributes:
+        ipca_attr = getattr(ipca, attr).numpy()
+        sk_ipca_attr = getattr(sk_ipca, attr)
+        assert np.allclose(ipca_attr, sk_ipca_attr, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "n_components, whiten",
+    [
+        (2, False),
+        (2, True),
+        (8, False),
+        (8, True),
+        (16, False),
+        (16, True),
+    ],
+)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+def test_equivalence_with_sklearn_gpu(n_components, whiten):
+    skIncrementalPCA = pytest.importorskip("sklearn.decomposition").IncrementalPCA
+    # Generate random data and split into chunks
+    rng = np.random.default_rng(42)
+    X = rng.standard_normal((1000, 100), dtype=np.float64)
+    chunks = np.array_split(X, 10)
+
+    # Initialize IncrementalPCA for both custom and sklearn implementations
+    ipca = IncrementalPCA(n_components=n_components, whiten=whiten, device="cuda")
+    sk_ipca = skIncrementalPCA(n_components=n_components, whiten=whiten)
+
+    # Perform partial fit on each chunk
+    for chunk in chunks:
+        ipca.partial_fit(torch.tensor(chunk, device="cuda"))
+        sk_ipca.partial_fit(chunk)
+
+    # Transform the data using both implementations
+    X_pca = ipca.transform(torch.tensor(X, device="cuda"))
+    X_pca_sk = sk_ipca.transform(X)
+
+    # Compare transformed data
+    assert np.allclose(X_pca.cpu(), X_pca_sk, atol=1e-6)
+
+    # Compare attributes
+    attributes = [
+        "components_",
+        "explained_variance_",
+        "explained_variance_ratio_",
+        "singular_values_",
+        "mean_",
+        "noise_variance_",
+    ]
+    for attr in attributes:
+        ipca_attr = getattr(ipca, attr).cpu().numpy()
+        sk_ipca_attr = getattr(sk_ipca, attr)
+        assert np.allclose(ipca_attr, sk_ipca_attr, atol=1e-6)
 
 
 def test_incremental_pca_fit_transform():

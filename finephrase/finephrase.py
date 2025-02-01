@@ -18,15 +18,26 @@ import math
 import warnings
 
 import numpy as np
+import polars as pl
 import pyarrow as pa
 import torch
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 from transformers import AutoModel, AutoTokenizer
 
-from finephrase.data import DocPhrases
 from finephrase.pca import IncrementalPCA
-from finephrase.utils import normalize, reduce_precision, timer, truncate_dims
+from finephrase.utils import (
+    _HAS_PANDAS,
+    normalize,
+    reduce_precision,
+    timer,
+    truncate_dims,
+)
+
+if _HAS_PANDAS:
+    import pandas as pd
+else:
+    pd = None
 
 
 class TokenizedDataset(Dataset):
@@ -143,6 +154,7 @@ def get_phrase_idx(
     results = {
         "phrase_idx": [],
         "phrase_ids": [],
+        "phrase_size": [],
         "valid_phrase_mask": [],
         "sequence_idx": [],
     }
@@ -190,6 +202,7 @@ def get_phrase_idx(
         )
         results["phrase_idx"].append(phrase_idx)
         results["phrase_ids"].append(phrase_ids)
+        results["phrase_size"].append(torch.full((phrase_ids.shape[0],), size))
         results["valid_phrase_mask"].append(valid_phrase_mask)
         results["sequence_idx"].append(phrase_sequence_idx)
     return results
@@ -242,6 +255,67 @@ def _move_or_convert_results(
     elif not return_tensors == "pt":
         raise ValueError("`return_tensors` must be 'np' or 'pt'.")
     return results
+
+
+def _build_results_dataframe(
+    results: dict, return_frame: str = "polars", convert_to_numpy: bool = True
+) -> tuple[pl.DataFrame | pa.Table, np.ndarray | torch.Tensor]:
+    """
+    Consolidates the results by combining the phrase indices and phrases into a DataFrame
+    and returning it alongside the embeddings.
+
+    Parameters
+    ----------
+    results : dict
+        A dictionary containing the results with keys such as 'sample_idx',
+        'sequence_idx', 'batch_idx', 'phrase_size', 'phrases', and 'phrase_embeds'.
+    return_frame : str, optional
+        The type of DataFrame to return. Options are 'polars', 'pandas', or 'arrow'.
+        Defaults to 'polars'.
+    convert_to_numpy : bool, optional
+        Whether to convert the embeddings to NumPy arrays. Defaults to True.
+
+    Returns
+    -------
+    tuple
+        A tuple with two elements:
+        - A DataFrame containing the phrase indices and phrases.
+        - The phrase embeddings in the specified format.
+
+    Raises
+    ------
+    TypeError
+        If 'phrase_embeds' in results is not a torch.Tensor.
+    """
+    # Get indices and 1d-arrays
+    df = dict.fromkeys(
+        ["sample_idx", "sequence_idx", "batch_idx", "phrase_size", "phrases"]
+    )
+    for key in df.keys():
+        if key in results:
+            df[key] = results[key]
+    # Convert 1d arrays to NumPy and move to CPU
+    df = _move_or_convert_results(df, return_tensors="np", move_results_to_cpu=True)
+    # Convert embeddings if needed
+    embeds = results["phrase_embeds"]
+    if not isinstance(embeds, torch.Tensor):
+        raise TypeError("Phrase embeddings must be torch.Tensor.")
+    if convert_to_numpy:
+        embeds = embeds.cpu().numpy()
+    else:
+        embeds = embeds.cpu()
+    # Build DataFrame
+    if return_frame == "polars":
+        df = pl.DataFrame(df)
+    elif return_frame == "pandas":
+        if not _HAS_PANDAS:
+            raise ImportError("Pandas is not installed.")
+        df = pd.DataFrame(df)
+    elif return_frame == "arrow":
+        df = pa.Table.from_pydict(df)
+    else:
+        raise ValueError(f"Invalid value for return_frame: {return_frame}")
+    return df, embeds
 
 
 class FinePhrase:
@@ -493,7 +567,12 @@ class FinePhrase:
             torch.tensor(self.tokenizer.all_special_ids, device=input_ids.device),
             invert=True,
         ).to(torch.uint8)
-        results = {"sequence_idx": [], "phrase_ids": [], "phrase_embeds": []}
+        results = {
+            "sequence_idx": [],
+            "phrase_ids": [],
+            "phrase_size": [],
+            "phrase_embeds": [],
+        }
         for i, idx in enumerate(phrase_data["phrase_idx"]):
             attn_factor = attention_mask[:, idx].unsqueeze(3)
             phrase_embeds = torch.sum(token_embeds[:, idx] * attn_factor, dim=2) / (
@@ -502,12 +581,14 @@ class FinePhrase:
             phrase_embeds = phrase_embeds[phrase_data["valid_phrase_mask"][i]]
             results["sequence_idx"].append(phrase_data["sequence_idx"][i])
             results["phrase_ids"].append(phrase_data["phrase_ids"][i])
+            results["phrase_size"].append(phrase_data["phrase_size"][i])
             results["phrase_embeds"].append(phrase_embeds)
 
         # Combine results
         results["sequence_idx"] = torch.hstack(results["sequence_idx"])
+        results["phrase_size"] = torch.hstack(results["phrase_size"])
         results["phrase_embeds"] = torch.vstack(results["phrase_embeds"])
-        return dict(results)
+        return results
 
     @timer(readout="Finished tokenizing in {time:.4f} seconds.")
     def _tokenize(
@@ -716,6 +797,7 @@ class FinePhrase:
         phrase_min_token_ratio: float = 0.5,
         chunk_docs: bool = True,
         doc_overlap: float | int = 0.5,
+        return_frame: str = "polars",
         convert_to_numpy: bool = True,
     ) -> dict[str, np.ndarray | torch.Tensor]:
         """Obtain the phrases and phrase embeddings from a list of documents.
@@ -756,13 +838,16 @@ class FinePhrase:
             within `max_length` will not be chunked. If a float, it is interpreted as a
             fraction of the maximum sequence length. If an integer, it is interpreted
             as the number of tokens to overlap. Does nothing if `chunk_docs` is False.
+        return_frame : str, optional
+            The type of DataFrame of phrases and indices to return. Options are
+            'polars', 'pandas', or 'arrow'.
         convert_to_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
 
         Returns
         -------
-        dict[str, np.ndarray or torch.Tensor]
-            Dictionary containing the sample indices, phrases, and phrase embeddings.
+        tuple[pl.DataFrame | pd.DataFrame | pa.Table, np.ndarray | torch.Tensor]
+            Tuple containing the DataFrame of phrases and the phrase embeddings.
 
         Raises
         ------
@@ -804,6 +889,7 @@ class FinePhrase:
             "batch_idx": [],
             "sequence_idx": [],
             "phrase_ids": [],
+            "phrase_size": [],
             "phrase_embeds": [],
         }
         for batch in batches:
@@ -826,6 +912,7 @@ class FinePhrase:
             results["batch_idx"].append(batch["batch_idx"])
             results["sequence_idx"].append(batch["sequence_idx"])
             results["phrase_ids"].extend(batch["phrase_ids"])
+            results["phrase_size"].append(batch["phrase_size"])
             results["phrase_embeds"].append(batch["phrase_embeds"])
         # Process early batches with PCA if necessary
         if self.pca_mode and not pca_ready_at_start:
@@ -855,17 +942,11 @@ class FinePhrase:
             results["sample_idx"] = mapping[results["sequence_idx"]]
         else:
             results["sample_idx"] = results["sequence_idx"]
-        if convert_to_numpy:
-            _move_or_convert_results(results, return_tensors="np")
-        # results = DocPhrases(
-        #     doc_idx=results["sample_idx"],
-        #     phrases=results["phrases"],
-        #     embeds=results["phrase_embeds"],
-        #     seq_idx=results["sequence_idx"],
-        #     batch_idx=results["batch_idx"],
-        #     phrases_format="dataframe",
-        # )
-        return results
+        return _build_results_dataframe(
+            results,
+            convert_to_numpy=convert_to_numpy,
+            return_frame=return_frame,
+        )
 
     def encode_queries(
         self,
