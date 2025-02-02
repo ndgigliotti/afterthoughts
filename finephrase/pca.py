@@ -167,20 +167,20 @@ class IncrementalPCA:
 
     def __init__(
         self,
-        n_components=None,
+        n_components: int = None,
         *,
-        whiten=False,
-        copy=True,
-        batch_size=None,
-        device="cuda",
-    ):
+        whiten: bool = False,
+        copy: bool = True,
+        batch_size: int = None,
+        device: str = "cuda",
+    ) -> None:
         self.n_components = n_components
         self.whiten = whiten
         self.copy = copy
         self.batch_size = batch_size
         self.device = device
 
-    def to(self, device):
+    def to(self, device: str) -> "IncrementalPCA":
         self.device = device
         fitted_attrs = [
             "n_samples_seen_",
@@ -198,7 +198,7 @@ class IncrementalPCA:
         return self
 
     @torch.no_grad()
-    def get_covariance(self):
+    def get_covariance(self) -> torch.Tensor:
         """Compute data covariance with the generative model using PyTorch.
 
         ``cov = components_.T * S**2 * components_ + sigma2 * eye(n_features)``
@@ -225,7 +225,7 @@ class IncrementalPCA:
         return cov
 
     @torch.no_grad()
-    def get_precision(self):
+    def get_precision(self) -> torch.Tensor:
         """Compute data precision matrix with the generative model using PyTorch.
 
         Equals the inverse of the covariance but computed with
@@ -267,7 +267,7 @@ class IncrementalPCA:
         return precision
 
     @torch.no_grad()
-    def transform(self, X):
+    def transform(self, X: torch.Tensor) -> torch.Tensor:
         """Apply dimensionality reduction to X.
 
         X is projected on the first principal components previously extracted
@@ -304,7 +304,7 @@ class IncrementalPCA:
         return X_transformed
 
     @torch.no_grad()
-    def inverse_transform(self, X):
+    def inverse_transform(self, X: torch.Tensor) -> torch.Tensor:
         """Transform data back to its original space.
 
         In other words, return an input `X_original` whose transform would be X.
@@ -334,7 +334,7 @@ class IncrementalPCA:
         else:
             return X @ self.components_ + self.mean_
 
-    def fit_transform(self, X, y=None):
+    def fit_transform(self, X: torch.Tensor, y: None = None) -> torch.Tensor:
         """Fit the model with X and apply the dimensionality reduction on X.
 
         Parameters
@@ -355,12 +355,12 @@ class IncrementalPCA:
         return self.fit(X, y).transform(X)
 
     @property
-    def _n_features_out(self):
+    def _n_features_out(self) -> int:
         """Number of transformed output features."""
         return self.components_.shape[0]
 
     @torch.no_grad()
-    def fit(self, X, y=None):
+    def fit(self, X: torch.Tensor, y: None = None) -> "IncrementalPCA":
         """Fit the model with X, using minibatches of size batch_size.
 
         Parameters
@@ -402,7 +402,7 @@ class IncrementalPCA:
         return self
 
     @torch.no_grad()
-    def partial_fit(self, X, y=None):
+    def partial_fit(self, X: torch.Tensor, y: None = None) -> "IncrementalPCA":
         """Incremental fit with X. All of X is processed as a single batch.
 
         Parameters
@@ -510,7 +510,7 @@ class IncrementalPCA:
         return self
 
 
-def gen_batches(n, batch_size, *, min_batch_size=0):
+def gen_batches(n: int, batch_size: int, *, min_batch_size: int = 0) -> slice:  # type: ignore
     """Generator to create slices containing `batch_size` elements from 0 to `n`.
 
     Adapted from scikit-learn's `gen_batches` (BSD 3-Clause License).
@@ -560,7 +560,9 @@ def gen_batches(n, batch_size, *, min_batch_size=0):
 
 
 @torch.no_grad()
-def svd_flip(u, v, u_based_decision=True):
+def svd_flip(
+    u: torch.Tensor, v: torch.Tensor, u_based_decision: bool = True
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Sign correction to ensure deterministic output from SVD.
 
     Adapted from scikit-learn's `svd_flip` (BSD 3-Clause License).
@@ -616,7 +618,7 @@ def svd_flip(u, v, u_based_decision=True):
 
 
 @torch.no_grad()
-def _add_to_diagonal(array, value):
+def _add_to_diagonal(array: torch.Tensor, value: float) -> torch.Tensor:
     """Add a value to the diagonal elements of a 2D tensor in PyTorch.
 
     Adapted from scikit-learn's `_add_to_diagonal` (BSD 3-Clause License).
@@ -640,8 +642,12 @@ def _add_to_diagonal(array, value):
 
 @torch.no_grad()
 def _incremental_mean_and_var(
-    X, last_mean, last_variance, last_sample_count, sample_weight=None
-):
+    X: torch.Tensor,
+    last_mean: torch.Tensor,
+    last_variance: torch.Tensor,
+    last_sample_count: torch.Tensor,
+    sample_weight: torch.Tensor = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Calculate mean update and a Youngs and Cramer variance update using PyTorch.
 
     Adapted from scikit-learn's `_incremental_mean_and_var` (BSD 3-Clause License).
@@ -754,111 +760,3 @@ def _incremental_mean_and_var(
         updated_variance = updated_unnormalized_variance / updated_sample_count
 
     return updated_mean, updated_variance, updated_sample_count
-
-
-class PCA:
-    def __init__(self, n_components=None, *, whiten=False, copy=True, device="cuda"):
-        self.n_components = n_components
-        self.whiten = whiten
-        self.copy = copy
-        self.device = device
-        return self
-
-    @torch.no_grad()
-    def fit(self, X):
-        """Fit the model with X using torch.pca_lowrank.
-
-        Parameters
-        ----------
-        X : Tensor of shape (n_samples, n_features)
-            Training data, where `n_samples` is the number of samples and
-            `n_features` is the number of features.
-
-        Returns
-        -------
-        self : object
-            Returns the instance itself.
-        """
-        X = X.to(self.device)
-        n_samples, n_features = X.shape
-
-        if self.n_components is None:
-            self.n_components_ = min(n_samples, n_features)
-        else:
-            self.n_components_ = self.n_components
-
-        U, S, V = torch.pca_lowrank(X - X.mean(dim=0), q=self.n_components_)
-        U, V = svd_flip(U, V.T, u_based_decision=False)
-
-        self.components_ = V[: self.n_components_]
-        self.singular_values_ = S[: self.n_components_]
-        self.explained_variance_ = (S**2 / (n_samples - 1))[: self.n_components_]
-        self.explained_variance_ratio_ = (
-            self.explained_variance_ / self.explained_variance_.sum()
-        )
-        self.mean_ = X.mean(dim=0)
-        self.var_ = X.var(dim=0, unbiased=False)
-        self.noise_variance_ = 0.0
-
-        return self
-
-    @torch.no_grad()
-    def transform(self, X):
-        """Apply dimensionality reduction to X.
-
-        Parameters
-        ----------
-        X : Tensor of shape (n_samples, n_features)
-            New data, where `n_samples` is the number of samples
-            and `n_features` is the number of features.
-
-        Returns
-        -------
-        X_new : Tensor of shape (n_samples, n_components)
-            Projection of X in the first principal components.
-        """
-        X = X.to(self.device)
-        X_transformed = (X - self.mean_) @ self.components_.T
-        if self.whiten:
-            X_transformed /= torch.sqrt(self.explained_variance_)
-        return X_transformed
-
-    @torch.no_grad()
-    def inverse_transform(self, X):
-        """Transform data back to its original space.
-
-        Parameters
-        ----------
-        X : Tensor of shape (n_samples, n_components)
-            New data, where `n_samples` is the number of samples
-            and `n_components` is the number of components.
-
-        Returns
-        -------
-        X_original : Tensor of shape (n_samples, n_features)
-            Original data.
-        """
-        X = X.to(self.device)
-        if self.whiten:
-            return (
-                X @ (self.components_ * torch.sqrt(self.explained_variance_))
-                + self.mean_
-            )
-        else:
-            return X @ self.components_ + self.mean_
-
-    @torch.no_grad()
-    def fit_transform(self, X):
-        """Fit the model with X and apply the dimensionality reduction on X.
-
-        Parameters
-        ----------
-        X : Tensor of shape (n_samples, n_features)
-            Training data.
-
-        Returns
-        -------
-        X_new : Tensor of shape (n_samples, n_components)
-            Projection of X in the first principal components.
-        """
-        return self.fit(X).transform(X)
