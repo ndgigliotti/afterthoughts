@@ -14,6 +14,7 @@ from finephrase.utils import (
     get_torch_dtype,
     normalize,
     reduce_precision,
+    search_phrases,
     timer,
     truncate_dims,
 )
@@ -176,3 +177,34 @@ def test_truncate_dims_torch_3_axes():
     torch_tensor = torch.rand(2, 3, 4)
     torch_truncated = truncate_dims(torch_tensor, 2)
     assert torch_truncated.shape == (2, 3, 2)
+
+
+def test_search_phrases():
+    faiss = pytest.importorskip("faiss", reason="FAISS is not installed")
+    queries = ["query1", "query2"]
+    query_embeds = np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
+    phrase_df = pl.DataFrame(
+        {"embed_idx": [0, 1, 2], "phrase": ["phrase1", "phrase2", "phrase3"]}
+    )
+    phrase_embeds = np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6], [0.7, 0.8, 0.9]])
+
+    index, hits = search_phrases(
+        queries, query_embeds, phrase_df, phrase_embeds, sim_thresh=0.5
+    )
+
+    assert isinstance(index, faiss.Index)
+    assert "query1" in hits
+    assert "query2" in hits
+    assert isinstance(hits["query1"], pl.DataFrame)
+    assert isinstance(hits["query2"], pl.DataFrame)
+
+    # Check if the hits contain the expected columns
+    if not hits["query1"].is_empty():
+        assert "embed_idx" in hits["query1"].columns
+        assert "phrase" in hits["query1"].columns
+        assert "query_sim" in hits["query1"].columns
+
+    if not hits["query2"].is_empty():
+        assert "embed_idx" in hits["query2"].columns
+        assert "phrase" in hits["query2"].columns
+        assert "query_sim" in hits["query2"].columns

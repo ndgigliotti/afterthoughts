@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""FinePhrase is a library for extracting n-grams from text using transformer models."""
+"""FinePhrase is a library for extracting phrase embeddings using transformer models."""
 
 import math
 import warnings
@@ -25,11 +25,12 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 from transformers import AutoModel, AutoTokenizer
 
+from finephrase.available import _HAS_PANDAS, _HAS_SKLEARN
 from finephrase.pca import IncrementalPCA
 from finephrase.utils import (
-    _HAS_PANDAS,
     normalize,
     reduce_precision,
+    search_phrases,
     timer,
     truncate_dims,
 )
@@ -288,10 +289,16 @@ def _build_results_dataframe(
         If 'phrase_embeds' in results is not a torch.Tensor.
     """
     # Get indices and 1d-arrays
-    df = dict.fromkeys(
-        ["sample_idx", "sequence_idx", "batch_idx", "phrase_size", "phrases"]
-    )
-    for key in df.keys():
+    df = {}
+    keys = [
+        "embed_idx",
+        "sample_idx",
+        "sequence_idx",
+        "batch_idx",
+        "phrase_size",
+        "phrase",
+    ]
+    for key in keys:
         if key in results:
             df[key] = results[key]
     # Convert 1d arrays to NumPy and move to CPU
@@ -322,7 +329,8 @@ class FinePhrase:
     def __init__(
         self,
         model_name: str,
-        amp: bool = True,
+        model_dtype: torch.dtype = torch.float32,
+        amp: bool = False,
         amp_dtype: torch.dtype = torch.float16,
         reduce_precision: bool = False,
         truncate_dims: int | None = None,
@@ -337,13 +345,16 @@ class FinePhrase:
         ----------
         model_name : str
             Name of the pretrained model to use.
+        model_dtype : torch.dtype, optional
+            Data type for the model, by default torch.float32.
         amp : bool, optional
             Enable automatic mixed precision, by default False.
         amp_dtype : torch.dtype, optional
             Data type for automatic mixed precision, by default torch.float16.
         reduce_precision : bool, optional
-            Reduce the embedding precision to float16 if they are float32 or float64,
-            by default False.
+            Reduce the final embedding precision to float16 if they are float32 or float64,
+            by default False. Note that the primary benefit of this is memory savings,
+            not speed (on CPU).
         truncate_dims : int, None, optional
             Truncate the dimensions of the embeddings to the specified value, by default None.
             If None, the embeddings are not truncated.
@@ -365,11 +376,13 @@ class FinePhrase:
         device : torch.device, str, int, optional
             Device to use for inference, by default "cuda".
         """
+        self.model_name = model_name
+        self.model_dtype = model_dtype
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name,
             clean_up_tokenization_spaces=True,
         )
-        self.model = AutoModel.from_pretrained(model_name)
+        self.model = AutoModel.from_pretrained(model_name, torch_dtype=model_dtype)
         self.amp = amp
         self.amp_dtype = amp_dtype
         self.reduce_precision = reduce_precision
@@ -401,6 +414,18 @@ class FinePhrase:
             Returns the model instance.
         """
         self.model.to(device)
+        return self
+
+    def half(self) -> "FinePhrase":
+        """Convert the model to half precision.
+
+        Returns
+        -------
+        FinePhrase
+            Returns the model instance.
+        """
+        self.model.half()
+        self.model_dtype = self.model.dtype
         return self
 
     def reduce_precision_if_needed(
@@ -625,6 +650,7 @@ class FinePhrase:
         ValueError
             If `max_length` is not specified and `tokenizer.model_max_length` is None.
         """
+        print("Tokenizing documents...")
         if max_length is None:
             if self.tokenizer.model_max_length is None:
                 raise ValueError(
@@ -928,7 +954,7 @@ class FinePhrase:
             else:
                 warnings.warn("PCA did not finish fitting and will not be applied.")
         # Combine results
-        results["phrases"] = self._decode_phrases(results.pop("phrase_ids"))
+        results["phrase"] = self._decode_phrases(results.pop("phrase_ids"))
         for key, value in results.items():
             if isinstance(value[0], torch.Tensor):
                 if value[0].ndim == 1:
@@ -942,6 +968,7 @@ class FinePhrase:
             results["sample_idx"] = mapping[results["sequence_idx"]]
         else:
             results["sample_idx"] = results["sequence_idx"]
+        results["embed_idx"] = torch.arange(results["phrase_embeds"].shape[0])
         return _build_results_dataframe(
             results,
             convert_to_numpy=convert_to_numpy,
@@ -966,7 +993,8 @@ class FinePhrase:
         queries : list[str]
             List of queries to encode.
         max_length : int, optional
-            Maximum length of the input sequences, by default None.
+            Maximum length of the query sequences, by default None.
+            If None, the tokenizer's maximum length will be used.
         batch_size : int, optional
             Batch size for encoding, by default 32.
         convert_to_numpy : bool, optional
@@ -1009,3 +1037,75 @@ class FinePhrase:
         if convert_to_numpy:
             query_embeds = query_embeds.numpy()
         return query_embeds
+
+    def search(
+        self,
+        queries: list,
+        phrase_df: pl.DataFrame,
+        phrase_embeds: np.ndarray,
+        sim_thresh: float = 0.5,
+        query_max_length: int | None = None,
+        query_batch_size: int = 32,
+    ) -> dict[str, pl.DataFrame]:
+        """
+        Search for documents that match the given queries based on their vector representations.
+
+        Parameters
+        ----------
+        queries : list of str
+            List of query strings. If `query_embeds` is None, the queries
+            will be encoded on the fly.
+        phrase_embeds : np.ndarray or NearestNeighbors
+            Matrix of vector representations for the phrases. Alternatively, this can be a
+            precomputed search index (of type `sklearn.neighbors.NearestNeighbors`).
+        phrase_df : pl.DataFrame
+            DataFrame containing phrase information. It should have a column
+            "embed_idx" for indexing.
+        query_embeds : np.ndarray, optional
+            Precomputed query embeddings. If None, the queries will be encoded on the fly.
+        sim_thresh : float, optional
+            Cosine similarity threshold for the nearest neighbors search. Default is 0.5.
+            Will return all results with similarity equal to or above this threshold.
+        metric : str, optional
+            Distance metric for the nearest neighbors search. Default is "cosine".
+        query_max_length : int, optional
+            Maximum length of the query sequences. If None, the tokenizer's
+            maximum length will be used. Default is None.
+        query_batch_size : int, optional
+            Batch size for encoding queries. Default is 32.
+
+        Returns
+        -------
+        query_embeds : np.ndarray
+            Embeddings for the queries.
+        search_index : NearestNeighbors
+            The search index used for finding nearest neighbors.
+        hits: dict
+            A dictionary where keys are query strings and values are DataFrames
+            containing the matching phrases.
+
+        Raises
+        ------
+        ImportError
+            If Scikit-Learn is not installed.
+
+        See Also
+        --------
+        finephrase.utils.build_faiss_index
+            Build a FAISS index using cosine similarity.
+        finephrase.utils.search_phrases
+            Function for searching phrases using FAISS.
+        """
+        if not _HAS_SKLEARN:
+            raise ImportError("Scikit-Learn is not installed.")
+        query_embeds = self.encode_queries(
+            queries, max_length=query_max_length, batch_size=query_batch_size
+        )
+        _, hits = search_phrases(
+            queries,
+            query_embeds,
+            phrase_df=phrase_df,
+            phrase_embeds=phrase_embeds,
+            sim_thresh=sim_thresh,
+        )
+        return hits

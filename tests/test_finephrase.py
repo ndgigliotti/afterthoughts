@@ -372,11 +372,12 @@ def test_build_results_dataframe(return_frame, convert_to_numpy):
 
     # Define the results dictionary with sample data
     results = {
+        "embed_idx": torch.tensor([0, 1]),
         "sample_idx": torch.tensor([0, 1]),
         "sequence_idx": torch.tensor([0, 1]),
         "batch_idx": torch.tensor([0, 1]),
         "phrase_size": torch.tensor([3, 3]),
-        "phrases": ["phrase1", "phrase2"],
+        "phrase": ["phrase1", "phrase2"],
         "phrase_embeds": torch.randn(2, 10),
     }
 
@@ -402,11 +403,12 @@ def test_build_results_dataframe_pandas():
     expected_embeds_type = np.ndarray
 
     results = {
+        "embed_idx": torch.tensor([0, 1]),
         "sample_idx": torch.tensor([0, 1]),
         "sequence_idx": torch.tensor([0, 1]),
         "batch_idx": torch.tensor([0, 1]),
         "phrase_size": torch.tensor([3, 3]),
-        "phrases": ["phrase1", "phrase2"],
+        "phrase": ["phrase1", "phrase2"],
         "phrase_embeds": torch.randn(2, 10),
     }
 
