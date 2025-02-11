@@ -1,3 +1,7 @@
+<p align="center" style="width: 20%; margin: auto;">
+    <img src="images/writing_pen.webp" alt="FinePhrase Logo" style="max-width: 100%;" />
+</p>
+
 # FinePhrase
 
 Generate fine-grained phrase embeddings with state-of-the-art transformers.
