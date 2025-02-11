@@ -1,6 +1,4 @@
-<p align="center" style="width: 100%; margin: auto;">
-    <img src="images/writing_pen.webp" alt="FinePhrase Logo" style="max-width: 20%;" />
-</p>
+<div align="center"><img src="./images/writing_pen.webp" height=150></div>
 
 # FinePhrase
 
