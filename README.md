@@ -1,5 +1,5 @@
 <p align="center" style="width: 100%; margin: auto;">
-    <img src="images/writing_pen_150.png" alt="FinePhrase Logo" style="max-width: 100%;" />
+    <img src="images/writing_pen.webp" alt="FinePhrase Logo" style="max-width: 20%;" />
 </p>
 
 # FinePhrase
