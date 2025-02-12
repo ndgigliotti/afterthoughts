@@ -1,3 +1,4 @@
+import os
 import time
 import warnings
 from functools import singledispatch
@@ -9,7 +10,7 @@ import pyarrow as pa
 import torch
 import torch.nn.functional as F
 
-from finephrase.available import _HAS_FAISS, _HAS_PANDAS, _HAS_SKLEARN
+from finephrase.available import _HAS_FAISS, _HAS_PANDAS
 
 if _HAS_PANDAS:
     import pandas as pd
@@ -17,71 +18,37 @@ else:
     pd = None
 
 
-# def search_phrases(
-#     queries: list,
-#     query_embeds: np.ndarray,
-#     phrase_df: pl.DataFrame,
-#     phrase_embeds: np.ndarray,
-#     radius: float = 0.5,
-#     metric: str = "cosine",
-# ) -> dict[str, pl.DataFrame]:
-#     """
-#     Search for documents that match the given queries based on their vector representations.
+def norm_jobs(num_jobs: int | None) -> int:
+    """Return the normalized number of jobs.
 
-#     Parameters
-#     ----------
-#     queries : list of str
-#         List of query strings.
-#     query_embeds : np.ndarray
-#         Matrix of vector representations for the queries.
-#     phrase_df : pl.DataFrame
-#         DataFrame containing phrase information. It should have a column "embed_idx"
-#         for indexing.
-#     phrase_embeds : np.ndarray
-#         Matrix of vector representations for the phrases. Alternatively, this can be a
-#         precomputed search index (of type `sklearn.neighbors.NearestNeighbors`).
-#     radius : float, optional
-#         Radius for the nearest neighbors search. Default is 0.5.
-#     metric : str, optional
-#         Distance metric for the nearest neighbors search. Default is "cosine".
-#     query_kws : dict, optional
-#         Keyword arguments for encoding the queries using `encode_queries`.
+    Parameters
+    ----------
+    num_jobs : int or None
+        Number of jobs. If None, 1 is returned. If 0, 1 is returned. If negative,
+        the number of jobs is set to `os.cpu_count() + 1 + num_jobs`. If greater than
+        the number of CPU cores, a warning is issued and the number of jobs is clipped to
+        the number of CPU cores.
 
-#     Returns
-#     -------
-#     search_index : NearestNeighbors
-#         The search index used for finding nearest neighbors.
-#     hits: dict
-#         A dictionary where keys are query strings and values are DataFrames
-#         containing the matching phrases.
-
-#     Raises
-#     ------
-#     ImportError
-#         If Scikit-Learn is not installed.
-
-#     See Also
-#     --------
-#     finephrase.finephrase.FinePhrase.search_phrases
-#         Method for searching phrases which can embed query strings on the fly.
-#     """
-#     if _HAS_SKLEARN:
-#         from sklearn.neighbors import NearestNeighbors
-#     if isinstance(phrase_embeds, NearestNeighbors):
-#         search_index = phrase_embeds
-#     else:
-#         search_index = NearestNeighbors(radius=radius, metric=metric).fit(phrase_embeds)
-#     dists, doc_idx = search_index.radius_neighbors(query_embeds, return_distance=True)
-#     hits = dict.fromkeys(queries, pl.DataFrame())
-#     for dist, idx, query in zip(dists, doc_idx, queries):
-#         if len(idx):
-#             df_hits = phrase_df.filter(pl.col("embed_idx").is_in(idx))
-#             # Add query distance column and sort
-#             df_hits = df_hits.with_columns(pl.Series("query_dist", dist)).sort(
-#                 "query_dist", descending=False
-#             )
-#             hits[query] = df_hits
-#     return search_index, hits
+    Returns
+    -------
+    int
+        Absolute number of jobs.
+    """
+    true_num_jobs = num_jobs
+    cpu_count = os.cpu_count()
+    if num_jobs is None:
+        true_num_jobs = 1
+    elif num_jobs == 0:
+        warnings.warn("`num_jobs` cannot be 0. Setting `num_jobs` to 1.")
+        true_num_jobs = 1
+    elif num_jobs < 0:
+        true_num_jobs = cpu_count + 1 + num_jobs
+    if true_num_jobs > cpu_count:
+        warnings.warn(
+            f"`num_jobs` ({num_jobs}) exceeds the number of CPU cores ({cpu_count})."
+        )
+        true_num_jobs = min(num_jobs, cpu_count)
+    return true_num_jobs
 
 
 def timer(readout: str = "Execution time: {time:.4f} seconds") -> Callable:

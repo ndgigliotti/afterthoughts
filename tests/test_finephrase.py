@@ -6,7 +6,6 @@ import torch
 
 from finephrase import FinePhrase
 from finephrase.finephrase import (
-    TokenizedDataset,
     _build_results_dataframe,
     _move_or_convert_results,
     get_phrase_idx,
@@ -25,6 +24,8 @@ def test_finephrase_init():
     pca = 50
     pca_fit_batch_count = 1.0
     device = "cuda"
+    num_token_jobs = 8
+    num_loader_jobs = 4
 
     finephrase = FinePhrase(
         model_name=model_name,
@@ -36,6 +37,8 @@ def test_finephrase_init():
         pca=pca,
         pca_fit_batch_count=pca_fit_batch_count,
         device=device,
+        num_token_jobs=num_token_jobs,
+        num_loader_jobs=num_loader_jobs,
     )
 
     assert finephrase.tokenizer is not None
@@ -48,6 +51,8 @@ def test_finephrase_init():
     assert finephrase.pca == pca
     assert finephrase.pca_fit_batch_count == pca_fit_batch_count
     assert finephrase.device.type == device
+    assert finephrase.num_token_jobs == num_token_jobs
+    assert finephrase.num_loader_jobs == num_loader_jobs
 
     # Test invalid truncate_dims and pca combination
     with pytest.raises(ValueError):
@@ -56,59 +61,6 @@ def test_finephrase_init():
             truncate_dims=10,
             pca=50,
         )
-
-
-def test_tokenized_dataset_init():
-    inputs = {
-        "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
-        "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1]]),
-    }
-    dataset = TokenizedDataset(inputs)
-    assert len(dataset) == 2
-    assert torch.equal(dataset.inputs["input_ids"], inputs["input_ids"])
-    assert torch.equal(dataset.inputs["attention_mask"], inputs["attention_mask"])
-
-
-def test_tokenized_dataset_shuffle():
-    inputs = {
-        "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
-        "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1]]),
-    }
-    dataset = TokenizedDataset(inputs, shuffle=True)
-
-
-def test_tokenized_dataset_indexing():
-    inputs = {
-        "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
-        "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1]]),
-    }
-    dataset = TokenizedDataset(inputs)
-    idx, data = dataset[0]
-    assert idx == 0
-    assert torch.equal(data["input_ids"], inputs["input_ids"][0])
-    assert torch.equal(data["attention_mask"], inputs["attention_mask"][0])
-
-    idx, data = dataset[1]
-    assert idx == 1
-    assert torch.equal(data["input_ids"], inputs["input_ids"][1])
-    assert torch.equal(data["attention_mask"], inputs["attention_mask"][1])
-
-
-def test_tokenized_dataset_shuffle_indexing():
-    inputs = {
-        "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
-        "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1]]),
-    }
-    dataset = TokenizedDataset(inputs, shuffle=True, random_state=42)
-    idx, data = dataset[0]
-    assert idx in [0, 1]
-    assert torch.equal(data["input_ids"], inputs["input_ids"][idx])
-    assert torch.equal(data["attention_mask"], inputs["attention_mask"][idx])
-
-    idx, data = dataset[1]
-    assert idx in [0, 1]
-    assert torch.equal(data["input_ids"], inputs["input_ids"][idx])
-    assert torch.equal(data["attention_mask"], inputs["attention_mask"][idx])
 
 
 def test_get_phrase_idx_single_size():
@@ -250,43 +202,54 @@ def test_move_or_convert_results_invalid_return_tensors():
         _move_or_convert_results(results, return_tensors="invalid")
 
 
+@pytest.fixture
+def model():
+    return FinePhrase(
+        model_name=MODEL_NAME,
+        device="cpu",
+        amp=False,
+        num_token_jobs=1,
+        num_loader_jobs=1,
+    )
+
+
 def test_finephrase_to_cpu():
     model_name = MODEL_NAME
     device = "cuda"
-    finephrase = FinePhrase(model_name=model_name, device=device, amp=False)
+    finephrase = FinePhrase(
+        model_name=model_name,
+        device=device,
+    )
     assert finephrase.device.type == "cuda"
 
     finephrase.to("cpu")
     assert finephrase.device.type == "cpu"
 
 
-def test_finephrase_to_cuda():
-    model_name = MODEL_NAME
-    device = "cpu"
-    finephrase = FinePhrase(model_name=model_name, device=device, amp=False)
-    assert finephrase.device.type == "cpu"
+def test_finephrase_to_cuda(model):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    assert model.device.type == "cpu"
 
-    finephrase.to("cuda")
-    assert finephrase.device.type == "cuda"
-
-
-def test_finephrase_to_device():
-    model_name = MODEL_NAME
-    device = "cpu"
-    finephrase = FinePhrase(model_name=model_name, device=device, amp=False)
-    assert finephrase.device.type == "cpu"
-
-    finephrase.to(torch.device("cuda"))
-    assert finephrase.device.type == "cuda"
-
-    finephrase.to(torch.device("cpu"))
-    assert finephrase.device.type == "cpu"
+    model.to("cuda")
+    assert model.device.type == "cuda"
 
 
-def test_finephrase_encode():
+def test_finephrase_to_device(model):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    assert model.device.type == "cpu"
+
+    model.to(torch.device("cuda"))
+    assert model.device.type == "cuda"
+
+    model.to(torch.device("cpu"))
+    assert model.device.type == "cpu"
+
+
+def test_finephrase_encode(model):
     docs = ["This is a test document.", "Another test document."]
-    finephrase = FinePhrase(model_name=MODEL_NAME, device="cpu", amp=False)
-    df, X = finephrase.encode(docs, phrase_sizes=3, max_length=10, batch_size=1)
+    df, X = model.encode(docs, phrase_sizes=3, max_length=10, batch_size=1)
     assert isinstance(df, pl.DataFrame)
     assert isinstance(X, np.ndarray)
     assert len(df) == len(X)
@@ -294,7 +257,13 @@ def test_finephrase_encode():
 
 def test_finephrase_encode_multiple_phrase_sizes():
     docs = ["This is a test document.", "Another test document."]
-    finephrase = FinePhrase(model_name=MODEL_NAME, device="cpu", amp=False)
+    finephrase = FinePhrase(
+        model_name=MODEL_NAME,
+        device="cpu",
+        amp=False,
+        num_token_jobs=1,
+        num_loader_jobs=1,
+    )
     phrase_sizes = [3, 5]
     df, X = finephrase.encode(
         docs, phrase_sizes=phrase_sizes, max_length=10, batch_size=1
@@ -305,23 +274,22 @@ def test_finephrase_encode_multiple_phrase_sizes():
     assert all(size in df["phrase_size"].unique() for size in phrase_sizes)
 
 
-def test_finephrase_encode_queries():
+def test_finephrase_encode_queries(model):
     queries = ["What is the capital of France?", "How to bake a cake?"]
-    finephrase = FinePhrase(model_name=MODEL_NAME, device="cpu", amp=False)
-    query_embeds = finephrase.encode_queries(queries, max_length=10, batch_size=1)
+    query_embeds = model.encode_queries(queries, max_length=10, batch_size=1)
 
     assert query_embeds is not None
     assert len(query_embeds) == len(queries)
 
 
 def test_finephrase_reduce_precision_if_needed():
-    finephrase = FinePhrase(model_name=MODEL_NAME, device="cpu", reduce_precision=True)
+    model = FinePhrase(model_name=MODEL_NAME, device="cpu", reduce_precision=True)
     embeds = torch.randn(10, 10, dtype=torch.float32)
-    reduced_embeds = finephrase.reduce_precision_if_needed(embeds)
+    reduced_embeds = model.reduce_precision_if_needed(embeds)
     assert reduced_embeds.dtype == torch.float16
 
-    finephrase.reduce_precision = False
-    non_reduced_embeds = finephrase.reduce_precision_if_needed(embeds)
+    model.reduce_precision = False
+    non_reduced_embeds = model.reduce_precision_if_needed(embeds)
     assert non_reduced_embeds.dtype == torch.float32
 
 
@@ -408,7 +376,7 @@ def test_build_results_dataframe_pandas():
         "sequence_idx": torch.tensor([0, 1]),
         "batch_idx": torch.tensor([0, 1]),
         "phrase_size": torch.tensor([3, 3]),
-        "phrase": ["phrase1", "phrase2"],
+        "phrases": ["phrase1", "phrase2"],
         "phrase_embeds": torch.randn(2, 10),
     }
 

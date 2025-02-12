@@ -15,92 +15,30 @@
 """FinePhrase is a library for extracting phrase embeddings using transformer models."""
 
 import math
+import os
 import warnings
+from functools import partial
 
 import numpy as np
 import polars as pl
 import pyarrow as pa
 import torch
-from torch.utils.data import DataLoader, Dataset
+from datasets import Dataset
+from joblib import Parallel, delayed
+from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import AutoModel, AutoTokenizer
 
-from finephrase.available import _HAS_PANDAS, _HAS_SKLEARN
+from finephrase.available import _HAS_FAISS, _HAS_PANDAS
 from finephrase.pca import IncrementalPCA
 from finephrase.utils import (
+    norm_jobs,
     normalize,
     reduce_precision,
     search_phrases,
     timer,
     truncate_dims,
 )
-
-if _HAS_PANDAS:
-    import pandas as pd
-else:
-    pd = None
-
-
-class TokenizedDataset(Dataset):
-    """Dataset class for tokenized input sequences."""
-
-    exclude = frozenset(["overflow_to_sample_mapping"])
-
-    def __init__(
-        self, inputs: dict, shuffle: bool = False, random_state: int | None = None
-    ) -> None:
-        """Initialize a TokenizedDataset instance.
-
-        Parameters
-        ----------
-        inputs : dict
-            Tokenized input sequences.
-        shuffle : bool, optional
-            Shuffle the input sequences, by default False.
-        random_state : int, None, optional
-            Random seed for shuffling, by default None.
-        """
-        self.inputs = inputs
-        if not isinstance(self.inputs["input_ids"], torch.Tensor):
-            raise TypeError("`input_ids` must be a torch.Tensor.")
-        self.shuffle = shuffle
-        self.random_state = random_state
-        rng = np.random.default_rng(self.random_state)
-        self.order_idx = np.arange(len(self.inputs["input_ids"]))
-        if self.shuffle:
-            rng.shuffle(self.order_idx)
-
-    def __len__(self) -> int:
-        """Returns the number of sequences in the dataset."""
-        return len(self.inputs["input_ids"])
-
-    def __getitem__(self, idx: int) -> dict:
-        """Returns the input sequence at the specified index.
-
-        Parameters
-        ----------
-        idx : int
-            Index of the input sequence to return.
-
-        Returns
-        -------
-        tuple[int, dict]
-            Tuple containing the index and input sequence.
-            If shuffling is enabled, the index is the true index
-            in the dataset.
-
-        Raises
-        ------
-        IndexError
-            If the index is out of bounds.
-        """
-        true_idx = self.order_idx[idx]
-        data = {
-            k: v[true_idx].squeeze(0)
-            for k, v in self.inputs.items()
-            if k not in self.exclude
-        }
-        return true_idx, data
 
 
 def get_phrase_idx(
@@ -315,9 +253,12 @@ def _build_results_dataframe(
     if return_frame == "polars":
         df = pl.DataFrame(df)
     elif return_frame == "pandas":
-        if not _HAS_PANDAS:
+        if _HAS_PANDAS:
+            import pandas as pd
+
+            df = pd.DataFrame(df)
+        else:
             raise ImportError("Pandas is not installed.")
-        df = pd.DataFrame(df)
     elif return_frame == "arrow":
         df = pa.Table.from_pydict(df)
     else:
@@ -338,6 +279,8 @@ class FinePhrase:
         pca: int | None = None,
         pca_fit_batch_count: int | float = 1.0,
         device: torch.device | str | int = "cuda",
+        num_token_jobs: int | None = -1,
+        num_loader_jobs: int | None = 4,
     ) -> None:
         """Initialize a FinePhrase model.
 
@@ -375,6 +318,13 @@ class FinePhrase:
             transformation is fit, it is applied to all embeddings.
         device : torch.device, str, int, optional
             Device to use for inference, by default "cuda".
+        num_token_jobs : int, None, optional
+            Number of jobs to use for multiprocessing on tokenization and
+            detokenization, by default -1. If None, the number of jobs is
+            set to the number of CPU cores. If less than 0, the number
+            of jobs is set to `os.cpu_count() + n_jobs + 1`.
+        num_loader_jobs : int, None, optional
+            Number of jobs to use for multiprocessing on DataLoader, by default 4.
         """
         self.model_name = model_name
         self.model_dtype = model_dtype
@@ -390,6 +340,8 @@ class FinePhrase:
         self.normalize_embeds = normalize_embeds
         self.pca = pca
         self.pca_fit_batch_count = pca_fit_batch_count
+        self.num_token_jobs = num_token_jobs
+        self.num_loader_jobs = num_loader_jobs
         self.model.eval().to(device)
         if truncate_dims is not None and pca is not None:
             if truncate_dims < pca:
@@ -427,6 +379,16 @@ class FinePhrase:
         self.model.half()
         self.model_dtype = self.model.dtype
         return self
+
+    @property
+    def _num_token_jobs(self) -> int:
+        """Returns the number of jobs to use for tokenization."""
+        return norm_jobs(self.num_token_jobs)
+
+    @property
+    def _num_loader_jobs(self) -> int:
+        """Returns the number of jobs to use for the dataloader."""
+        return norm_jobs(self.num_loader_jobs)
 
     def reduce_precision_if_needed(
         self, embeds: torch.Tensor | np.ndarray
@@ -512,16 +474,18 @@ class FinePhrase:
         pa.Array
             PyArrow array containing the decoded phrases.
         """
-        phrases = []
-        for ids in tqdm(phrase_ids, desc="Detokenizing"):
-            phrases.extend(
-                self.tokenizer.batch_decode(
-                    ids.cpu(),
-                    skip_special_tokens=True,
-                    clean_up_tokenization_spaces=True,
-                )
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        _decode = delayed(
+            partial(
+                self.tokenizer.batch_decode,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True,
             )
-        return pa.array(phrases)
+        )
+        phrases = Parallel(n_jobs=self._num_token_jobs, prefer="processes")(
+            _decode(ids) for ids in tqdm(phrase_ids, desc="Detokenizing")
+        )
+        return pa.array([y for x in phrases for y in x])
 
     def _compute_phrase_embeddings(
         self,
@@ -615,14 +579,16 @@ class FinePhrase:
         results["phrase_embeds"] = torch.vstack(results["phrase_embeds"])
         return results
 
-    @timer(readout="Finished tokenizing in {time:.4f} seconds.")
+    @timer(readout="Finished preprocessing in {time:.4f} seconds.")
     def _tokenize(
         self,
         docs: list[str],
         max_length: int | None = None,
         chunk_docs: bool = True,
         doc_overlap: float | int = 0.5,
-    ) -> dict[str, np.ndarray]:
+        batch_size: int = 10,
+        num_jobs: int | None = None,
+    ) -> Dataset:
         """Tokenize a list of documents into input sequences for the model.
 
         Parameters
@@ -639,18 +605,22 @@ class FinePhrase:
             within `max_length` will not be chunked. If a float, it is interpreted as a
             fraction of the maximum sequence length. If an integer, it is interpreted
             as the number of tokens to overlap. Does nothing if `chunk_docs` is False.
+        batch_size : int, optional
+            Batch size for tokenization, by default 10.
+        num_jobs : int, optional
+            Number of jobs to use for parallel processing on tokenization.
+            If None, will default to `self.num_token_jobs`.
 
         Returns
         -------
-        dict[str, np.ndarray]
-            Dictionary containing the tokenized input sequences.
+        Dataset
+            Dataset containing the tokenized input sequences.
 
         Raises
         ------
         ValueError
             If `max_length` is not specified and `tokenizer.model_max_length` is None.
         """
-        print("Tokenizing documents...")
         if max_length is None:
             if self.tokenizer.model_max_length is None:
                 raise ValueError(
@@ -675,17 +645,53 @@ class FinePhrase:
                 raise ValueError("`doc_overlap` must be a float or an integer.")
         else:
             doc_overlap = 0
-        inputs = self.tokenizer(
+
+        @delayed
+        def _tok(
             docs,
+            sample_idx,
+            tokenizer=self.tokenizer,
             max_length=max_length,
-            padding="longest",
-            truncation=True,
-            return_overflowing_tokens=chunk_docs,
-            stride=doc_overlap,
-            return_tensors="pt",
-            add_special_tokens=True,
-            return_attention_mask=True,
+            chunk_docs=chunk_docs,
+            doc_overlap=doc_overlap,
+        ):
+            """Tokenize a list of documents into input sequences for the model."""
+            inputs = tokenizer(
+                docs,
+                max_length=max_length,
+                padding="max_length",
+                truncation=True,
+                return_overflowing_tokens=chunk_docs,
+                stride=doc_overlap,
+                return_tensors="np",
+                add_special_tokens=True,
+                return_attention_mask=True,
+            )
+            # Globalize overflow_to_sample_mapping
+            if "overflow_to_sample_mapping" in inputs:
+                inputs["overflow_to_sample_mapping"] = np.asarray(sample_idx)[
+                    inputs["overflow_to_sample_mapping"]
+                ]
+            return inputs
+
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        # Use `Dataset` for easy batching
+        data = Dataset.from_dict({"text": docs, "sample_idx": np.arange(len(docs))})
+        num_batches = math.ceil(len(data) / batch_size)
+        if num_jobs is None:
+            num_jobs = self._num_token_jobs
+        inputs = Parallel(n_jobs=num_jobs, prefer="processes")(
+            _tok(batch["text"], batch["sample_idx"])
+            for batch in tqdm(
+                data.iter(batch_size), desc="Tokenizing", total=num_batches
+            )
         )
+        # Concatenate inputs
+        inputs = {k: np.concatenate([x[k] for x in inputs]) for k in inputs[0]}
+        # Add sequence index
+        inputs["sequence_idx"] = np.arange(len(inputs["input_ids"]))
+        inputs = Dataset.from_dict(inputs)
+        inputs.set_format(type="torch")
         return inputs
 
     def _generate_token_embeds(
@@ -698,20 +704,23 @@ class FinePhrase:
         with torch.no_grad():
             with torch.cuda.amp.autocast(enabled=self.amp, dtype=self.amp_dtype):
                 progress_loader = tqdm(loader, desc="Encoding")
-                for batch_idx, (sequence_idx, batch) in enumerate(progress_loader):
+                for batch_idx, batch in enumerate(progress_loader):
                     batch = {
                         k: v.to(self.device, non_blocking=True)
                         for k, v in batch.items()
                     }
-                    outputs = self.model(**batch)
+                    outputs = self.model(
+                        input_ids=batch["input_ids"],
+                        attention_mask=batch["attention_mask"],
+                    )
                     results = {
-                        "sequence_idx": sequence_idx,
+                        "sequence_idx": batch["sequence_idx"],
                         "input_ids": batch["input_ids"],
                         "attention_mask": batch["attention_mask"],
                         "token_embeds": self.truncate_dims_if_needed(
                             outputs.last_hidden_state
                         ),
-                        "batch_idx": torch.full(sequence_idx.shape, batch_idx),
+                        "batch_idx": torch.full(batch["sequence_idx"].shape, batch_idx),
                     }
                     _move_or_convert_results(
                         results,
@@ -818,6 +827,7 @@ class FinePhrase:
         docs: list[str],
         max_length: int | None = None,
         batch_size: int = 32,
+        token_batch_size: int = 10,
         phrase_sizes: int | list | tuple = 12,
         phrase_overlap: int | float | list | dict = 0.5,
         phrase_min_token_ratio: float = 0.5,
@@ -838,7 +848,9 @@ class FinePhrase:
         max_length : int, optional
             Maximum length of the input sequences, by default None.
         batch_size : int, optional
-            Batch size for encoding, by default 32.
+            Batch size for encoder, by default 32.
+        token_batch_size : int, optional
+            Batch size for tokenization, by default 10.
         phrase_sizes : list, tuple, optional
             Sub-sequence size or list of sub-sequence sizes to extract, by default 12.
             For example, if `phrase_sizes` is set to `(12, 24, 48)`, sub-sequences
@@ -882,14 +894,18 @@ class FinePhrase:
 
         """
         inputs = self._tokenize(
-            docs, max_length=max_length, chunk_docs=chunk_docs, doc_overlap=doc_overlap
+            docs,
+            max_length=max_length,
+            chunk_docs=chunk_docs,
+            doc_overlap=doc_overlap,
+            batch_size=token_batch_size,
         )
-        data = TokenizedDataset(inputs)
         loader = DataLoader(
-            data,
+            inputs,
             batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
+            num_workers=self._num_loader_jobs,
         )
         batches = self._generate_phrase_embeds(
             loader,
@@ -903,7 +919,9 @@ class FinePhrase:
         if self.pca_mode:
             if hasattr(self, "pca_transform_"):
                 self.pca_transform_.to(self.device)
-            if not pca_ready_at_start:
+            if pca_ready_at_start:
+                print("PCA is already fit and will be applied to all batches.")
+            else:
                 if isinstance(self.pca_fit_batch_count, float):
                     self.pca_fit_batch_count_ = math.ceil(
                         len(loader) * self.pca_fit_batch_count
@@ -953,16 +971,12 @@ class FinePhrase:
                 self.pca_transform_.to(self.device)  # Move back to device
             else:
                 warnings.warn("PCA did not finish fitting and will not be applied.")
-        # Combine results
+        # Decode phrases in existing batches
         results["phrase"] = self._decode_phrases(results.pop("phrase_ids"))
+        # Combine results
         for key, value in results.items():
             if isinstance(value[0], torch.Tensor):
-                if value[0].ndim == 1:
-                    results[key] = torch.hstack(value)
-                elif value[0].ndim == 2:
-                    results[key] = torch.vstack(value)
-                else:
-                    raise ValueError(f"Unsupported dimension {value[0].ndim}.")
+                results[key] = torch.cat(value, dim=0)
         if chunk_docs:
             mapping = inputs["overflow_to_sample_mapping"]
             results["sample_idx"] = mapping[results["sequence_idx"]]
@@ -980,6 +994,7 @@ class FinePhrase:
         queries: list[str],
         max_length: int | None = None,
         batch_size: int = 32,
+        token_batch_size: int = 10,
         convert_to_numpy: bool = True,
     ) -> np.ndarray:
         """Obtain the mean-tokens embeddings for a list of query strings.
@@ -997,6 +1012,8 @@ class FinePhrase:
             If None, the tokenizer's maximum length will be used.
         batch_size : int, optional
             Batch size for encoding, by default 32.
+        token_batch_size : int, optional
+            Batch size for tokenization, by default 10.
         convert_to_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
 
@@ -1005,12 +1022,22 @@ class FinePhrase:
         np.ndarray
             Mean-token embeddings for each query.
         """
-        inputs = self._tokenize(queries, max_length=max_length, chunk_docs=False)
+        small_thresh = 5
+        num_token_batches = math.ceil(len(queries) / token_batch_size)
+        inputs = self._tokenize(
+            queries,
+            max_length=max_length,
+            chunk_docs=False,
+            batch_size=token_batch_size,
+            num_jobs=1 if num_token_batches <= small_thresh else self._num_token_jobs,
+        )
+        num_batches = math.ceil(len(inputs) / batch_size)
         loader = DataLoader(
-            TokenizedDataset(inputs),
+            inputs,
             batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
+            num_workers=1 if num_batches <= small_thresh else self._num_loader_jobs,
         )
         batches = self._generate_token_embeds(
             loader, move_results_to_cpu=False, return_tensors="pt"
@@ -1046,6 +1073,7 @@ class FinePhrase:
         sim_thresh: float = 0.5,
         query_max_length: int | None = None,
         query_batch_size: int = 32,
+        query_token_batch_size: int = 10,
     ) -> dict[str, pl.DataFrame]:
         """
         Search for documents that match the given queries based on their vector representations.
@@ -1073,6 +1101,8 @@ class FinePhrase:
             maximum length will be used. Default is None.
         query_batch_size : int, optional
             Batch size for encoding queries. Default is 32.
+        query_token_batch_size : int, optional
+            Batch size for tokenization of queries. Default is 10.
 
         Returns
         -------
@@ -1087,7 +1117,7 @@ class FinePhrase:
         Raises
         ------
         ImportError
-            If Scikit-Learn is not installed.
+            If FAISS is not installed.
 
         See Also
         --------
@@ -1096,10 +1126,13 @@ class FinePhrase:
         finephrase.utils.search_phrases
             Function for searching phrases using FAISS.
         """
-        if not _HAS_SKLEARN:
-            raise ImportError("Scikit-Learn is not installed.")
+        if not _HAS_FAISS:
+            raise ImportError("FAISS is not installed.")
         query_embeds = self.encode_queries(
-            queries, max_length=query_max_length, batch_size=query_batch_size
+            queries,
+            max_length=query_max_length,
+            batch_size=query_batch_size,
+            token_batch_size=query_token_batch_size,
         )
         _, hits = search_phrases(
             queries,
