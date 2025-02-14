@@ -259,6 +259,8 @@ The context-awareness is limited by the maximum sequence length of the model. Cu
 
 * ~~Introduce phrase overlap to reduce redundant phrases~~
 * ~~Add optional normalization for the phrase embeddings~~
+* Add sentence mode using rules-based sentence boundary detection
+* Add paragraph mode using rules-based paragraph boundary detection
 
 ## License
 
