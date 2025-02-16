@@ -7,7 +7,7 @@ from joblib import Parallel, delayed
 from torch.nn.utils.rnn import pad_sequence
 
 
-def get_sentence_offsets_syntok(text):
+def get_sentence_offsets_syntok(text: str) -> torch.Tensor:
     """
     Extracts sentence offsets from the given text using the syntok library.
 
@@ -28,7 +28,7 @@ def get_sentence_offsets_syntok(text):
     )
 
 
-def get_sentence_offsets_nltk(text):
+def get_sentence_offsets_nltk(text: str) -> torch.Tensor:
     """
     Tokenizes the input text into sentences and returns their offsets using NLTK's PunktSentenceTokenizer.
 
@@ -58,7 +58,7 @@ def get_sentence_offsets_nltk(text):
     return torch.tensor(list(sent_tokenizer.span_tokenize(text)))
 
 
-def get_sentence_offsets_blingfire(text):
+def get_sentence_offsets_blingfire(text: str) -> torch.Tensor:
     """
     Get the sentence offsets from the given text using BlingFire.
 
@@ -75,7 +75,9 @@ def get_sentence_offsets_blingfire(text):
     return torch.tensor(bf.text_to_sentences_and_offsets(text)[1])
 
 
-def get_sentence_offsets_spacy(text, model):
+def get_sentence_offsets_spacy(
+    text: str, model: "spacy.lang.en.English"
+) -> torch.Tensor:
     """
     Get the sentence offsets from the given text using SpaCy.
 
@@ -92,13 +94,14 @@ def get_sentence_offsets_spacy(text, model):
         A tensor containing the offsets of each sentence in the input text.
         Each row contains the start and end character indices of a sentence.
     """
-
     return torch.tensor(
         [(sent.start_char, sent.end_char) for sent in model(text).sents]
     )
 
 
-def get_sentence_offsets(text, method="blingfire", n_jobs=None):
+def get_sentence_offsets(
+    text: str | list[str], method: str = "blingfire", n_jobs: int = None
+) -> torch.Tensor | list[torch.Tensor]:
     """
     Get sentence offsets for a given text using a specified method.
 
@@ -118,10 +121,9 @@ def get_sentence_offsets(text, method="blingfire", n_jobs=None):
 
     Returns
     -------
-    list of tuples of int
-        A list of tuples, where each tuple represents the start and end
-        offsets of a sentence in the input text. If the input is a list of
-        strings, the function returns a list of lists of tuples.
+    torch.Tensor or list of torch.Tensor
+        A tensor containing the start and end offsets of each sentence in the input text.
+        If the input is a list of strings, the function returns a list of tensors.
 
     Raises
     ------
@@ -153,7 +155,9 @@ def get_sentence_offsets(text, method="blingfire", n_jobs=None):
     return offsets
 
 
-def _add_special_tokens(input_ids, cls_token_id=None, sep_token_id=None):
+def _add_special_tokens(
+    input_ids: torch.Tensor, cls_token_id: int = None, sep_token_id: int = None
+) -> torch.Tensor:
     """Adds special tokens (CLS, SEP) to the input token IDs.
 
     Parameters
@@ -183,12 +187,17 @@ def _add_special_tokens(input_ids, cls_token_id=None, sep_token_id=None):
     return result
 
 
-def _pad(input_ids: list, pad_token_id, how="longest", max_length=None):
+def _pad(
+    input_ids: list[torch.Tensor],
+    pad_token_id: int,
+    how: str = "longest",
+    max_length: int = None,
+) -> torch.Tensor | list[torch.Tensor]:
     """Pads a list of sequences to a uniform length.
 
     Parameters
     ----------
-    input_ids : list
+    input_ids : list of torch.Tensor
         A list of sequences to pad. Each sequence should be a list or a PyTorch tensor of numerical IDs.
     pad_token_id : int
         The ID to use for padding.
@@ -203,7 +212,7 @@ def _pad(input_ids: list, pad_token_id, how="longest", max_length=None):
 
     Returns
     -------
-    torch.Tensor or list
+    torch.Tensor or list of torch.Tensor
         A PyTorch tensor containing the padded sequences if padding is applied, or the original list of sequences if `how=None`.
         If padding is applied, the tensor has shape (len(input_ids), max_len), where max_len is the length of the longest sequence
         in `input_ids` or `max_length` if specified.
@@ -241,7 +250,7 @@ def _pad(input_ids: list, pad_token_id, how="longest", max_length=None):
         padded_ids = pad_sequence(
             input_ids, batch_first=True, padding_value=pad_token_id
         )
-    elif how == None:
+    elif how is None:
         padded_ids = input_ids
     else:
         raise ValueError(f"Invalid value '{how}' for `how`.")
@@ -250,14 +259,14 @@ def _pad(input_ids: list, pad_token_id, how="longest", max_length=None):
 
 
 def _adjust_sent_boundary_idx(
-    sent_boundary_idx,
-    start_idx,
-    chunk,
-    current_chunk_sent_idx,
-    cls_token_id,
-    sep_token_id,
-    add_special_tokens,
-):
+    sent_boundary_idx: torch.Tensor,
+    start_idx: int,
+    chunk: torch.Tensor,
+    current_chunk_sent_idx: list[int],
+    cls_token_id: int = None,
+    sep_token_id: int = None,
+    add_special_tokens: bool = True,
+) -> torch.Tensor:
     """Adjusts sentence boundary indices relative to a chunk of text.
 
     This function takes sentence boundary indices from a larger context and adjusts them to be relative to a smaller chunk of text.
@@ -271,7 +280,7 @@ def _adjust_sent_boundary_idx(
         The starting index of the current chunk within the original text.
     chunk : torch.Tensor
         A sequence of token IDs representing the current chunk of text.
-    current_chunk_sent_idx : list
+    current_chunk_sent_idx : list[int]
         A list of indices indicating which sentences from the original text are present in the current chunk.
     cls_token_id : int, optional
         The ID of the CLS token. If not None, it's assumed a CLS token is added at the beginning of the chunk.
@@ -307,15 +316,15 @@ def _adjust_sent_boundary_idx(
 
 
 def chunk_preserving_sentence_structure(
-    input_ids,
-    sent_boundary_idx,
-    tokenizer,
-    sample_idx,
-    max_length=512,
-    overlap=0.5,
-    add_special_tokens=True,
-    padding="max_length",
-):
+    input_ids: torch.Tensor,
+    sent_boundary_idx: torch.Tensor,
+    tokenizer: "transformers.PreTrainedTokenizer",
+    sample_idx: int,
+    max_length: int = 512,
+    overlap: float = 0.5,
+    add_special_tokens: bool = True,
+    padding: str = "max_length",
+) -> dict:
     """Chunk a sequence of input IDs while preserving sentence structure.
     This function splits a long sequence of input IDs into smaller chunks,
     ensuring that sentence boundaries are respected as much as possible.
@@ -479,12 +488,12 @@ def chunk_preserving_sentence_structure(
 
 
 def tokenize_with_sentence_boundaries(
-    docs,
-    tokenizer,
-    method="blingfire",
-    max_length=512,
-    overlap=0.5,
-):
+    docs: list[str],
+    tokenizer: "transformers.PreTrainedTokenizer",
+    method: str = "blingfire",
+    max_length: int = 512,
+    overlap: float = 0.5,
+) -> dict:
     """Tokenizes documents while preserving sentence boundaries.
     This function takes a list of documents, a tokenizer, and optional parameters
     to tokenize the documents into chunks, ensuring that sentence boundaries are
