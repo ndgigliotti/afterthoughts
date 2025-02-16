@@ -16,6 +16,7 @@ import math
 import blingfire as bf
 import torch
 import torch.nn.functional as F
+import transformers
 from joblib import Parallel, delayed
 from torch.nn.utils.rnn import pad_sequence
 
@@ -319,7 +320,7 @@ def _adjust_sent_boundary_idx(
 def chunk_preserving_sentence_structure(
     input_ids: torch.Tensor,
     sent_boundary_idx: torch.Tensor,
-    tokenizer: "transformers.PreTrainedTokenizer",
+    tokenizer: transformers.PreTrainedTokenizer,
     sample_idx: int,
     max_length: int = 512,
     overlap: float = 0.5,
@@ -490,7 +491,7 @@ def chunk_preserving_sentence_structure(
 
 def tokenize_with_sentence_boundaries(
     docs: list[str],
-    tokenizer: "transformers.PreTrainedTokenizer",
+    tokenizer: transformers.PreTrainedTokenizer,
     method: str = "blingfire",
     max_length: int = 512,
     overlap: float = 0.5,
