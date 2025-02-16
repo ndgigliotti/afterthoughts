@@ -4,3 +4,5 @@ pyarrow==18.1.0
 torch==2.2.2
 tqdm==4.67.1
 transformers==4.48.1
+blingfire==0.1.8
+joblib==1.4.2

@@ -23,9 +23,13 @@ def get_sentence_offsets_syntok(text: str) -> torch.Tensor:
     """
     from syntok.segmenter import analyze
 
-    return torch.tensor(
-        [(s[0].offset, s[-1].offset + 1) for p in analyze(text) for s in p]
-    )
+    if len(text) == 0:
+        offsets = torch.tensor([]).reshape(0, 2)
+    else:
+        offsets = torch.tensor(
+            [(s[0].offset, s[-1].offset + 1) for p in analyze(text) for s in p]
+        )
+    return offsets
 
 
 def get_sentence_offsets_nltk(text: str) -> torch.Tensor:
@@ -54,8 +58,12 @@ def get_sentence_offsets_nltk(text: str) -> torch.Tensor:
         nltk.data.find("tokenizers/punkt")
     except LookupError:
         nltk.download("punkt")
-    sent_tokenizer = nltk.PunktSentenceTokenizer()
-    return torch.tensor(list(sent_tokenizer.span_tokenize(text)))
+    if len(text) == 0:
+        offsets = torch.tensor([]).reshape(0, 2)
+    else:
+        sent_tokenizer = nltk.PunktSentenceTokenizer()
+        offsets = torch.tensor(list(sent_tokenizer.span_tokenize(text)))
+    return offsets
 
 
 def get_sentence_offsets_blingfire(text: str) -> torch.Tensor:
@@ -72,31 +80,11 @@ def get_sentence_offsets_blingfire(text: str) -> torch.Tensor:
     torch.Tensor
         A tensor containing the offsets of each sentence in the input text.
     """
-    return torch.tensor(bf.text_to_sentences_and_offsets(text)[1])
-
-
-def get_sentence_offsets_spacy(
-    text: str, model: "spacy.lang.en.English"
-) -> torch.Tensor:
-    """
-    Get the sentence offsets from the given text using SpaCy.
-
-    Parameters
-    ----------
-    text : str
-        The input text to be processed.
-    model : spacy.lang.en.English
-        The SpaCy model to use for sentence boundary detection.
-
-    Returns
-    -------
-    torch.Tensor
-        A tensor containing the offsets of each sentence in the input text.
-        Each row contains the start and end character indices of a sentence.
-    """
-    return torch.tensor(
-        [(sent.start_char, sent.end_char) for sent in model(text).sents]
-    )
+    if len(text) == 0:
+        offsets = torch.tensor([]).reshape(0, 2)
+    else:
+        offsets = torch.tensor(bf.text_to_sentences_and_offsets(text)[1])
+    return offsets
 
 
 def get_sentence_offsets(
