@@ -29,241 +29,24 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import AutoModel, AutoTokenizer
 
-from finephrase.available import _HAS_FAISS, _HAS_PANDAS
+from finephrase.available import _HAS_FAISS
 from finephrase.pca import IncrementalPCA
+from finephrase.phrase_utils import _compute_phrase_embeddings, _tokenize_batch
+from finephrase.sentence_utils import (
+    _compute_sentence_phrase_embeds,
+    _tokenize_batch_with_sentence_boundaries,
+)
 from finephrase.utils import (
-    norm_jobs,
+    _build_results_dataframe,
+    get_overlap_count,
+    move_or_convert_results,
     normalize,
+    normalize_num_jobs,
     reduce_precision,
     search_phrases,
     timer,
     truncate_dims,
 )
-
-
-def get_phrase_idx(
-    input_ids: torch.Tensor,
-    attention_mask: torch.Tensor,
-    phrase_sizes: list | tuple | int,
-    overlap: int | float | list | dict = 0.5,
-    phrase_min_token_ratio: float = 0.5,
-    sequence_idx: torch.Tensor | None = None,
-) -> dict[str, torch.Tensor]:
-    """Extract the indices of sub-sequences from input sequences.
-
-    Parameters
-    ----------
-    input_ids : torch.Tensor
-        Tensor containing the tokenized input sequences.
-    attention_mask : torch.Tensor
-        Tensor containing the attention mask for the input sequences.
-    phrase_sizes : list | tuple | int
-        Size or list of sizes of the phrases to extract.
-    overlap : int | float | list | dict, optional
-        Overlap between phrases, by default 0.5.
-    phrase_min_token_ratio : float, optional
-        Minimum ratio of tokens that must be present in each phrase, by default 0.5.
-    sequence_idx : torch.Tensor | None, optional
-        Tensor containing the sequence indices, by default None.
-
-    Returns
-    -------
-    dict[str, torch.Tensor]
-        Dictionary containing the phrase indices, phrase IDs, valid phrase mask, and sequence indices.
-
-    Raises
-    ------
-    ValueError
-        If `sequence_idx` has a different number of rows than `input_ids`.
-    ValueError
-        If `overlap` is not in the range [0, 1).
-    ValueError
-        If `phrase_min_token_ratio` is not greater than 0.
-    ValueError
-        If `overlap` is not a float, list, tuple, dict, or int.
-    """
-    if sequence_idx is not None:
-        if len(sequence_idx) != input_ids.shape[0]:
-            raise ValueError(
-                f"`sequence_idx` must have the same number of rows as `input_ids` "
-                f"({len(sequence_idx)} != {input_ids.shape[0]})."
-            )
-        if sequence_idx.device != input_ids.device:
-            sequence_idx = sequence_idx.to(input_ids.device)
-    results = {
-        "phrase_idx": [],
-        "phrase_ids": [],
-        "phrase_size": [],
-        "valid_phrase_mask": [],
-        "sequence_idx": [],
-    }
-    if isinstance(phrase_sizes, int):
-        phrase_sizes = [phrase_sizes]
-    for i, size in enumerate(phrase_sizes):
-        # Check if `overlap` is a float in [0, 1)
-        if isinstance(overlap, float):
-            if overlap < 0 or overlap >= 1:
-                raise ValueError("`overlap` must be in [0, 1).")
-            # Calculate the number of tokens to overlap
-            overlap_tokens = math.ceil(size * overlap)
-            if overlap_tokens == size:
-                overlap_tokens -= 1
-        elif isinstance(overlap, (list, tuple)):
-            overlap_tokens = overlap[i]
-        elif isinstance(overlap, dict):
-            overlap_tokens = overlap[size]
-        elif isinstance(overlap, int):
-            overlap_tokens = overlap
-        else:
-            raise ValueError("`overlap` must be a float, list, tuple, dict, or int.")
-        # Create generic phrase indices based on the shape of `input_ids`
-        start_idx = torch.arange(
-            1, input_ids.shape[1] - size + 1, size - overlap_tokens
-        )
-        stop_idx = start_idx + size
-        phrase_idx = torch.stack(
-            [torch.arange(start, stop) for start, stop in zip(start_idx, stop_idx)]
-        )
-        phrase_ids = input_ids[:, phrase_idx]
-        min_tokens = math.ceil(phrase_min_token_ratio * size)
-        if min_tokens == 0:
-            raise ValueError("`phrase_min_token_ratio` must be greater than 0.")
-        valid_phrase_mask = attention_mask[:, phrase_idx].sum(dim=2) >= min_tokens
-        phrase_ids = phrase_ids[valid_phrase_mask]
-        if sequence_idx is None:
-            phrase_sequence_idx = torch.arange(
-                input_ids.shape[0], device=input_ids.device
-            )
-        else:
-            phrase_sequence_idx = sequence_idx.clone()
-        phrase_sequence_idx = phrase_sequence_idx.repeat_interleave(
-            valid_phrase_mask.sum(dim=1)
-        )
-        results["phrase_idx"].append(phrase_idx)
-        results["phrase_ids"].append(phrase_ids)
-        results["phrase_size"].append(torch.full((phrase_ids.shape[0],), size))
-        results["valid_phrase_mask"].append(valid_phrase_mask)
-        results["sequence_idx"].append(phrase_sequence_idx)
-    return results
-
-
-def _move_or_convert_results(
-    results: dict, return_tensors: str = "pt", move_results_to_cpu: bool = False
-):
-    """Move or convert the results to the specified format.
-
-    Parameters
-    ----------
-    results : dict
-        Dictionary containing the results to move or convert.
-    return_tensors : str, optional
-        Format to return the tensors in, either 'pt' for PyTorch tensors or 'np' for NumPy arrays, by default "pt".
-    move_results_to_cpu : bool, optional
-        Whether to move the results to CPU, by default False.
-
-    Returns
-    -------
-    dict
-        Dictionary containing the moved or converted results.
-
-    Raises
-    ------
-    ValueError
-        If `return_tensors` is not 'np' or 'pt'.
-    """
-    if move_results_to_cpu or return_tensors == "np":
-        for key, value in results.items():
-            if isinstance(value, torch.Tensor):
-                results[key] = value.cpu()
-            if (
-                isinstance(value, list)
-                and len(value)
-                and isinstance(value[0], torch.Tensor)
-            ):
-                results[key] = [v.cpu() for v in value]
-    if return_tensors == "np":
-        for key, value in results.items():
-            if isinstance(value, torch.Tensor):
-                results[key] = value.numpy()
-            elif (
-                isinstance(value, list)
-                and len(value)
-                and isinstance(value[0], torch.Tensor)
-            ):
-                results[key] = [v.numpy() for v in value]
-    elif not return_tensors == "pt":
-        raise ValueError("`return_tensors` must be 'np' or 'pt'.")
-    return results
-
-
-def _build_results_dataframe(
-    results: dict, return_frame: str = "polars", convert_to_numpy: bool = True
-) -> tuple[pl.DataFrame | pa.Table, np.ndarray | torch.Tensor]:
-    """
-    Consolidates the results by combining the phrase indices and phrases into a DataFrame
-    and returning it alongside the embeddings.
-
-    Parameters
-    ----------
-    results : dict
-        A dictionary containing the results with keys such as 'sample_idx',
-        'sequence_idx', 'batch_idx', 'phrase_size', 'phrases', and 'phrase_embeds'.
-    return_frame : str, optional
-        The type of DataFrame to return. Options are 'polars', 'pandas', or 'arrow'.
-        Defaults to 'polars'.
-    convert_to_numpy : bool, optional
-        Whether to convert the embeddings to NumPy arrays. Defaults to True.
-
-    Returns
-    -------
-    tuple
-        A tuple with two elements:
-        - A DataFrame containing the phrase indices and phrases.
-        - The phrase embeddings in the specified format.
-
-    Raises
-    ------
-    TypeError
-        If 'phrase_embeds' in results is not a torch.Tensor.
-    """
-    # Get indices and 1d-arrays
-    df = {}
-    keys = [
-        "embed_idx",
-        "sample_idx",
-        "sequence_idx",
-        "batch_idx",
-        "phrase_size",
-        "phrase",
-    ]
-    for key in keys:
-        if key in results:
-            df[key] = results[key]
-    # Convert 1d arrays to NumPy and move to CPU
-    df = _move_or_convert_results(df, return_tensors="np", move_results_to_cpu=True)
-    # Convert embeddings if needed
-    embeds = results["phrase_embeds"]
-    if not isinstance(embeds, torch.Tensor):
-        raise TypeError("Phrase embeddings must be torch.Tensor.")
-    if convert_to_numpy:
-        embeds = embeds.cpu().numpy()
-    else:
-        embeds = embeds.cpu()
-    # Build DataFrame
-    if return_frame == "polars":
-        df = pl.DataFrame(df)
-    elif return_frame == "pandas":
-        if _HAS_PANDAS:
-            import pandas as pd
-
-            df = pd.DataFrame(df)
-        else:
-            raise ImportError("Pandas is not installed.")
-    elif return_frame == "arrow":
-        df = pa.Table.from_pydict(df)
-    else:
-        raise ValueError(f"Invalid value for return_frame: {return_frame}")
-    return df, embeds
 
 
 class FinePhrase:
@@ -383,12 +166,12 @@ class FinePhrase:
     @property
     def _num_token_jobs(self) -> int:
         """Returns the number of jobs to use for tokenization."""
-        return norm_jobs(self.num_token_jobs)
+        return normalize_num_jobs(self.num_token_jobs)
 
     @property
     def _num_loader_jobs(self) -> int:
         """Returns the number of jobs to use for the dataloader."""
-        return norm_jobs(self.num_loader_jobs)
+        return normalize_num_jobs(self.num_loader_jobs)
 
     def reduce_precision_if_needed(
         self, embeds: torch.Tensor | np.ndarray
@@ -487,102 +270,11 @@ class FinePhrase:
         )
         return pa.array([y for x in phrases for y in x])
 
-    def _compute_phrase_embeddings(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        token_embeds: torch.Tensor,
-        sequence_idx: torch.Tensor,
-        phrase_sizes: int | list | tuple = 12,
-        overlap: int | float | list | dict = 0.5,
-        phrase_min_token_ratio: float = 0.5,
-    ) -> dict[str, torch.Tensor]:
-        """Extract the sub-sequences and sub-sequence embeddings from token embeddings.
-
-        Parameters
-        ----------
-        input_ids : torch.Tensor
-            Tokenized input sequences with no special tokens (except padding).
-        attention_mask : torch.Tensor
-            Attention mask for the input sequences.
-        token_embeds : torch.Tensor
-            Token embeddings.
-        sequence_idx : torch.Tensor
-            Sequence indices.
-        phrase_sizes : list, tuple, optional
-            Sub-sequence size or list of sub-sequence sizes to extract, by default 12.
-            For example, if `phrase_sizes` is set to `(12, 24, 48)`, sub-sequences
-            of sizes 12, 24, and 48 will be extracted from the input sequences.
-        overlap : int, float, list, dict, optional
-            Overlap for the sub-sequences, by default 0.5.
-            If a float, it is interpreted as a fraction of the phrase size.
-            If an integer, it is interpreted as the number of tokens to overlap.
-            If a list or tuple, it should contain the overlap for each phrase size.
-            If a dictionary, it should map phrase sizes to overlaps.
-        phrase_min_token_ratio : float, optional
-            Minimum ratio of tokens that must be present in each sub-sequence,
-            by default 0.5. This mainly pertains to the last short sub-sequence.
-            Typically the default value works well.
-
-        Returns
-        -------
-        dict[str, torch.Tensor]
-            Dictionary containing the sample indices, n-grams, and n-gram embeddings.
-
-        Notes
-        -----
-        1. The phrase embeddings are obtained by averaging the token embeddings for each
-        token in each phrase. This is known as the "mean-tokens" embedding method.
-
-        2. Special tokens are not included in the phrase embeddings. This is because special
-        tokens such as [CLS], [SEP], and [PAD] do not contribute to the local fine-grained meaning
-        of phrases. Even if there was an argument for including tokens such as [UNK], it is easier
-        for model compatibility reasons to simply exclude all special tokens.
-
-        3. To extract all possible n-grams, set `overlap` to 0.999999.
-
-        """
-        phrase_data = get_phrase_idx(
-            input_ids,
-            attention_mask,
-            phrase_sizes=phrase_sizes,
-            overlap=overlap,
-            phrase_min_token_ratio=phrase_min_token_ratio,
-            sequence_idx=sequence_idx,
-        )
-        # Mask all special tokens
-        attention_mask = torch.isin(
-            input_ids,
-            torch.tensor(self.tokenizer.all_special_ids, device=input_ids.device),
-            invert=True,
-        ).to(torch.uint8)
-        results = {
-            "sequence_idx": [],
-            "phrase_ids": [],
-            "phrase_size": [],
-            "phrase_embeds": [],
-        }
-        for i, idx in enumerate(phrase_data["phrase_idx"]):
-            attn_factor = attention_mask[:, idx].unsqueeze(3)
-            phrase_embeds = torch.sum(token_embeds[:, idx] * attn_factor, dim=2) / (
-                torch.clamp(attn_factor.sum(dim=2), min=1)
-            )
-            phrase_embeds = phrase_embeds[phrase_data["valid_phrase_mask"][i]]
-            results["sequence_idx"].append(phrase_data["sequence_idx"][i])
-            results["phrase_ids"].append(phrase_data["phrase_ids"][i])
-            results["phrase_size"].append(phrase_data["phrase_size"][i])
-            results["phrase_embeds"].append(phrase_embeds)
-
-        # Combine results
-        results["sequence_idx"] = torch.hstack(results["sequence_idx"])
-        results["phrase_size"] = torch.hstack(results["phrase_size"])
-        results["phrase_embeds"] = torch.vstack(results["phrase_embeds"])
-        return results
-
     @timer(readout="Finished preprocessing in {time:.4f} seconds.")
     def _tokenize(
         self,
         docs: list[str],
+        sentences: bool = False,
         max_length: int | None = None,
         chunk_docs: bool = True,
         doc_overlap: float | int = 0.5,
@@ -595,6 +287,10 @@ class FinePhrase:
         ----------
         docs : list[str]
             List of documents to tokenize.
+        sentences : bool, optional
+            Enable sentence-level tokenization, by default False.
+            Sentence boundaries will be located and preserved during tokenization.
+            Chunking will preserve sentence boundaries.
         max_length : int, optional
             Maximum length of the input sequences, by default None.
         chunk_docs : bool, optional
@@ -627,52 +323,6 @@ class FinePhrase:
                     "`max_length` must be specified if `tokenizer.model_max_length` is None"
                 )
             max_length = self.tokenizer.model_max_length
-        if chunk_docs:
-            if isinstance(doc_overlap, float):
-                if doc_overlap < 0 or doc_overlap >= 1:
-                    raise ValueError("`doc_overlap` must be in [0, 1).")
-                doc_overlap = math.ceil(max_length * doc_overlap)
-                if doc_overlap == max_length:
-                    doc_overlap -= 1
-            elif isinstance(doc_overlap, int):
-                if doc_overlap >= max_length:
-                    raise ValueError("`doc_overlap` must be less than `max_length`.")
-                elif doc_overlap < 0:
-                    raise ValueError(
-                        "`doc_overlap` must be greater than or equal to 0."
-                    )
-            else:
-                raise ValueError("`doc_overlap` must be a float or an integer.")
-        else:
-            doc_overlap = 0
-
-        @delayed
-        def _tok(
-            docs,
-            sample_idx,
-            tokenizer=self.tokenizer,
-            max_length=max_length,
-            chunk_docs=chunk_docs,
-            doc_overlap=doc_overlap,
-        ):
-            """Tokenize a list of documents into input sequences for the model."""
-            inputs = tokenizer(
-                docs,
-                max_length=max_length,
-                padding="max_length",
-                truncation=True,
-                return_overflowing_tokens=chunk_docs,
-                stride=doc_overlap,
-                return_tensors="np",
-                add_special_tokens=True,
-                return_attention_mask=True,
-            )
-            # Globalize overflow_to_sample_mapping
-            if "overflow_to_sample_mapping" in inputs:
-                inputs["overflow_to_sample_mapping"] = np.asarray(sample_idx)[
-                    inputs["overflow_to_sample_mapping"]
-                ]
-            return inputs
 
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
         # Use `Dataset` for easy batching
@@ -680,14 +330,29 @@ class FinePhrase:
         num_batches = math.ceil(len(data) / batch_size)
         if num_jobs is None:
             num_jobs = self._num_token_jobs
-        inputs = Parallel(n_jobs=num_jobs, prefer="processes")(
-            _tok(batch["text"], batch["sample_idx"])
+        if sentences:
+            _tokenize = _tokenize_batch_with_sentence_boundaries
+        else:
+            _tokenize = _tokenize_batch
+        prefer = "threads" if sentences else "processes"
+        inputs = Parallel(n_jobs=num_jobs, prefer=prefer)(
+            _tokenize(
+                batch["text"],
+                batch["sample_idx"],
+                tokenizer=self.tokenizer,
+                max_length=max_length,
+                chunk_docs=chunk_docs,
+                doc_overlap=doc_overlap,
+            )
             for batch in tqdm(
                 data.iter(batch_size), desc="Tokenizing", total=num_batches
             )
         )
         # Concatenate inputs
-        inputs = {k: np.concatenate([x[k] for x in inputs]) for k in inputs[0]}
+        concat_keys = set(inputs[0].keys())
+        if "sent_boundary_idx" in concat_keys:
+            concat_keys.remove("sent_boundary_idx")
+        inputs = {k: np.concatenate([x[k] for x in inputs]) for k in concat_keys}
         # Add sequence index
         inputs["sequence_idx"] = np.arange(len(inputs["input_ids"]))
         inputs = Dataset.from_dict(inputs)
@@ -722,7 +387,7 @@ class FinePhrase:
                         ),
                         "batch_idx": torch.full(batch["sequence_idx"].shape, batch_idx),
                     }
-                    _move_or_convert_results(
+                    move_or_convert_results(
                         results,
                         return_tensors=return_tensors,
                         move_results_to_cpu=move_results_to_cpu,
@@ -732,6 +397,7 @@ class FinePhrase:
     def _generate_phrase_embeds(
         self,
         loader: DataLoader,
+        sentences: bool,
         phrase_sizes: int | list | tuple,
         phrase_overlap: int | float | list | dict,
         phrase_min_token_ratio: float,
@@ -743,19 +409,32 @@ class FinePhrase:
             loader, move_results_to_cpu=False, return_tensors="pt"
         )
         for batch in batches:
-            results = self._compute_phrase_embeddings(
-                batch["input_ids"],
-                attention_mask=batch["attention_mask"],
-                token_embeds=batch["token_embeds"],
-                sequence_idx=batch["sequence_idx"].to(self.device),
-                phrase_sizes=phrase_sizes,
-                overlap=phrase_overlap,
-                phrase_min_token_ratio=phrase_min_token_ratio,
-            )
+            if sentences:
+                results = _compute_sentence_phrase_embeds(
+                    batch["input_ids"],
+                    token_embeds=batch["token_embeds"],
+                    sent_boundary_idx=batch["sent_boundary_idx"],
+                    sequence_idx=batch["sequence_idx"].to(self.device),
+                    tokenizer=self.tokenizer,
+                    phrase_sizes=phrase_sizes,
+                    overlap=phrase_overlap,
+                    phrase_min_token_ratio=phrase_min_token_ratio,
+                )
+            else:
+                results = _compute_phrase_embeddings(
+                    batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    token_embeds=batch["token_embeds"],
+                    sequence_idx=batch["sequence_idx"].to(self.device),
+                    tokenizer=self.tokenizer,
+                    phrase_sizes=phrase_sizes,
+                    overlap=phrase_overlap,
+                    phrase_min_token_ratio=phrase_min_token_ratio,
+                )
             results["batch_idx"] = torch.full(
                 results["sequence_idx"].shape, batch["batch_idx"][0]
             )
-            _move_or_convert_results(
+            move_or_convert_results(
                 results,
                 return_tensors=return_tensors,
                 move_results_to_cpu=move_results_to_cpu,
@@ -825,6 +504,7 @@ class FinePhrase:
     def encode(
         self,
         docs: list[str],
+        sentences: bool = False,
         max_length: int | None = None,
         batch_size: int = 32,
         token_batch_size: int = 10,
@@ -845,6 +525,12 @@ class FinePhrase:
         ----------
         docs : list[str]
             List of documents to encode.
+        sentences : bool, optional
+            Enable sentence-level phrase extraction, by default False.
+            If True, the model will extract phrases while preserving sentence structure,
+            and the `phrase_sizes` parameter will control the number of sentences per phrase.
+            The `phrase_overlap` parameter will control the overlap between phrases in terms
+            of the number of sentences.
         max_length : int, optional
             Maximum length of the input sequences, by default None.
         batch_size : int, optional
@@ -895,6 +581,7 @@ class FinePhrase:
         """
         inputs = self._tokenize(
             docs,
+            sentences=sentences,
             max_length=max_length,
             chunk_docs=chunk_docs,
             doc_overlap=doc_overlap,
@@ -909,6 +596,7 @@ class FinePhrase:
         )
         batches = self._generate_phrase_embeds(
             loader,
+            sentences=sentences,
             phrase_sizes=phrase_sizes,
             phrase_overlap=phrase_overlap,
             phrase_min_token_ratio=phrase_min_token_ratio,
@@ -950,7 +638,7 @@ class FinePhrase:
                     # Update PCA if not ready yet
                     self.update_pca(batch["phrase_embeds"])
             # Offload batch to CPU
-            batch = _move_or_convert_results(
+            batch = move_or_convert_results(
                 batch, return_tensors="pt", move_results_to_cpu=True
             )
             results["batch_idx"].append(batch["batch_idx"])

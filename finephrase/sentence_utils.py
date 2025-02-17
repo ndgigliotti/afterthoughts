@@ -11,14 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import math
-
 import blingfire as bf
+import numpy as np
 import torch
 import torch.nn.functional as F
 import transformers
 from joblib import Parallel, delayed
 from torch.nn.utils.rnn import pad_sequence
+
+from finephrase.utils import get_overlap_count, move_or_convert_results
 
 
 def get_sentence_offsets_syntok(text: str) -> torch.Tensor:
@@ -176,16 +177,16 @@ def _add_special_tokens(
     torch.Tensor
         The input IDs with the special tokens added.
     """
-    print(f"Adding special tokens to input_ids: {input_ids}")
+
     to_cat = [input_ids]
     if cls_token_id is not None:
-        print(f"Adding CLS token: {cls_token_id}")
+
         to_cat.insert(0, torch.tensor([cls_token_id]))
     if sep_token_id is not None:
-        print(f"Adding SEP token: {sep_token_id}")
+
         to_cat.append(torch.tensor([sep_token_id]))
     result = torch.cat(to_cat)
-    print(f"Result after adding special tokens: {result}")
+
     return result
 
 
@@ -230,9 +231,6 @@ def _pad(
     ValueError
         If `how` is not one of 'longest', 'max_length', or None.
     """
-    print(
-        f"Padding input_ids: {input_ids} with pad_token_id: {pad_token_id}, how: {how}, max_length: {max_length}"
-    )
     if not len(input_ids):
         raise ValueError("Input list must not be empty.")
     if how == "max_length":
@@ -256,7 +254,7 @@ def _pad(
         padded_ids = input_ids
     else:
         raise ValueError(f"Invalid value '{how}' for `how`.")
-    print(f"Padded input_ids: {padded_ids}")
+
     return padded_ids
 
 
@@ -297,15 +295,9 @@ def _adjust_sent_boundary_idx(
         A 2D tensor of shape (num_sentences_in_chunk, 2) containing the adjusted start and end indices of sentences within the chunk.
 
     """
-    print(f"Original sentence boundaries: {sent_boundary_idx}")
-    print(f"Start index: {start_idx}")
-    print(f"Chunk: {chunk}")
-    print(f"Current chunk sentence indices: {current_chunk_sent_idx}")
+
     current_chunk_sent_idx = torch.as_tensor(current_chunk_sent_idx)
     adjusted_sent_boundary_idx = sent_boundary_idx[current_chunk_sent_idx] - start_idx
-    print(
-        f"Adjusted sentence boundaries after subtraction: {adjusted_sent_boundary_idx}"
-    )
     if add_special_tokens:
         if cls_token_id is not None:
             adjusted_sent_boundary_idx += 1
@@ -313,7 +305,7 @@ def _adjust_sent_boundary_idx(
         if sep_token_id is not None:
             adjusted_sent_boundary_idx[-1, 1] = len(chunk)
         adjusted_sent_boundary_idx = adjusted_sent_boundary_idx.clamp(0, len(chunk))
-    print(f"Final adjusted sentence boundaries: {adjusted_sent_boundary_idx}")
+
     return adjusted_sent_boundary_idx
 
 
@@ -435,10 +427,9 @@ def chunk_preserving_sentence_structure(
                 add_special_tokens,
             )
             chunk_boundaries.append(adjusted_sent_boundary_idx)
-            print(f"Chunk created: {chunk}")
-            print(f"Adjusted sentence boundaries: {adjusted_sent_boundary_idx}")
+
             # Apply overlap: carry over a fraction of sentences to the next chunk.
-            overlap_count = math.ceil(len(current_chunk_sent_idx) * overlap)
+            overlap_count = get_overlap_count(overlap, len(current_chunk_sent_idx))
             # Make sure at least one sentence is carried over if possible.
             if overlap_count < 1 and len(current_chunk_sent_idx) > 1:
                 overlap_count = 1
@@ -474,13 +465,11 @@ def chunk_preserving_sentence_structure(
             add_special_tokens,
         )
         chunk_boundaries.append(adjusted_sent_boundary_idx)
-        print(f"Final chunk created: {chunk}")
-        print(f"Final adjusted sentence boundaries: {adjusted_sent_boundary_idx}")
 
     padded_chunks = _pad(
         chunks, tokenizer.pad_token_id, how=padding, max_length=max_length
     )
-    print(f"Padded chunks: {padded_chunks}")
+
     return {
         "input_ids": padded_chunks,
         "attention_mask": padded_chunks != tokenizer.pad_token_id,
@@ -489,12 +478,313 @@ def chunk_preserving_sentence_structure(
     }
 
 
+def get_sentence_phrase_idx(
+    input_ids: torch.Tensor,
+    sent_boundary_idx: list[torch.Tensor],
+    phrase_sizes: list | tuple | int,
+    overlap: int | float | list | dict = 0.5,
+    sequence_idx: torch.Tensor | None = None,
+) -> dict:
+    """Get phrase indices while preserving sentence structure.
+
+    Parameters
+    ----------
+    input_ids : torch.Tensor
+        Tensor containing input token IDs.
+    sent_boundary_idx : list of torch.Tensor
+        List of tensors containing sentence boundary indices.
+    phrase_sizes : list, tuple, or int
+        Sizes of the phrases to extract.
+    overlap : int, float, list, or dict, optional
+        Overlap between phrases (number or fraction of sentences).
+        Default is 0.5.
+    sequence_idx : torch.Tensor or None, optional
+        Tensor containing sequence indices. If None, a default sequence index is generated.
+
+    Returns
+    -------
+    dict
+        Dictionary containing the following keys:
+        - "phrase_idx": List of tensors with phrase indices.
+        - "phrase_ids": List of tensors with phrase token IDs.
+        - "phrase_size": Tensor with sizes of the phrases.
+        - "sequence_idx": Tensor with sequence indices.
+
+    Raises
+    ------
+    ValueError
+        If `sequence_idx` length does not match the number of rows in `input_ids`.
+        If `sent_boundary_idx` length does not match the size of `input_ids`.
+
+    Notes
+    -----
+    This function processes each sentence boundary index and extracts phrases of specified sizes,
+    ensuring that the sentence structure is preserved. The overlap between phrases can be controlled
+    using the `overlap` parameter.
+    """
+
+    if sequence_idx is None:
+        sequence_idx = torch.arange(input_ids.size(0), device=input_ids.device)
+    else:
+        if len(sequence_idx) != input_ids.size(0):
+            raise ValueError(
+                f"`sequence_idx` must have the same number of rows as `input_ids` "
+                f"({len(sequence_idx)} != {input_ids.size(0)})."
+            )
+        if sequence_idx.device != input_ids.device:
+            sequence_idx = sequence_idx.to(input_ids.device)
+    if len(sent_boundary_idx) != input_ids.size(0):
+        raise ValueError(
+            f"Length of `sent_boundary_idx` ({len(sent_boundary_idx)}) "
+            f"must match size of `input_ids` ({input_ids.size(0)})."
+        )
+    results = {
+        "phrase_idx": [],
+        "phrase_ids": [],
+        "phrase_size": [],
+        "sequence_idx": [],
+    }
+    if isinstance(phrase_sizes, int):
+        phrase_sizes = [phrase_sizes]
+    for i, size in enumerate(phrase_sizes):
+
+        overlap_sents = get_overlap_count(overlap, size, i)
+        step = size - overlap_sents
+        for j, boundary_idx in enumerate(sent_boundary_idx):
+
+            sent_idx = torch.arange(len(boundary_idx), device=input_ids.device)
+            phrase_start_idx = torch.arange(0, len(sent_idx), step)
+            phrase_stop_idx = torch.clamp(
+                phrase_start_idx + size, max=sent_idx[-1]
+            ).unique_consecutive()
+            phrase_start_idx = phrase_start_idx[: len(phrase_stop_idx)]
+            phrase_start_stop_idx = torch.stack(
+                [phrase_start_idx, phrase_stop_idx], dim=1
+            )
+            del phrase_start_idx, phrase_stop_idx
+
+            phrase_token_start_stop_idx = torch.stack(
+                [
+                    boundary_idx[phrase_start_stop_idx[:, 0], 0],
+                    boundary_idx[phrase_start_stop_idx[:, 1] - 1, 1],
+                ],
+                dim=1,
+            )
+
+            phrase_idx = [
+                torch.arange(start, stop, device=input_ids.device)
+                for start, stop in phrase_token_start_stop_idx
+            ]
+            phrase_ids = [input_ids[j, idx] for idx in phrase_idx]
+            results["phrase_idx"].extend(phrase_idx)
+            results["phrase_ids"].extend(phrase_ids)
+            results["phrase_size"].extend([len(ids) for ids in phrase_ids])
+            results["sequence_idx"].append(
+                sequence_idx[j].repeat_interleave(len(phrase_ids))
+            )
+    results["phrase_size"] = torch.tensor(
+        results["phrase_size"], device=input_ids.device
+    )
+    results["sequence_idx"] = torch.cat(results["sequence_idx"])
+    assert (
+        len(results["phrase_idx"])
+        == len(results["phrase_ids"])
+        == results["phrase_size"].numel()
+        == results["sequence_idx"].numel()
+    )
+
+    return results
+
+
+def _compute_sentence_phrase_embeds_slow(
+    input_ids: torch.Tensor,
+    token_embeds: torch.Tensor,
+    sent_boundary_idx: list[torch.Tensor],
+    sequence_idx: torch.Tensor,
+    tokenizer,
+    phrase_sizes: int | list | tuple = 2,
+    overlap: int | float | list | dict = 0.5,
+) -> dict[str, torch.Tensor]:
+    """
+    Compute sentence phrase embeddings.
+
+    Parameters
+    ----------
+    input_ids : torch.Tensor
+        Tensor containing input token IDs.
+    token_embeds : torch.Tensor
+        Tensor containing token embeddings.
+    sent_boundary_idx : list[torch.Tensor]
+        List of tensors indicating sentence boundary indices.
+    sequence_idx : torch.Tensor
+        Tensor containing sequence indices.
+    tokenizer : object
+        Tokenizer object used to identify special tokens.
+    phrase_sizes : int or list or tuple, optional
+        Size(s) of the phrases to be considered. Default is 2.
+    overlap : int or float or list or dict, optional
+        Overlap between phrases. Default is 0.5.
+
+    Returns
+    -------
+    dict[str, torch.Tensor]
+        Dictionary containing the following keys:
+        - "sequence_idx": Tensor of sequence indices.
+        - "phrase_ids": Tensor of phrase IDs.
+        - "phrase_size": Tensor of phrase sizes.
+        - "phrase_embeds": Tensor of phrase embeddings.
+    """
+    phrase_data = get_sentence_phrase_idx(
+        input_ids,
+        sent_boundary_idx,
+        phrase_sizes=phrase_sizes,
+        overlap=overlap,
+        sequence_idx=sequence_idx,
+    )
+    # Mask all special tokens
+    special_tokens_mask = torch.isin(
+        input_ids,
+        torch.tensor(tokenizer.all_special_ids, device=input_ids.device),
+        invert=True,
+    ).to(torch.uint8)
+    results = {
+        "sequence_idx": phrase_data["sequence_idx"],
+        "phrase_ids": phrase_data["phrase_ids"],
+        "phrase_size": phrase_data["phrase_size"],
+        "phrase_embeds": [],
+    }
+    masked_token_embeds = token_embeds * special_tokens_mask.unsqueeze(-1)
+    for seq_idx, phrase_idx in zip(
+        phrase_data["sequence_idx"], phrase_data["phrase_idx"]
+    ):
+        divisor = special_tokens_mask[seq_idx, phrase_idx].sum().clamp(min=1)
+        embed = masked_token_embeds[seq_idx, phrase_idx].sum(dim=0) / divisor
+        results["phrase_embeds"].append(embed)
+
+    results["phrase_embeds"] = torch.vstack(results["phrase_embeds"])
+    assert (
+        len(results["phrase_ids"])
+        == results["phrase_embeds"].size(0)
+        == results["sequence_idx"].numel()
+        == results["phrase_size"].numel()
+    )
+    return results
+
+
+def _compute_sentence_phrase_embeds(
+    input_ids: torch.Tensor,
+    token_embeds: torch.Tensor,
+    sent_boundary_idx: list[torch.Tensor],
+    sequence_idx: torch.Tensor,
+    tokenizer,
+    phrase_sizes: int | list | tuple = 2,
+    overlap: int | float | list | dict = 0.5,
+) -> dict[str, torch.Tensor]:
+    """
+    Compute embeddings for phrases within sentences using token embeddings.
+    Parameters
+    ----------
+    input_ids : torch.Tensor
+        Tensor containing input token IDs.
+    token_embeds : torch.Tensor
+        Tensor containing token embeddings.
+    sent_boundary_idx : list[torch.Tensor]
+        List of tensors indicating sentence boundary indices.
+    sequence_idx : torch.Tensor
+        Tensor containing sequence indices.
+    tokenizer : PreTrainedTokenizer
+        Tokenizer used to process the input text.
+    phrase_sizes : int or list or tuple, optional
+        Number of sentences per phrase, by default 2.
+    overlap : int or float or list or dict, optional
+        Overlap between phrases (number or fraction of sentences),
+        by default 0.5.
+    Returns
+    -------
+    dict[str, torch.Tensor]
+        Dictionary containing the following keys:
+        - "sequence_idx": Tensor of sequence indices for each phrase.
+        - "phrase_ids": Tensor of phrase IDs.
+        - "phrase_size": Tensor of phrase sizes.
+        - "phrase_embeds": Tensor of computed phrase embeddings.
+    """
+    # Get the phrase grouping information as before
+    phrase_data = get_sentence_phrase_idx(
+        input_ids,
+        sent_boundary_idx,
+        phrase_sizes=phrase_sizes,
+        overlap=overlap,
+        sequence_idx=sequence_idx,
+    )
+
+    # Pad the phrase token indices to the same length using pad_sequence
+    padded_phrase_idx = pad_sequence(
+        phrase_data["phrase_idx"], batch_first=True, padding_value=0
+    )
+    non_pad_mask = pad_sequence(
+        [torch.ones_like(p) for p in phrase_data["phrase_idx"]],
+        batch_first=True,
+        padding_value=0,
+    ).bool()
+
+    # Compute the mask for non-special tokens
+    # Will be combined with `non_pad_mask` later
+    special_tokens_mask = torch.isin(
+        input_ids,
+        torch.tensor(tokenizer.all_special_ids, device=input_ids.device),
+        invert=True,
+    ).bool()
+
+    # -----------------------------------------------------------
+    # Use advanced, vectorized indexing to select tokens
+    # corresponding to each phrase.
+    #
+    # token_embeds:         [batch, tokens, embed_dim]
+    # phrase_sequence_idx:  [num_phrases, 1]
+    # padded_phrase_idx:    [num_phrases, max_phrase_len]
+    #
+    # The resulting tensor will have shape:
+    # [num_phrases, max_phrase_len, embed_dim]
+    # -----------------------------------------------------------
+    phrase_sequence_idx = phrase_data["sequence_idx"].unsqueeze(1)
+    phrase_token_embeds = token_embeds[phrase_sequence_idx, padded_phrase_idx]
+
+    # Similarly, get the corresponding mask values (convert to float for division)
+    valid_token_mask = special_tokens_mask[phrase_sequence_idx, padded_phrase_idx]
+    # Combine the two masks to get the final validity mask
+    valid_token_mask = (valid_token_mask & non_pad_mask).float()
+
+    # Sum the embeddings over the token dimension (taking into account valid positions)
+    summed_embeds = torch.sum(
+        phrase_token_embeds * valid_token_mask.unsqueeze(-1), dim=1
+    )
+    # Compute the divisor: sum of mask values, clamp to at least one.
+    valid_token_count = valid_token_mask.sum(dim=1).clamp(min=1).unsqueeze(-1)
+    phrase_embeds = summed_embeds / valid_token_count
+
+    results = {
+        "sequence_idx": phrase_data["sequence_idx"],
+        "phrase_ids": phrase_data["phrase_ids"],
+        "phrase_size": phrase_data["phrase_size"],
+        "phrase_embeds": phrase_embeds,
+    }
+    assert (
+        len(results["phrase_ids"])
+        == results["phrase_embeds"].size(0)
+        == results["sequence_idx"].numel()
+        == results["phrase_size"].numel()
+    )
+    return results
+
+
 def tokenize_with_sentence_boundaries(
     docs: list[str],
     tokenizer: transformers.PreTrainedTokenizer,
     method: str = "blingfire",
     max_length: int = 512,
+    chunk_docs: bool = True,
     overlap: float = 0.5,
+    return_tensors: str = "pt",
 ) -> dict:
     """Tokenizes documents while preserving sentence boundaries.
     This function takes a list of documents, a tokenizer, and optional parameters
@@ -512,6 +802,8 @@ def tokenize_with_sentence_boundaries(
         The method used for sentence boundary detection, by default "blingfire".
     max_length : int, optional
         The maximum length of each chunk, by default 512.
+    chunk_docs : bool, optional
+        Whether to chunk the documents into smaller pieces, by default True.
     overlap : float, optional
         The amount of overlap between adjacent chunks, by default 0.5.
 
@@ -538,12 +830,12 @@ def tokenize_with_sentence_boundaries(
         docs,
         return_tensors="pt",
         return_overflowing_tokens=False,
-        truncation=False,
+        truncation=not chunk_docs,
         padding="longest",
         max_length=torch.inf,
         stride=None,
         return_offsets_mapping=True,
-        add_special_tokens=False,
+        add_special_tokens=not chunk_docs,
     )
     # Get sentence offsets for each document using the specified method.
     sent_offsets = get_sentence_offsets(docs, method=method)
@@ -570,9 +862,10 @@ def tokenize_with_sentence_boundaries(
             sent_offsets,
         )
     ):
-        print(f"Processing document {i}")
+
+        current_sent_offsets = current_sent_offsets.contiguous()
         # Remove offsets for pad tokens
-        current_token_offsets = current_token_offsets[attention_mask]
+        current_token_offsets = current_token_offsets[attention_mask].contiguous()
         # Use searchsorted to find the indices in token offsets that correspond to the start of each sentence.
         start_idx = torch.searchsorted(
             current_token_offsets[:, 0], current_sent_offsets[:, 0], side="left"
@@ -583,34 +876,69 @@ def tokenize_with_sentence_boundaries(
         )
         # Stack the start and end indices to create a tensor representing sentence boundaries.
         sent_boundary_idx = torch.stack([start_idx, stop_idx], axis=1)
-        print(f"Sentence boundaries: {sent_boundary_idx}")
+
         # Chunk the input IDs while preserving sentence structure.
-        chunked_inputs = chunk_preserving_sentence_structure(
-            input_ids[attention_mask],
-            sent_boundary_idx,
-            tokenizer,
-            sample_idx=i,
-            max_length=max_length,
-            padding="max_length",
-            overlap=overlap,
-            add_special_tokens=True,
-        )
-        # Append the chunked inputs to the results dictionary.
-        results["input_ids"].append(chunked_inputs["input_ids"])
-        results["attention_mask"].append(chunked_inputs["attention_mask"])
-        results["overflow_to_sample_mapping"].append(
-            chunked_inputs["overflow_to_sample_mapping"]
-        )
-        results["sent_boundary_idx"].append(chunked_inputs["sent_boundary_idx"])
+        if chunk_docs:
+            chunked_inputs = chunk_preserving_sentence_structure(
+                input_ids[attention_mask],
+                sent_boundary_idx,
+                tokenizer,
+                sample_idx=i,
+                max_length=max_length,
+                padding="max_length",
+                overlap=overlap,
+                add_special_tokens=True,
+            )
+            # Append the chunked inputs to the results dictionary.
+            results["input_ids"].append(chunked_inputs["input_ids"])
+            results["attention_mask"].append(chunked_inputs["attention_mask"])
+            results["overflow_to_sample_mapping"].append(
+                chunked_inputs["overflow_to_sample_mapping"]
+            )
+            results["sent_boundary_idx"].append(chunked_inputs["sent_boundary_idx"])
+        else:
+            # Add the input IDs, attention mask, and sentence boundary indices to the results dictionary.
+            results["input_ids"].append(input_ids)
+            results["attention_mask"].append(attention_mask)
+            results["sent_boundary_idx"].append(sent_boundary_idx)
 
     # Concatenate the lists of tensors in the results dictionary to create single tensors.
     results["input_ids"] = torch.cat(results["input_ids"])
     results["attention_mask"] = torch.cat(results["attention_mask"])
-    results["overflow_to_sample_mapping"] = torch.cat(
-        results["overflow_to_sample_mapping"]
-    )
+    if "overflow_to_sample_mapping" in results:
+        results["overflow_to_sample_mapping"] = torch.cat(
+            results["overflow_to_sample_mapping"]
+        )
+
     # Flatten the list of lists of sentence boundary indices into a single list.
     results["sent_boundary_idx"] = [y for x in results["sent_boundary_idx"] for y in x]
-
+    inputs = move_or_convert_results(results, return_tensors=return_tensors)
     # Return the results dictionary.
     return results
+
+
+@delayed
+def _tokenize_batch_with_sentence_boundaries(
+    docs: list[str],
+    sample_idx: list[int],
+    tokenizer: transformers.PreTrainedTokenizer,
+    max_length: int = None,
+    chunk_docs: bool = True,
+    doc_overlap: float = 0.5,
+) -> dict:
+    """Tokenize a list of documents into input sequences for the model."""
+    inputs = tokenize_with_sentence_boundaries(
+        docs,
+        tokenizer,
+        method="blingfire",
+        max_length=max_length,
+        chunk_docs=chunk_docs,
+        overlap=doc_overlap,
+        return_tensors="np",
+    )
+    # Globalize overflow_to_sample_mapping
+    if "overflow_to_sample_mapping" in inputs:
+        inputs["overflow_to_sample_mapping"] = np.asarray(sample_idx)[
+            inputs["overflow_to_sample_mapping"]
+        ]
+    return inputs

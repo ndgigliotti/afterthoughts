@@ -14,8 +14,8 @@ from finephrase.utils import (
     get_memory_report,
     get_memory_size,
     get_torch_dtype,
-    norm_jobs,
     normalize,
+    normalize_num_jobs,
     reduce_precision,
     search_phrases,
     timer,
@@ -217,27 +217,27 @@ def test_norm_jobs():
     cpu_count = os.cpu_count()
 
     # Test with None
-    assert norm_jobs(None) == 1
+    assert normalize_num_jobs(None) == 1
 
     # Test with 0
     with pytest.warns(UserWarning, match="`num_jobs` cannot be 0."):
-        assert norm_jobs(0) == 1
+        assert normalize_num_jobs(0) == 1
 
     # Test with positive number less than CPU count
-    assert norm_jobs(2) == 2
+    assert normalize_num_jobs(2) == 2
 
     # Test with positive number greater than CPU count
     with pytest.warns(
         UserWarning,
         match=f"`num_jobs` \\(.*\\) exceeds the number of CPU cores \\({cpu_count}\\).",
     ):
-        assert norm_jobs(cpu_count + 2) == cpu_count
+        assert normalize_num_jobs(cpu_count + 2) == cpu_count
 
     # Test with negative number
-    assert norm_jobs(-1) == cpu_count
+    assert normalize_num_jobs(-1) == cpu_count
 
     # Test with a smaller negative number
-    assert norm_jobs(-3) == cpu_count - 3 + 1
+    assert normalize_num_jobs(-3) == cpu_count - 3 + 1
 
 
 def test_build_faiss_index():

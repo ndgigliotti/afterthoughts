@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import logging
+import math
 import os
 import time
 import warnings
@@ -31,7 +33,94 @@ else:
     pd = None
 
 
-def norm_jobs(num_jobs: int | None) -> int:
+def configure_logging(
+    level: str = "INFO",
+    stream: bool = True,
+    log_file: str | None = None,
+    file_mode: str = "a",
+    format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt: str = "%Y-%m-%d %H:%M:%S",
+) -> None:
+    """Configure the logging for the root logger.
+
+    Parameters
+    ----------
+    level : str
+        Logging level. Default is "INFO".
+    stream : bool
+        Whether to log to the console. Default is True.
+    log_file : str or None
+        Path to a log file. If None, logging to file is disabled. Default is None.
+    file_mode : str
+        Mode to open the log file. Default is "a" (append).
+    format : str
+        Log message format. Default is "%(asctime)s - %(name)s - %(levelname)s - %(message)s".
+    datefmt : str
+        Date format for log messages. Default is "%Y-%m-%d %H:%M:%S".
+    """
+    handlers = []
+    if stream:
+        handlers.append(logging.StreamHandler())
+    if log_file:
+        handlers.append(logging.FileHandler(log_file, mode=file_mode))
+
+    logging.basicConfig(level=level, format=format, datefmt=datefmt, handlers=handlers)
+
+
+def get_overlap_count(
+    overlap: float | int | list | tuple | dict,
+    length: int,
+    length_idx: int | None = None,
+) -> int:
+    """
+    Calculate the number of overlap tokens or sentences given a length.
+
+    Parameters
+    ----------
+    overlap : float, int, list, tuple, or dict
+        The overlap specification. It can be:
+        - float: A fraction in the range [0, 1) representing the proportion of the sequence length.
+        - int: A fixed number of tokens or sentences.
+        - list or tuple: A sequence where the overlap is determined by the index `length_idx`.
+        - dict: A mapping where the overlap is determined by the `length` key.
+    length : int
+        The length of the sequence (number of tokens or sentences).
+    length_idx : int or None, optional
+        The index to use if `overlap` is a list or tuple. Default is None.
+
+    Returns
+    -------
+    int
+        The number of overlap tokens or sentences.
+
+    Raises
+    ------
+    ValueError
+        If `overlap` is a float not in the range [0, 1), or an int not in the range [0, length),
+        or if `overlap` is not a float, int, list, tuple, or dict.
+    """
+    # Check if `overlap` is a float in [0, 1)
+    if isinstance(overlap, float):
+        if overlap < 0 or overlap >= 1:
+            raise ValueError("`overlap` must be within [0, 1).")
+        # Calculate the number of tokens or sentences to overlap
+        overlap_count = math.ceil(length * overlap)
+        if overlap_count == length:
+            overlap_count -= 1
+    elif isinstance(overlap, (list, tuple)):
+        overlap_count = overlap[length_idx]
+    elif isinstance(overlap, dict):
+        overlap_count = overlap[length]
+    elif isinstance(overlap, int):
+        if overlap < 0 or overlap >= length:
+            raise ValueError("`overlap` must be within [0, length).")
+        overlap_count = overlap
+    else:
+        raise ValueError("`overlap` must be a float, list, tuple, dict, or int.")
+    return overlap_count
+
+
+def normalize_num_jobs(num_jobs: int | None) -> int:
     """Return the normalized number of jobs.
 
     Parameters
@@ -458,3 +547,122 @@ def search_phrases(
     if pandas_input:
         hits = {k: v.to_pandas() for k, v in hits.items()}
     return index, hits
+
+
+def move_or_convert_results(
+    results: dict, return_tensors: str = "pt", move_results_to_cpu: bool = False
+):
+    """Move or convert the results to the specified format.
+
+    Parameters
+    ----------
+    results : dict
+        Dictionary containing the results to move or convert.
+    return_tensors : str, optional
+        Format to return the tensors in, either 'pt' for PyTorch tensors or 'np' for NumPy arrays, by default "pt".
+    move_results_to_cpu : bool, optional
+        Whether to move the results to CPU, by default False.
+
+    Returns
+    -------
+    dict
+        Dictionary containing the moved or converted results.
+
+    Raises
+    ------
+    ValueError
+        If `return_tensors` is not 'np' or 'pt'.
+    """
+    if move_results_to_cpu or return_tensors == "np":
+        for key, value in results.items():
+            if isinstance(value, torch.Tensor):
+                results[key] = value.cpu()
+            if (
+                isinstance(value, list)
+                and len(value)
+                and isinstance(value[0], torch.Tensor)
+            ):
+                results[key] = [v.cpu() for v in value]
+    if return_tensors == "np":
+        for key, value in results.items():
+            if isinstance(value, torch.Tensor):
+                results[key] = value.numpy()
+            elif (
+                isinstance(value, list)
+                and len(value)
+                and isinstance(value[0], torch.Tensor)
+            ):
+                results[key] = [v.numpy() for v in value]
+    elif not return_tensors == "pt":
+        raise ValueError("`return_tensors` must be 'np' or 'pt'.")
+    return results
+
+
+def _build_results_dataframe(
+    results: dict, return_frame: str = "polars", convert_to_numpy: bool = True
+) -> tuple[pl.DataFrame | pa.Table, np.ndarray | torch.Tensor]:
+    """
+    Consolidates the results by combining the phrase indices and phrases into a DataFrame
+    and returning it alongside the embeddings.
+
+    Parameters
+    ----------
+    results : dict
+        A dictionary containing the results with keys such as 'sample_idx',
+        'sequence_idx', 'batch_idx', 'phrase_size', 'phrases', and 'phrase_embeds'.
+    return_frame : str, optional
+        The type of DataFrame to return. Options are 'polars', 'pandas', or 'arrow'.
+        Defaults to 'polars'.
+    convert_to_numpy : bool, optional
+        Whether to convert the embeddings to NumPy arrays. Defaults to True.
+
+    Returns
+    -------
+    tuple
+        A tuple with two elements:
+        - A DataFrame containing the phrase indices and phrases.
+        - The phrase embeddings in the specified format.
+
+    Raises
+    ------
+    TypeError
+        If 'phrase_embeds' in results is not a torch.Tensor.
+    """
+    # Get indices and 1d-arrays
+    df = {}
+    keys = [
+        "embed_idx",
+        "sample_idx",
+        "sequence_idx",
+        "batch_idx",
+        "phrase_size",
+        "phrase",
+    ]
+    for key in keys:
+        if key in results:
+            df[key] = results[key]
+    # Convert 1d arrays to NumPy and move to CPU
+    df = move_or_convert_results(df, return_tensors="np", move_results_to_cpu=True)
+    # Convert embeddings if needed
+    embeds = results["phrase_embeds"]
+    if not isinstance(embeds, torch.Tensor):
+        raise TypeError("Phrase embeddings must be torch.Tensor.")
+    if convert_to_numpy:
+        embeds = embeds.cpu().numpy()
+    else:
+        embeds = embeds.cpu()
+    # Build DataFrame
+    if return_frame == "polars":
+        df = pl.DataFrame(df)
+    elif return_frame == "pandas":
+        if _HAS_PANDAS:
+            import pandas as pd
+
+            df = pd.DataFrame(df)
+        else:
+            raise ImportError("Pandas is not installed.")
+    elif return_frame == "arrow":
+        df = pa.Table.from_pydict(df)
+    else:
+        raise ValueError(f"Invalid value for return_frame: {return_frame}")
+    return df, embeds
