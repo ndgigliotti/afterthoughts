@@ -389,7 +389,10 @@ class FinePhrase:
             with torch.cuda.amp.autocast(enabled=self.amp, dtype=self.amp_dtype):
                 progress_loader = tqdm(loader, desc="Encoding")
                 for batch_idx, batch in enumerate(progress_loader):
-                    batch = {k: v.to(self.device) for k, v in batch.items()}
+                    batch = {
+                        k: v.to(self.device, non_blocking=True)
+                        for k, v in batch.items()
+                    }
                     outputs = self.model(
                         input_ids=batch["input_ids"],
                         attention_mask=batch["attention_mask"],
@@ -607,7 +610,7 @@ class FinePhrase:
             batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
-            num_workers=0,
+            num_workers=self._num_loader_jobs,
         )
         batches = self._generate_phrase_embeds(
             loader,

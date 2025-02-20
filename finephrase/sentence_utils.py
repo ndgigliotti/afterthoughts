@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import warnings
 from functools import singledispatch
 
 import blingfire as bf
@@ -192,6 +193,7 @@ def _add_special_tokens(
     return result
 
 
+@torch.no_grad()
 def _pad(
     sequences: list[torch.Tensor],
     pad_value: int,
@@ -238,8 +240,11 @@ def _pad(
     if strategy == "max_length":
         if max_length is None:
             raise ValueError("max_length must be specified when strategy='max_length'.")
-        if any([len(seq) > max_length for seq in sequences]):
-            raise ValueError("Input sequence length exceeds `max_length`.")
+        seq_lengths = torch.tensor([len(seq) for seq in sequences])
+        if any(seq_lengths > max_length):
+            raise ValueError(
+                f"Input sequence length {seq_lengths.max()} exceeds `max_length`."
+            )
         # Pad the first sequence to `max_length`
         sequences[0] = F.pad(
             sequences[0], (0, max_length - len(sequences[0])), value=pad_value
@@ -260,6 +265,7 @@ def _pad(
     return padded_sequences
 
 
+@torch.no_grad()
 def _split_long_sentences(
     sentence_ids: torch.Tensor, max_length: int
 ) -> list[torch.Tensor]:
@@ -299,6 +305,7 @@ def _split_long_sentences(
     return sentence_ids
 
 
+@torch.no_grad()
 def chunk_preserving_sentence_structure(
     input_ids: torch.Tensor,
     sentence_ids: torch.Tensor,
@@ -411,6 +418,16 @@ def chunk_preserving_sentence_structure(
         mask = torch.isin(sentence_ids, torch.tensor(chunk))
         chunk_input_ids = input_ids[mask]
         chunk_sentence_ids = sentence_ids[mask]
+        chunk_length = chunk_input_ids.size(0)
+        if chunk_length > eff_max_length:
+            # Truncate the chunk to fit within the max_length
+            # and raise warning
+            chunk_input_ids = chunk_input_ids[:eff_max_length]
+            chunk_sentence_ids = chunk_sentence_ids[:eff_max_length]
+            warnings.warn(
+                f"Chunk length {chunk_length} exceeds effective max_length {eff_max_length}. "
+                "Truncating to fit.",
+            )
         if add_special_tokens:
             chunk_input_ids = _add_special_tokens(
                 chunk_input_ids, cls_token_id, sep_token_id
@@ -443,12 +460,50 @@ def chunk_preserving_sentence_structure(
     attention_mask = padded_chunks != tokenizer.pad_token_id
     # Create overflow_to_sample_mapping
     overflow_to_sample_mapping = torch.full((len(padded_chunks),), sample_idx)
-    return {
+    results = {
         "input_ids": padded_chunks,
         "attention_mask": attention_mask,
         "overflow_to_sample_mapping": overflow_to_sample_mapping,
         "sentence_ids": padded_sentence_ids,
     }
+    return check_contiguous(results)
+
+
+def check_contiguous(tensors: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Check if all tensors in a dictionary are contiguous.
+
+    Any non-contiguous tensors are converted to contiguous tensors.
+
+    Parameters
+    ----------
+    tensors : dict[str, torch.Tensor]
+        Dictionary of tensors to check.
+
+    Raises
+    ------
+    ValueError
+        If any tensor in the dictionary is not contiguous.
+    """
+    for key, tensor in tensors.items():
+        if not tensor.is_contiguous():
+            print(f"Tensor '{key}' is not contiguous. Converting to contiguous tensor.")
+            tensors[key] = tensor.contiguous()
+    return tensors
+
+
+def check_tensors(
+    tensors: dict[str, torch.Tensor], tokenizer
+) -> dict[str, torch.Tensor]:
+    """Check the shapes, dtypes, contiguity, and token IDs of tensors in a dictionary."""
+    tensors = check_contiguous(tensors)
+    if "input_ids" in tensors:
+        # Check that IDs are within vocabulary range
+        vocab_size = tokenizer.vocab_size
+        if not torch.all(
+            (tensors["input_ids"] >= 0) & (tensors["input_ids"] < vocab_size)
+        ):
+            raise ValueError("Input IDs contain values outside the vocabulary range.")
+    return tensors
 
 
 def get_sentence_phrase_idx(
@@ -573,7 +628,7 @@ def get_sentence_phrase_idx(
         == results["phrase_size"].numel()
         == results["sequence_idx"].numel()
     )
-    return results
+    return check_contiguous(results)
 
 
 def _compute_sentence_phrase_embeds_slow(
@@ -653,6 +708,7 @@ def _compute_sentence_phrase_embeds_slow(
     return results
 
 
+@torch.no_grad()
 def _compute_sentence_phrase_embeds(
     input_ids: torch.Tensor,
     token_embeds: torch.Tensor,
@@ -701,9 +757,6 @@ def _compute_sentence_phrase_embeds(
         pad_token_id=tokenizer.pad_token_id,
     )
 
-    # Pad the phrase token indices to the same length using pad_sequence
-    padded_phrase_idx = phrase_data["phrase_idx"]
-
     # Compute the mask for non-special tokens
     valid_token_mask = torch.isin(
         phrase_data["phrase_ids"],
@@ -716,14 +769,16 @@ def _compute_sentence_phrase_embeds(
     # corresponding to each phrase.
     #
     # token_embeds:         [batch, tokens, embed_dim]
-    # phrase_sequence_idx:  [num_phrases, 1]
+    # batch_sequence_idx:  [num_phrases, 1]
     # phrase_idx:           [num_phrases, max_phrase_len]
     #
     # The resulting tensor will have shape:
     # [num_phrases, max_phrase_len, embed_dim]
     # -----------------------------------------------------------
-    phrase_sequence_idx = phrase_data["sequence_idx"].unsqueeze(1)
-    phrase_token_embeds = token_embeds[phrase_sequence_idx, padded_phrase_idx]
+    batch_sequence_idx = (
+        phrase_data["sequence_idx"].unsqueeze(1) - phrase_data["sequence_idx"][0]
+    )
+    phrase_token_embeds = token_embeds[batch_sequence_idx, phrase_data["phrase_idx"]]
 
     # Sum the embeddings over the token dimension
     # (taking into account only valid positions)
@@ -796,6 +851,7 @@ def _as_sentence_ids(
     return token_type_ids.contiguous()
 
 
+@torch.no_grad()
 def tokenize_with_sentence_boundaries(
     docs: list[str],
     tokenizer: transformers.PreTrainedTokenizer,
