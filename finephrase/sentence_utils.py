@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from functools import singledispatch
+
 import blingfire as bf
 import numpy as np
 import torch
@@ -191,133 +193,122 @@ def _add_special_tokens(
 
 
 def _pad(
-    input_ids: list[torch.Tensor],
-    pad_token_id: int,
-    how: str = "longest",
+    sequences: list[torch.Tensor],
+    pad_value: int,
+    strategy: str = "longest",
     max_length: int = None,
 ) -> torch.Tensor | list[torch.Tensor]:
     """Pads a list of sequences to a uniform length.
 
     Parameters
     ----------
-    input_ids : list of torch.Tensor
+    sequences : list of torch.Tensor
         A list of sequences to pad. Each sequence should be a list or a PyTorch tensor of numerical IDs.
-    pad_token_id : int
-        The ID to use for padding.
-    how : str, optional
+    pad_value : int
+        The value to use for padding.
+    strategy : str, optional
         The padding strategy to use. Can be one of the following:
         - 'longest': Pad all sequences to the length of the longest sequence in the list.
         - 'max_length': Pad all sequences to a specified maximum length. `max_length` must be provided.
         - None: No padding is applied. The input sequences are returned as is.
         (default: 'longest')
     max_length : int, optional
-        The maximum length to pad sequences to when `how='max_length'`. Must be provided if `how='max_length'`. (default: None)
+        The maximum length to pad sequences to when `strategy='max_length'`. Must be provided if `strategy='max_length'`. (default: None)
 
     Returns
     -------
     torch.Tensor or list of torch.Tensor
-        A PyTorch tensor containing the padded sequences if padding is applied, or the original list of sequences if `how=None`.
-        If padding is applied, the tensor has shape (len(input_ids), max_len), where max_len is the length of the longest sequence
-        in `input_ids` or `max_length` if specified.
+        A PyTorch tensor containing the padded sequences if padding is applied, or the original list of sequences if `strategy=None`.
+        If padding is applied, the tensor has shape (len(sequences), max_len), where max_len is the length of the longest sequence
+        in `sequences` or `max_length` if specified.
 
     Raises
     ------
     ValueError
-        If `input_ids` is empty.
+        If `sequences` is empty.
     ValueError
-        If `how='max_length'` and `max_length` is not specified.
+        If `strategy='max_length'` and `max_length` is not specified.
     ValueError
-        If `how='max_length'` and any sequence in `input_ids` exceeds `max_length`.
+        If `strategy='max_length'` and any sequence in `sequences` exceeds `max_length`.
     ValueError
-        If `how` is not one of 'longest', 'max_length', or None.
+        If `strategy` is not one of 'longest', 'max_length', or None.
     """
-    if not len(input_ids):
+    if not len(sequences):
         raise ValueError("Input list must not be empty.")
-    if how == "max_length":
+    if strategy == "max_length":
         if max_length is None:
-            raise ValueError("max_length must be specified when how='max_length'.")
-        if any([len(ids) > max_length for ids in input_ids]):
+            raise ValueError("max_length must be specified when strategy='max_length'.")
+        if any([len(seq) > max_length for seq in sequences]):
             raise ValueError("Input sequence length exceeds `max_length`.")
         # Pad the first sequence to `max_length`
-        input_ids[0] = F.pad(
-            input_ids[0], (0, max_length - len(input_ids[0])), value=pad_token_id
+        sequences[0] = F.pad(
+            sequences[0], (0, max_length - len(sequences[0])), value=pad_value
         )
         # Pad the remaining sequences to the length of the first sequence
-        padded_ids = pad_sequence(
-            input_ids, batch_first=True, padding_value=pad_token_id
+        padded_sequences = pad_sequence(
+            sequences, batch_first=True, padding_value=pad_value
         )
-    elif how == "longest":
-        padded_ids = pad_sequence(
-            input_ids, batch_first=True, padding_value=pad_token_id
+    elif strategy == "longest":
+        padded_sequences = pad_sequence(
+            sequences, batch_first=True, padding_value=pad_value
         )
-    elif how is None:
-        padded_ids = input_ids
+    elif strategy is None:
+        padded_sequences = sequences
     else:
-        raise ValueError(f"Invalid value '{how}' for `how`.")
+        raise ValueError(f"Invalid value '{strategy}' for `strategy`.")
 
-    return padded_ids
+    return padded_sequences
 
 
-def _adjust_sent_boundary_idx(
-    sent_boundary_idx: torch.Tensor,
-    start_idx: int,
-    chunk: torch.Tensor,
-    current_chunk_sent_idx: list[int],
-    cls_token_id: int = None,
-    sep_token_id: int = None,
-    add_special_tokens: bool = True,
-) -> torch.Tensor:
-    """Adjusts sentence boundary indices relative to a chunk of text.
-
-    This function takes sentence boundary indices from a larger context and adjusts them to be relative to a smaller chunk of text.
-    It also handles the addition of special tokens (CLS and SEP) if specified.
+def _split_long_sentences(
+    sentence_ids: torch.Tensor, max_length: int
+) -> list[torch.Tensor]:
+    """Splits long sentences into smaller segments.
 
     Parameters
     ----------
-    sent_boundary_idx : torch.Tensor
-        A 2D tensor of shape (num_sentences, 2) containing the start and end indices of sentences in the original text.
-    start_idx : int
-        The starting index of the current chunk within the original text.
-    chunk : torch.Tensor
-        A sequence of token IDs representing the current chunk of text.
-    current_chunk_sent_idx : list[int]
-        A list of indices indicating which sentences from the original text are present in the current chunk.
-    cls_token_id : int, optional
-        The ID of the CLS token. If not None, it's assumed a CLS token is added at the beginning of the chunk.
-    sep_token_id : int, optional
-        The ID of the SEP token. If not None, it's assumed a SEP token is added at the end of the chunk.
-    add_special_tokens : bool
-        A boolean indicating whether special tokens (CLS and SEP) are added to the chunk.
+    sentence_ids : torch.Tensor
+        A tensor containing sentence IDs.
+    max_length : int
+        The maximum length for each segment.
 
     Returns
     -------
-    torch.Tensor
-        A 2D tensor of shape (num_sentences_in_chunk, 2) containing the adjusted start and end indices of sentences within the chunk.
-
+    list of torch.Tensor
+        A list of tensors, each containing a segment of the original sentence IDs.
     """
-
-    current_chunk_sent_idx = torch.as_tensor(current_chunk_sent_idx)
-    adjusted_sent_boundary_idx = sent_boundary_idx[current_chunk_sent_idx] - start_idx
-    if add_special_tokens:
-        if cls_token_id is not None:
-            adjusted_sent_boundary_idx += 1
-        adjusted_sent_boundary_idx[0, 0] = 0
-        if sep_token_id is not None:
-            adjusted_sent_boundary_idx[-1, 1] = len(chunk)
-        adjusted_sent_boundary_idx = adjusted_sent_boundary_idx.clamp(0, len(chunk))
-
-    return adjusted_sent_boundary_idx
+    sent_lengths = torch.bincount(sentence_ids[sentence_ids != -1])
+    if torch.any(sent_lengths > max_length):
+        masks = [sentence_ids == i for i in range(len(sent_lengths))]
+        for i in reversed(range(len(masks))):
+            mask = masks[i]
+            if mask.sum() > max_length:
+                del masks[i]
+                # Divide the sentence into smaller segments
+                subsegment_id = torch.arange(0, mask.sum()) // max_length
+                # Create a new mask for each subsegment
+                for sub_id in reversed(torch.unique(subsegment_id)):
+                    new_mask = torch.zeros_like(mask, dtype=torch.bool)
+                    new_mask[mask] = subsegment_id == sub_id
+                    # Insert the new mask into the list of masks
+                    masks.insert(i, new_mask)
+        # Combine the masks into a single tensor of sentence IDs
+        sentence_ids = torch.zeros_like(sentence_ids)
+        for i, mask in enumerate(masks):
+            sentence_ids[mask] = i
+    return sentence_ids
 
 
 def chunk_preserving_sentence_structure(
     input_ids: torch.Tensor,
-    sent_boundary_idx: torch.Tensor,
+    sentence_ids: torch.Tensor,
     tokenizer: transformers.PreTrainedTokenizer,
     sample_idx: int,
     max_length: int = 512,
     overlap: float = 0.5,
     add_special_tokens: bool = True,
     padding: str = "max_length",
+    reset_sentence_ids_on_overflow: bool = False,
 ) -> dict:
     """Chunk a sequence of input IDs while preserving sentence structure.
     This function splits a long sequence of input IDs into smaller chunks,
@@ -328,9 +319,8 @@ def chunk_preserving_sentence_structure(
     ----------
     input_ids : list of int
         List of input IDs representing the tokenized text.
-    sent_boundary_idx : list of tuple of int
-        List of tuples, where each tuple contains the start and end index
-        of a sentence within the `input_ids`.
+    sentence_ids : list of int
+        List of sentence IDs indicating to which sentence each token belongs.
     tokenizer : transformers.PreTrainedTokenizer
         The tokenizer used to encode the input text.  It is used to retrieve
         special tokens (e.g., CLS, SEP, PAD).
@@ -349,6 +339,9 @@ def chunk_preserving_sentence_structure(
         The padding strategy to use. Must be one of 'max_length', 'longest', or None.
         If 'max_length', all chunks are padded to `max_length`. If 'longest', chunks
         are padded to the length of the longest chunk in the batch. If None, no padding is applied, by default "max_length".
+    reset_sentence_ids_on_overflow : bool, optional
+        Whether to reset sentence IDs to start from 0 for each chunk. If False, sentence IDs
+        are adjusted to be relative to the start of each chunk. Default is False.
 
     Returns
     -------
@@ -360,9 +353,8 @@ def chunk_preserving_sentence_structure(
                 List of attention masks corresponding to the padded input IDs.
             - "overflow_to_sample_mapping": torch.Tensor
                 Tensor mapping each chunk to the original sample index.
-            - "sent_boundary_idx": list of list of tuple of int
-                List of sentence boundary indices for each chunk, adjusted to the
-                chunk's local indexing.
+            - "sentence_ids": list of list of int
+                List of sentence IDs for each chunk, adjusted to the chunk's local indexing.
 
     Raises
     ------
@@ -375,7 +367,7 @@ def chunk_preserving_sentence_structure(
     -----
     - The function prioritizes preserving sentence boundaries when creating chunks.
     - Overlapping chunks can be created by specifying a value for the `overlap` parameter.
-    - The `sent_boundary_idx` in the output is adjusted to be relative to the start of each chunk.
+    - The `sentence_ids` in the output is adjusted to be relative to the start of each chunk.
     """
     # Basic validation
     if padding not in ["max_length", "longest", None]:
@@ -388,102 +380,84 @@ def chunk_preserving_sentence_structure(
     sep_token_id = tokenizer.sep_token_id or tokenizer.eos_token_id
     num_specials = sum(x is not None for x in [cls_token_id, sep_token_id])
     eff_max_length = max_length - num_specials if add_special_tokens else max_length
-
-    # Compute each sentence length (in tokens) from sent_boundary_idx.
-    sent_lengths = [end - start for start, end in sent_boundary_idx]
+    sentence_ids = _split_long_sentences(sentence_ids, eff_max_length)
+    sent_lengths = torch.bincount(sentence_ids[sentence_ids != -1])
+    unique_sent_ids = torch.unique(sentence_ids[sentence_ids != -1])
 
     chunks = []
-    chunk_boundaries = []
-    current_chunk_sent_idx = []  # List of sentence indices for current chunk
-    current_length = 0
-    i = 0
-    n_sent = len(sent_lengths)
-
-    while i < n_sent:
-        this_length = sent_lengths[i]
-        # Always include at least one sentence per chunk.
-        if current_length + this_length <= eff_max_length or not current_chunk_sent_idx:
-            current_chunk_sent_idx.append(i)
-            current_length += this_length
-            i += 1
+    current_chunk = []
+    current_length = lambda: sent_lengths[current_chunk].sum()
+    next_sent_id = 0
+    while next_sent_id in unique_sent_ids:
+        if current_length() + sent_lengths[next_sent_id] <= eff_max_length:
+            current_chunk.append(next_sent_id)
+        elif current_chunk:
+            chunks.append(current_chunk)
+            overlap_start = get_overlap_count(overlap, len(current_chunk))
+            current_chunk = current_chunk[overlap_start:] + [next_sent_id]
         else:
-            # Build chunk from the current sentences.
-            start_idx = sent_boundary_idx[current_chunk_sent_idx[0]][0]
-            end_idx = sent_boundary_idx[current_chunk_sent_idx[-1]][1]
-            chunk = input_ids[start_idx:end_idx]
-            if add_special_tokens:
-                chunk = _add_special_tokens(chunk, cls_token_id, sep_token_id)
-            # Ensure chunk length does not exceed max_length.
-            if len(chunk) > max_length:
-                chunk = chunk[:max_length]
-            chunks.append(chunk)
-            adjusted_sent_boundary_idx = _adjust_sent_boundary_idx(
-                sent_boundary_idx,
-                start_idx,
-                chunk,
-                current_chunk_sent_idx,
-                cls_token_id,
-                sep_token_id,
-                add_special_tokens,
+            raise RuntimeError(
+                f"Sentence ID {next_sent_id} exceeds max_length {max_length}."
             )
-            chunk_boundaries.append(adjusted_sent_boundary_idx)
-
-            # Apply overlap: carry over a fraction of sentences to the next chunk.
-            overlap_count = get_overlap_count(overlap, len(current_chunk_sent_idx))
-            # Make sure at least one sentence is carried over if possible.
-            if overlap_count < 1 and len(current_chunk_sent_idx) > 1:
-                overlap_count = 1
-            # Reset current chunk with the overlapping sentences.
-            if overlap_count:
-                overlap_start = current_chunk_sent_idx[-overlap_count]
-                current_chunk_sent_idx = list(
-                    range(overlap_start, current_chunk_sent_idx[-1] + 1)
-                )
-                # Recompute the current_length based on the carried sentences.
-                current_length = sum(sent_lengths[j] for j in current_chunk_sent_idx)
-            else:
-                current_chunk_sent_idx = []
-                current_length = 0
-
-    # Process any remaining sentences.
-    if current_chunk_sent_idx:
-        start_idx = sent_boundary_idx[current_chunk_sent_idx[0]][0]
-        end_idx = sent_boundary_idx[current_chunk_sent_idx[-1]][1]
-        chunk = input_ids[start_idx:end_idx]
+        next_sent_id += 1
+    # Process the last chunk
+    if current_chunk:
+        chunks.append(current_chunk)
+        del current_chunk
+    # Create token IDs and sentence IDs for each chunk
+    chunked_input_ids = []
+    chunked_sentence_ids = []
+    for chunk in chunks:
+        mask = torch.isin(sentence_ids, torch.tensor(chunk))
+        chunk_input_ids = input_ids[mask]
+        chunk_sentence_ids = sentence_ids[mask]
         if add_special_tokens:
-            chunk = _add_special_tokens(chunk, cls_token_id, sep_token_id)
-        if len(chunk) > max_length:
-            chunk = chunk[:max_length]
-        chunks.append(chunk)
-        adjusted_sent_boundary_idx = _adjust_sent_boundary_idx(
-            sent_boundary_idx,
-            start_idx,
-            chunk,
-            current_chunk_sent_idx,
-            cls_token_id,
-            sep_token_id,
-            add_special_tokens,
-        )
-        chunk_boundaries.append(adjusted_sent_boundary_idx)
-
+            chunk_input_ids = _add_special_tokens(
+                chunk_input_ids, cls_token_id, sep_token_id
+            )
+            # Extend first sentence ID to include CLS token
+            # and last sentence ID to include SEP token
+            chunk_sentence_ids = torch.cat(
+                [
+                    torch.tensor([chunk_sentence_ids[0]]),
+                    chunk_sentence_ids,
+                    torch.tensor([chunk_sentence_ids[-1]]),
+                ]
+            )
+        chunked_input_ids.append(chunk_input_ids)
+        if reset_sentence_ids_on_overflow:
+            # Reset sentence IDs to start from 0 for each chunk
+            chunk_sentence_ids = chunk_sentence_ids - chunk_sentence_ids[0]
+        chunked_sentence_ids.append(chunk_sentence_ids)
+    # Pad the chunks
     padded_chunks = _pad(
-        chunks, tokenizer.pad_token_id, how=padding, max_length=max_length
+        chunked_input_ids,
+        tokenizer.pad_token_id,
+        strategy=padding,
+        max_length=max_length,
     )
-
+    padded_sentence_ids = _pad(
+        chunked_sentence_ids, -1, strategy=padding, max_length=max_length
+    )
+    # Create attention mask
+    attention_mask = padded_chunks != tokenizer.pad_token_id
+    # Create overflow_to_sample_mapping
+    overflow_to_sample_mapping = torch.full((len(padded_chunks),), sample_idx)
     return {
         "input_ids": padded_chunks,
-        "attention_mask": padded_chunks != tokenizer.pad_token_id,
-        "overflow_to_sample_mapping": torch.full((len(padded_chunks),), sample_idx),
-        "sent_boundary_idx": chunk_boundaries,
+        "attention_mask": attention_mask,
+        "overflow_to_sample_mapping": overflow_to_sample_mapping,
+        "sentence_ids": padded_sentence_ids,
     }
 
 
 def get_sentence_phrase_idx(
     input_ids: torch.Tensor,
-    sent_boundary_idx: list[torch.Tensor],
+    sentence_ids: torch.Tensor,
     phrase_sizes: list | tuple | int,
     overlap: int | float | list | dict = 0.5,
     sequence_idx: torch.Tensor | None = None,
+    pad_token_id: int = 0,
 ) -> dict:
     """Get phrase indices while preserving sentence structure.
 
@@ -491,8 +465,8 @@ def get_sentence_phrase_idx(
     ----------
     input_ids : torch.Tensor
         Tensor containing input token IDs.
-    sent_boundary_idx : list of torch.Tensor
-        List of tensors containing sentence boundary indices.
+    sentence_ids : torch.Tensor
+        Tensor containing sentence IDs, padded with -1.
     phrase_sizes : list, tuple, or int
         Sizes of the phrases to extract.
     overlap : int, float, list, or dict, optional
@@ -500,21 +474,26 @@ def get_sentence_phrase_idx(
         Default is 0.5.
     sequence_idx : torch.Tensor or None, optional
         Tensor containing sequence indices. If None, a default sequence index is generated.
+        Default is None.
+    pad_token_id : int, optional
+        Token ID used for padding phrase token IDs. Default is 0.
 
     Returns
     -------
     dict
         Dictionary containing the following keys:
-        - "phrase_idx": List of tensors with phrase indices.
-        - "phrase_ids": List of tensors with phrase token IDs.
-        - "phrase_size": Tensor with sizes of the phrases.
-        - "sequence_idx": Tensor with sequence indices.
+        - "phrase_idx": 0-padded matrix of phrase indices.
+        - "phrase_ids": Padded matrix of phrase token IDs.
+        - "sentence_ids": Padded matrix of sentence IDs.
+        - "attention_mask": Attention mask for the phrase indices.
+        - "phrase_size": Sizes of the phrases (in sentences).
+        - "sequence_idx": Sequence indices.
 
     Raises
     ------
     ValueError
         If `sequence_idx` length does not match the number of rows in `input_ids`.
-        If `sent_boundary_idx` length does not match the size of `input_ids`.
+        If `sentence_ids` length does not match the size of `input_ids`.
 
     Notes
     -----
@@ -522,7 +501,6 @@ def get_sentence_phrase_idx(
     ensuring that the sentence structure is preserved. The overlap between phrases can be controlled
     using the `overlap` parameter.
     """
-
     if sequence_idx is None:
         sequence_idx = torch.arange(input_ids.size(0), device=input_ids.device)
     else:
@@ -533,73 +511,75 @@ def get_sentence_phrase_idx(
             )
         if sequence_idx.device != input_ids.device:
             sequence_idx = sequence_idx.to(input_ids.device)
-    if len(sent_boundary_idx) != input_ids.size(0):
+    if len(sentence_ids) != input_ids.size(0):
         raise ValueError(
-            f"Length of `sent_boundary_idx` ({len(sent_boundary_idx)}) "
+            f"Length of `sentence_ids` ({len(sentence_ids)}) "
             f"must match size of `input_ids` ({input_ids.size(0)})."
         )
     results = {
         "phrase_idx": [],
         "phrase_ids": [],
+        "sentence_ids": [],
         "phrase_size": [],
         "sequence_idx": [],
     }
     if isinstance(phrase_sizes, int):
         phrase_sizes = [phrase_sizes]
     for i, size in enumerate(phrase_sizes):
-
         overlap_sents = get_overlap_count(overlap, size, i)
         step = size - overlap_sents
-        for j, boundary_idx in enumerate(sent_boundary_idx):
-
-            sent_idx = torch.arange(len(boundary_idx), device=input_ids.device)
-            phrase_start_idx = torch.arange(0, len(sent_idx), step)
-            phrase_stop_idx = torch.clamp(
-                phrase_start_idx + size, max=sent_idx[-1]
-            ).unique_consecutive()
-            phrase_start_idx = phrase_start_idx[: len(phrase_stop_idx)]
-            phrase_start_stop_idx = torch.stack(
-                [phrase_start_idx, phrase_stop_idx], dim=1
-            )
-            del phrase_start_idx, phrase_stop_idx
-
-            phrase_token_start_stop_idx = torch.stack(
-                [
-                    boundary_idx[phrase_start_stop_idx[:, 0], 0],
-                    boundary_idx[phrase_start_stop_idx[:, 1] - 1, 1],
-                ],
-                dim=1,
-            )
-
-            phrase_idx = [
-                torch.arange(start, stop, device=input_ids.device)
-                for start, stop in phrase_token_start_stop_idx
+        for seq_input_ids, seq_sentence_ids, seq_idx in zip(
+            input_ids, sentence_ids, sequence_idx
+        ):
+            unique_sent_ids = torch.unique(seq_sentence_ids[seq_sentence_ids != -1])
+            eff_size = min(size, len(unique_sent_ids))
+            phrase_sent_ids = unique_sent_ids.unfold(0, eff_size, step)
+            phrase_masks = [
+                torch.isin(seq_sentence_ids, phrase) for phrase in phrase_sent_ids
             ]
-            phrase_ids = [input_ids[j, idx] for idx in phrase_idx]
-            results["phrase_idx"].extend(phrase_idx)
+            phrase_ids = [seq_input_ids[mask] for mask in phrase_masks]
+            phrase_idx = [
+                torch.nonzero(mask, as_tuple=False).squeeze() for mask in phrase_masks
+            ]
             results["phrase_ids"].extend(phrase_ids)
-            results["phrase_size"].extend([len(ids) for ids in phrase_ids])
-            results["sequence_idx"].append(
-                sequence_idx[j].repeat_interleave(len(phrase_ids))
+            results["sentence_ids"].extend(
+                [seq_sentence_ids[mask] for mask in phrase_masks]
             )
-    results["phrase_size"] = torch.tensor(
-        results["phrase_size"], device=input_ids.device
-    )
+            results["phrase_idx"].extend(phrase_idx)
+            results["phrase_size"].append(
+                torch.full((len(phrase_ids),), eff_size, device=input_ids.device)
+            )
+            results["sequence_idx"].append(seq_idx.repeat_interleave(len(phrase_ids)))
+    results["phrase_size"] = torch.cat(results["phrase_size"])
     results["sequence_idx"] = torch.cat(results["sequence_idx"])
+    results["attention_mask"] = pad_sequence(
+        [torch.ones_like(p) for p in results["phrase_idx"]],
+        batch_first=True,
+        padding_value=0,
+    ).to(input_ids.device)
+    results["phrase_idx"] = pad_sequence(
+        results["phrase_idx"], batch_first=True, padding_value=0
+    ).to(input_ids.device)
+    results["phrase_ids"] = pad_sequence(
+        results["phrase_ids"], batch_first=True, padding_value=pad_token_id
+    ).to(input_ids.device)
+    results["sentence_ids"] = pad_sequence(
+        results["sentence_ids"], batch_first=True, padding_value=-1
+    ).to(input_ids.device)
     assert (
-        len(results["phrase_idx"])
-        == len(results["phrase_ids"])
+        results["phrase_idx"].size(0)
+        == results["phrase_ids"].size(0)
+        == results["sentence_ids"].size(0)
         == results["phrase_size"].numel()
         == results["sequence_idx"].numel()
     )
-
     return results
 
 
 def _compute_sentence_phrase_embeds_slow(
     input_ids: torch.Tensor,
     token_embeds: torch.Tensor,
-    sent_boundary_idx: list[torch.Tensor],
+    sent_boundary_idx: list[torch.Tensor] | torch.Tensor,
     sequence_idx: torch.Tensor,
     tokenizer,
     phrase_sizes: int | list | tuple = 2,
@@ -614,8 +594,10 @@ def _compute_sentence_phrase_embeds_slow(
         Tensor containing input token IDs.
     token_embeds : torch.Tensor
         Tensor containing token embeddings.
-    sent_boundary_idx : list[torch.Tensor]
+    sent_boundary_idx : list[torch.Tensor] or torch.Tensor
         List of tensors indicating sentence boundary indices.
+        Alternatively, a padded tensor of shape [batch, max_num_sentences, 2]
+        can be provided, with the pad value being -1.
     sequence_idx : torch.Tensor
         Tensor containing sequence indices.
     tokenizer : object
@@ -674,7 +656,7 @@ def _compute_sentence_phrase_embeds_slow(
 def _compute_sentence_phrase_embeds(
     input_ids: torch.Tensor,
     token_embeds: torch.Tensor,
-    sent_boundary_idx: list[torch.Tensor],
+    sentence_ids: torch.Tensor,
     sequence_idx: torch.Tensor,
     tokenizer,
     phrase_sizes: int | list | tuple = 2,
@@ -682,14 +664,15 @@ def _compute_sentence_phrase_embeds(
 ) -> dict[str, torch.Tensor]:
     """
     Compute embeddings for phrases within sentences using token embeddings.
+
     Parameters
     ----------
     input_ids : torch.Tensor
         Tensor containing input token IDs.
     token_embeds : torch.Tensor
         Tensor containing token embeddings.
-    sent_boundary_idx : list[torch.Tensor]
-        List of tensors indicating sentence boundary indices.
+    sentence_ids : torch.Tensor
+        Tensor containing sentence IDs, padded with -1.
     sequence_idx : torch.Tensor
         Tensor containing sequence indices.
     tokenizer : PreTrainedTokenizer
@@ -711,29 +694,23 @@ def _compute_sentence_phrase_embeds(
     # Get the phrase grouping information as before
     phrase_data = get_sentence_phrase_idx(
         input_ids,
-        sent_boundary_idx,
+        sentence_ids,
         phrase_sizes=phrase_sizes,
         overlap=overlap,
         sequence_idx=sequence_idx,
+        pad_token_id=tokenizer.pad_token_id,
     )
+    print(phrase_data["phrase_ids"].size())
 
     # Pad the phrase token indices to the same length using pad_sequence
-    padded_phrase_idx = pad_sequence(
-        phrase_data["phrase_idx"], batch_first=True, padding_value=0
-    )
-    non_pad_mask = pad_sequence(
-        [torch.ones_like(p) for p in phrase_data["phrase_idx"]],
-        batch_first=True,
-        padding_value=0,
-    ).bool()
+    padded_phrase_idx = phrase_data["phrase_idx"]
 
     # Compute the mask for non-special tokens
-    # Will be combined with `non_pad_mask` later
-    special_tokens_mask = torch.isin(
-        input_ids,
+    valid_token_mask = torch.isin(
+        phrase_data["phrase_ids"],
         torch.tensor(tokenizer.all_special_ids, device=input_ids.device),
         invert=True,
-    ).bool()
+    ).float()
 
     # -----------------------------------------------------------
     # Use advanced, vectorized indexing to select tokens
@@ -741,7 +718,7 @@ def _compute_sentence_phrase_embeds(
     #
     # token_embeds:         [batch, tokens, embed_dim]
     # phrase_sequence_idx:  [num_phrases, 1]
-    # padded_phrase_idx:    [num_phrases, max_phrase_len]
+    # phrase_idx:           [num_phrases, max_phrase_len]
     #
     # The resulting tensor will have shape:
     # [num_phrases, max_phrase_len, embed_dim]
@@ -749,32 +726,75 @@ def _compute_sentence_phrase_embeds(
     phrase_sequence_idx = phrase_data["sequence_idx"].unsqueeze(1)
     phrase_token_embeds = token_embeds[phrase_sequence_idx, padded_phrase_idx]
 
-    # Similarly, get the corresponding mask values (convert to float for division)
-    valid_token_mask = special_tokens_mask[phrase_sequence_idx, padded_phrase_idx]
-    # Combine the two masks to get the final validity mask
-    valid_token_mask = (valid_token_mask & non_pad_mask).float()
-
-    # Sum the embeddings over the token dimension (taking into account valid positions)
+    # Sum the embeddings over the token dimension
+    # (taking into account only valid positions)
     summed_embeds = torch.sum(
         phrase_token_embeds * valid_token_mask.unsqueeze(-1), dim=1
     )
     # Compute the divisor: sum of mask values, clamp to at least one.
     valid_token_count = valid_token_mask.sum(dim=1).clamp(min=1).unsqueeze(-1)
     phrase_embeds = summed_embeds / valid_token_count
-
+    print(phrase_embeds.size())
     results = {
         "sequence_idx": phrase_data["sequence_idx"],
         "phrase_ids": phrase_data["phrase_ids"],
+        "sentence_ids": phrase_data["sentence_ids"],
         "phrase_size": phrase_data["phrase_size"],
         "phrase_embeds": phrase_embeds,
     }
     assert (
-        len(results["phrase_ids"])
+        results["phrase_ids"].size(0)
+        == results["sentence_ids"].size(0)
         == results["phrase_embeds"].size(0)
         == results["sequence_idx"].numel()
         == results["phrase_size"].numel()
     )
     return results
+
+
+def _as_sentence_ids(
+    sent_boundary_idx: torch.Tensor,
+    max_length: int = None,
+    pad_value: int = -1,
+    dtype: torch.dtype = torch.int32,
+) -> torch.Tensor:
+    """
+    Converts sentence boundary indices to token sentence IDs.
+
+    Parameters
+    ----------
+    sent_boundary_idx : torch.Tensor
+        A tensor of shape (N, 2) where N is the number of sentences. Each row
+        contains the start and end indices of a sentence.
+    max_length : int, optional
+        The maximum length of the token sequence. If None, it will be set to
+        the end index of the last sentence. Default is None.
+    pad_value : int, optional
+        The value to use for padding tokens that do not belong to any sentence.
+        Default is -1.
+    dtype : torch.dtype, optional
+        The data type of the output tensor. Default is torch.int32.
+
+    Returns
+    -------
+    torch.Tensor
+        A tensor of shape (max_length,) where each element is the sentence ID
+        of the corresponding token. Tokens that do not belong to any sentence
+        are filled with `pad_value`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> sent_boundary_idx = torch.tensor([[0, 5], [5, 10]])
+    >>> _as_sentence_ids(sent_boundary_idx)
+    tensor([0, 0, 0, 0, 0, 1, 1, 1, 1, 1], dtype=torch.int32)
+    """
+    if max_length is None:
+        max_length = sent_boundary_idx[-1, 1].item()
+    token_type_ids = torch.full((max_length,), pad_value, dtype=dtype)
+    for i, (start, end) in enumerate(sent_boundary_idx):
+        token_type_ids[start:end] = i
+    return token_type_ids.contiguous()
 
 
 def tokenize_with_sentence_boundaries(
@@ -845,7 +865,7 @@ def tokenize_with_sentence_boundaries(
         "input_ids": [],
         "attention_mask": [],
         "overflow_to_sample_mapping": [],
-        "sent_boundary_idx": [],
+        "sentence_ids": [],
     }
 
     # Iterate through each document and its corresponding tokenization and sentence offsets.
@@ -862,8 +882,6 @@ def tokenize_with_sentence_boundaries(
             sent_offsets,
         )
     ):
-
-        current_sent_offsets = current_sent_offsets.contiguous()
         # Remove offsets for pad tokens
         current_token_offsets = current_token_offsets[attention_mask].contiguous()
         # Use searchsorted to find the indices in token offsets that correspond to the start of each sentence.
@@ -876,18 +894,26 @@ def tokenize_with_sentence_boundaries(
         )
         # Stack the start and end indices to create a tensor representing sentence boundaries.
         sent_boundary_idx = torch.stack([start_idx, stop_idx], axis=1)
+        # Check for gaps between sentences
+        if (sent_boundary_idx[1:, 0] - sent_boundary_idx[:-1, 1]).any():
+            raise RuntimeError(
+                "Gaps between sentences detected. "
+                "Please ensure sentence boundaries are correctly identified."
+            )
+        sentence_ids = _as_sentence_ids(sent_boundary_idx)
 
         # Chunk the input IDs while preserving sentence structure.
         if chunk_docs:
             chunked_inputs = chunk_preserving_sentence_structure(
                 input_ids[attention_mask],
-                sent_boundary_idx,
+                sentence_ids,
                 tokenizer,
                 sample_idx=i,
                 max_length=max_length,
                 padding="max_length",
                 overlap=overlap,
                 add_special_tokens=True,
+                reset_sentence_ids_on_overflow=False,
             )
             # Append the chunked inputs to the results dictionary.
             results["input_ids"].append(chunked_inputs["input_ids"])
@@ -895,24 +921,23 @@ def tokenize_with_sentence_boundaries(
             results["overflow_to_sample_mapping"].append(
                 chunked_inputs["overflow_to_sample_mapping"]
             )
-            results["sent_boundary_idx"].append(chunked_inputs["sent_boundary_idx"])
+            results["sentence_ids"].append(chunked_inputs["sentence_ids"])
         else:
             # Add the input IDs, attention mask, and sentence boundary indices to the results dictionary.
             results["input_ids"].append(input_ids)
             results["attention_mask"].append(attention_mask)
-            results["sent_boundary_idx"].append(sent_boundary_idx)
+            results["sentence_ids"].append(sentence_ids)
 
     # Concatenate the lists of tensors in the results dictionary to create single tensors.
     results["input_ids"] = torch.cat(results["input_ids"])
     results["attention_mask"] = torch.cat(results["attention_mask"])
+    results["sentence_ids"] = torch.cat(results["sentence_ids"])
     if "overflow_to_sample_mapping" in results:
         results["overflow_to_sample_mapping"] = torch.cat(
             results["overflow_to_sample_mapping"]
         )
 
-    # Flatten the list of lists of sentence boundary indices into a single list.
-    results["sent_boundary_idx"] = [y for x in results["sent_boundary_idx"] for y in x]
-    inputs = move_or_convert_results(results, return_tensors=return_tensors)
+    results = move_or_convert_results(results, return_tensors=return_tensors)
     # Return the results dictionary.
     return results
 

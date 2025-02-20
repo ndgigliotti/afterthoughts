@@ -25,7 +25,8 @@ import pyarrow as pa
 import torch
 from datasets import Dataset
 from joblib import Parallel, delayed
-from torch.utils.data import DataLoader
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import DataLoader, default_collate
 from tqdm.auto import tqdm
 from transformers import AutoModel, AutoTokenizer
 
@@ -34,6 +35,7 @@ from finephrase.pca import IncrementalPCA
 from finephrase.phrase_utils import _compute_phrase_embeddings, _tokenize_batch
 from finephrase.sentence_utils import (
     _compute_sentence_phrase_embeds,
+    _compute_sentence_phrase_embeds_slow,
     _tokenize_batch_with_sentence_boundaries,
 )
 from finephrase.utils import (
@@ -47,6 +49,20 @@ from finephrase.utils import (
     timer,
     truncate_dims,
 )
+
+
+def collate_fn(batch):
+    """Custom collate function for DataLoader."""
+    keys = set(batch[0].keys())
+    collated_batch = dict.fromkeys(keys)
+    standard_keys = {key for key in keys if key != "sent_boundary_idx"}
+    standard_data = [{key: x[key] for key in standard_keys} for x in batch]
+    collated_batch.update(default_collate(standard_data))
+    if "sent_boundary_idx" in keys:
+        collated_batch["sent_boundary_idx"] = pad_sequence(
+            [x["sent_boundary_idx"] for x in batch], batch_first=True, padding_value=-1
+        )
+    return collated_batch
 
 
 class FinePhrase:
@@ -335,7 +351,7 @@ class FinePhrase:
         else:
             _tokenize = _tokenize_batch
         prefer = "threads" if sentences else "processes"
-        inputs = Parallel(n_jobs=num_jobs, prefer=prefer)(
+        batched_inputs = Parallel(n_jobs=num_jobs, prefer=prefer)(
             _tokenize(
                 batch["text"],
                 batch["sample_idx"],
@@ -349,10 +365,13 @@ class FinePhrase:
             )
         )
         # Concatenate inputs
-        concat_keys = set(inputs[0].keys())
-        if "sent_boundary_idx" in concat_keys:
-            concat_keys.remove("sent_boundary_idx")
-        inputs = {k: np.concatenate([x[k] for x in inputs]) for k in concat_keys}
+        inputs = {k: [] for k in batched_inputs[0].keys()}
+        for key in inputs:
+            if isinstance(batched_inputs[0][key], np.ndarray):
+                inputs[key] = np.concatenate([x[key] for x in batched_inputs])
+            if isinstance(batched_inputs[0][key], list):
+                inputs[key] = [y for x in batched_inputs for y in x[key]]
+                # inputs[key] = pad_sequence([torch.tensor(x) for x in inputs[key]], batch_first=True, padding_value=-1).numpy()
         # Add sequence index
         inputs["sequence_idx"] = np.arange(len(inputs["input_ids"]))
         inputs = Dataset.from_dict(inputs)
@@ -370,10 +389,7 @@ class FinePhrase:
             with torch.cuda.amp.autocast(enabled=self.amp, dtype=self.amp_dtype):
                 progress_loader = tqdm(loader, desc="Encoding")
                 for batch_idx, batch in enumerate(progress_loader):
-                    batch = {
-                        k: v.to(self.device, non_blocking=True)
-                        for k, v in batch.items()
-                    }
+                    batch = {k: v.to(self.device) for k, v in batch.items()}
                     outputs = self.model(
                         input_ids=batch["input_ids"],
                         attention_mask=batch["attention_mask"],
@@ -387,12 +403,13 @@ class FinePhrase:
                         ),
                         "batch_idx": torch.full(batch["sequence_idx"].shape, batch_idx),
                     }
-                    move_or_convert_results(
+                    if "sentence_ids" in batch:
+                        results["sentence_ids"] = batch["sentence_ids"]
+                    yield move_or_convert_results(
                         results,
                         return_tensors=return_tensors,
                         move_results_to_cpu=move_results_to_cpu,
                     )
-                    yield results
 
     def _generate_phrase_embeds(
         self,
@@ -413,12 +430,11 @@ class FinePhrase:
                 results = _compute_sentence_phrase_embeds(
                     batch["input_ids"],
                     token_embeds=batch["token_embeds"],
-                    sent_boundary_idx=batch["sent_boundary_idx"],
+                    sentence_ids=batch["sentence_ids"],
                     sequence_idx=batch["sequence_idx"].to(self.device),
                     tokenizer=self.tokenizer,
                     phrase_sizes=phrase_sizes,
                     overlap=phrase_overlap,
-                    phrase_min_token_ratio=phrase_min_token_ratio,
                 )
             else:
                 results = _compute_phrase_embeddings(
@@ -434,12 +450,11 @@ class FinePhrase:
             results["batch_idx"] = torch.full(
                 results["sequence_idx"].shape, batch["batch_idx"][0]
             )
-            move_or_convert_results(
+            yield move_or_convert_results(
                 results,
                 return_tensors=return_tensors,
                 move_results_to_cpu=move_results_to_cpu,
             )
-            yield results
 
     @property
     def pca_mode(self) -> bool:
@@ -592,7 +607,7 @@ class FinePhrase:
             batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
-            num_workers=self._num_loader_jobs,
+            num_workers=0,
         )
         batches = self._generate_phrase_embeds(
             loader,
