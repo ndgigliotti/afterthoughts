@@ -658,7 +658,10 @@ class FinePhrase:
             )
             results["batch_idx"].append(batch["batch_idx"])
             results["sequence_idx"].append(batch["sequence_idx"])
-            results["phrase_ids"].extend(batch["phrase_ids"])
+            if isinstance(batch["phrase_ids"], list):
+                results["phrase_ids"].extend(batch["phrase_ids"])
+            else:  # If phrase_ids is a tensor, convert to list
+                results["phrase_ids"].append(batch["phrase_ids"])
             results["phrase_size"].append(batch["phrase_size"])
             results["phrase_embeds"].append(batch["phrase_embeds"])
         # Process early batches with PCA if necessary

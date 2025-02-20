@@ -700,7 +700,6 @@ def _compute_sentence_phrase_embeds(
         sequence_idx=sequence_idx,
         pad_token_id=tokenizer.pad_token_id,
     )
-    print(phrase_data["phrase_ids"].size())
 
     # Pad the phrase token indices to the same length using pad_sequence
     padded_phrase_idx = phrase_data["phrase_idx"]
@@ -734,7 +733,7 @@ def _compute_sentence_phrase_embeds(
     # Compute the divisor: sum of mask values, clamp to at least one.
     valid_token_count = valid_token_mask.sum(dim=1).clamp(min=1).unsqueeze(-1)
     phrase_embeds = summed_embeds / valid_token_count
-    print(phrase_embeds.size())
+
     results = {
         "sequence_idx": phrase_data["sequence_idx"],
         "phrase_ids": phrase_data["phrase_ids"],
