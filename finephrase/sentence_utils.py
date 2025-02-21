@@ -299,7 +299,7 @@ def _split_long_sentences(
                     # Insert the new mask into the list of masks
                     masks.insert(i, new_mask)
         # Combine the masks into a single tensor of sentence IDs
-        sentence_ids = torch.zeros_like(sentence_ids)
+        sentence_ids = torch.full_like(sentence_ids, -1)
         for i, mask in enumerate(masks):
             sentence_ids[mask] = i
     return sentence_ids
