@@ -342,7 +342,7 @@ class FinePhrase:
 
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
         # Use `Dataset` for easy batching
-        data = Dataset.from_dict({"text": docs, "sample_idx": np.arange(len(docs))})
+        data = pl.DataFrame({"text": docs, "sample_idx": np.arange(len(docs))})
         num_batches = math.ceil(len(data) / batch_size)
         if num_jobs is None:
             num_jobs = self._num_token_jobs
@@ -350,18 +350,17 @@ class FinePhrase:
             _tokenize = _tokenize_batch_with_sentence_boundaries
         else:
             _tokenize = _tokenize_batch
-        prefer = "threads" if sentences else "processes"
-        batched_inputs = Parallel(n_jobs=num_jobs, prefer=prefer)(
+        batched_inputs = Parallel(n_jobs=num_jobs, prefer="threads")(
             _tokenize(
-                batch["text"],
-                batch["sample_idx"],
+                batch["text"].to_list(),
+                batch["sample_idx"].to_list(),
                 tokenizer=self.tokenizer,
                 max_length=max_length,
                 chunk_docs=chunk_docs,
                 doc_overlap=doc_overlap,
             )
             for batch in tqdm(
-                data.iter(batch_size), desc="Tokenizing", total=num_batches
+                data.iter_slices(batch_size), desc="Tokenizing", total=num_batches
             )
         )
         # Concatenate inputs
@@ -371,7 +370,6 @@ class FinePhrase:
                 inputs[key] = np.concatenate([x[key] for x in batched_inputs])
             if isinstance(batched_inputs[0][key], list):
                 inputs[key] = [y for x in batched_inputs for y in x[key]]
-                # inputs[key] = pad_sequence([torch.tensor(x) for x in inputs[key]], batch_first=True, padding_value=-1).numpy()
         # Add sequence index
         inputs["sequence_idx"] = np.arange(len(inputs["input_ids"]))
         inputs = Dataset.from_dict(inputs)

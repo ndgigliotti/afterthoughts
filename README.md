@@ -255,12 +255,13 @@ Since each document can contain thousands of phrases, the memory requirements fo
 
 The context-awareness is limited by the maximum sequence length of the model. Currently, documents that exceed the maximum sequence length are handled by chunking the sequence into smaller overlapping sequences. This can lead to a loss of context at the boundaries of the chunks and also results in duplicate phrases.
 
-## Future Ideas
+## Future Work
 
 * ~~Introduce phrase overlap to reduce redundant phrases~~
 * ~~Add optional normalization for the phrase embeddings~~
-* Add sentence mode using rules-based sentence boundary detection
-* Add paragraph mode using rules-based paragraph boundary detection
+* ~~Add sentence segmentation~~
+* Add paragraph segmentation
+* Decouple tokenization from sentence alignment and chunking
 
 ## License
 
