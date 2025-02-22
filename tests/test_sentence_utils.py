@@ -3,13 +3,13 @@ import torch
 
 from finephrase.sentence_utils import (
     _add_special_tokens,
-    _pad,
     _split_long_sentences,
     get_sentence_offsets,
     get_sentence_offsets_blingfire,
     get_sentence_offsets_nltk,
     get_sentence_offsets_syntok,
 )
+from finephrase.tokenize import pad
 
 
 def test_get_sentence_offsets_syntok_returns_tensor():
@@ -178,54 +178,6 @@ def test_add_special_tokens_with_cls_and_sep_tokens():
     )
     expected = torch.tensor([101, 1, 2, 3, 4, 102])
     assert torch.equal(result, expected)
-
-
-def test_pad_longest():
-    input_ids = [torch.tensor([1, 2, 3]), torch.tensor([4, 5]), torch.tensor([6])]
-    pad_token_id = 0
-    padded = _pad(input_ids, pad_token_id, strategy="longest")
-    expected = torch.tensor([[1, 2, 3], [4, 5, 0], [6, 0, 0]])
-    assert torch.equal(padded, expected)
-
-
-def test_pad_max_length():
-    input_ids = [torch.tensor([1, 2, 3]), torch.tensor([4, 5]), torch.tensor([6])]
-    pad_token_id = 0
-    max_length = 4
-    padded = _pad(input_ids, pad_token_id, strategy="max_length", max_length=max_length)
-    expected = torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0], [6, 0, 0, 0]])
-    assert torch.equal(padded, expected)
-
-
-def test_pad_no_padding():
-    input_ids = [torch.tensor([1, 2, 3]), torch.tensor([4, 5]), torch.tensor([6])]
-    pad_token_id = 0
-    padded = _pad(input_ids, pad_token_id, strategy=None)
-    assert padded == input_ids
-
-
-def test_pad_empty_input():
-    input_ids = []
-    pad_token_id = 0
-    with pytest.raises(ValueError, match="Input list must not be empty."):
-        _pad(input_ids, pad_token_id)
-
-
-def test_pad_max_length_exceeds():
-    input_ids = [torch.tensor([1, 2, 3, 4]), torch.tensor([5, 6])]
-    pad_token_id = 0
-    max_length = 3
-    with pytest.raises(
-        ValueError, match=r"Input sequence length \d+ exceeds `max_length`."
-    ):
-        _pad(input_ids, pad_token_id, strategy="max_length", max_length=max_length)
-
-
-def test_pad_invalid_strategy():
-    input_ids = [torch.tensor([1, 2, 3]), torch.tensor([4, 5])]
-    pad_token_id = 0
-    with pytest.raises(ValueError, match="Invalid value 'invalid' for `strategy`."):
-        _pad(input_ids, pad_token_id, strategy="invalid")
 
 
 def test_split_long_sentences_no_split_needed():

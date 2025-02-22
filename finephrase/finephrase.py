@@ -36,12 +36,19 @@ from finephrase.phrase_utils import _compute_phrase_embeddings, _tokenize_batch
 from finephrase.sentence_utils import (
     _compute_sentence_phrase_embeds,
     _compute_sentence_phrase_embeds_slow,
-    _tokenize_batch_with_sentence_boundaries,
+    tokenize_with_sentence_boundaries,
+)
+from finephrase.tokenize import (
+    DEFAULT_PAD_VALUES,
+    TokenizedDataset,
+    dynamic_pad_collate,
+    pad,
+    tokenize_docs,
 )
 from finephrase.utils import (
     _build_results_dataframe,
     get_overlap_count,
-    move_or_convert_results,
+    move_or_convert_tensors,
     normalize,
     normalize_num_jobs,
     reduce_precision,
@@ -50,19 +57,18 @@ from finephrase.utils import (
     truncate_dims,
 )
 
-
-def collate_fn(batch):
-    """Custom collate function for DataLoader."""
-    keys = set(batch[0].keys())
-    collated_batch = dict.fromkeys(keys)
-    standard_keys = {key for key in keys if key != "sent_boundary_idx"}
-    standard_data = [{key: x[key] for key in standard_keys} for x in batch]
-    collated_batch.update(default_collate(standard_data))
-    if "sent_boundary_idx" in keys:
-        collated_batch["sent_boundary_idx"] = pad_sequence(
-            [x["sent_boundary_idx"] for x in batch], batch_first=True, padding_value=-1
-        )
-    return collated_batch
+# def collate_fn(batch):
+#     """Custom collate function for DataLoader."""
+#     keys = set(batch[0].keys())
+#     collated_batch = dict.fromkeys(keys)
+#     standard_keys = {key for key in keys if key != "sent_boundary_idx"}
+#     standard_data = [{key: x[key] for key in standard_keys} for x in batch]
+#     collated_batch.update(default_collate(standard_data))
+#     if "sent_boundary_idx" in keys:
+#         collated_batch["sent_boundary_idx"] = pad_sequence(
+#             [x["sent_boundary_idx"] for x in batch], batch_first=True, padding_value=-1
+#         )
+#     return collated_batch
 
 
 class FinePhrase:
@@ -79,7 +85,6 @@ class FinePhrase:
         pca_fit_batch_count: int | float = 1.0,
         device: torch.device | str | int = "cuda",
         num_token_jobs: int | None = -1,
-        num_loader_jobs: int | None = 4,
     ) -> None:
         """Initialize a FinePhrase model.
 
@@ -122,8 +127,6 @@ class FinePhrase:
             detokenization, by default -1. If None, the number of jobs is
             set to the number of CPU cores. If less than 0, the number
             of jobs is set to `os.cpu_count() + n_jobs + 1`.
-        num_loader_jobs : int, None, optional
-            Number of jobs to use for multiprocessing on DataLoader, by default 4.
         """
         self.model_name = model_name
         self.model_dtype = model_dtype
@@ -140,7 +143,6 @@ class FinePhrase:
         self.pca = pca
         self.pca_fit_batch_count = pca_fit_batch_count
         self.num_token_jobs = num_token_jobs
-        self.num_loader_jobs = num_loader_jobs
         self.model.eval().to(device)
         if truncate_dims is not None and pca is not None:
             if truncate_dims < pca:
@@ -183,11 +185,6 @@ class FinePhrase:
     def _num_token_jobs(self) -> int:
         """Returns the number of jobs to use for tokenization."""
         return normalize_num_jobs(self.num_token_jobs)
-
-    @property
-    def _num_loader_jobs(self) -> int:
-        """Returns the number of jobs to use for the dataloader."""
-        return normalize_num_jobs(self.num_loader_jobs)
 
     def reduce_precision_if_needed(
         self, embeds: torch.Tensor | np.ndarray
@@ -333,47 +330,32 @@ class FinePhrase:
         ValueError
             If `max_length` is not specified and `tokenizer.model_max_length` is None.
         """
-        if max_length is None:
-            if self.tokenizer.model_max_length is None:
-                raise ValueError(
-                    "`max_length` must be specified if `tokenizer.model_max_length` is None"
-                )
-            max_length = self.tokenizer.model_max_length
-
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
-        # Use `Dataset` for easy batching
-        data = pl.DataFrame({"text": docs, "sample_idx": np.arange(len(docs))})
-        num_batches = math.ceil(len(data) / batch_size)
         if num_jobs is None:
             num_jobs = self._num_token_jobs
         if sentences:
-            _tokenize = _tokenize_batch_with_sentence_boundaries
-        else:
-            _tokenize = _tokenize_batch
-        batched_inputs = Parallel(n_jobs=num_jobs, prefer="threads")(
-            _tokenize(
-                batch["text"].to_list(),
-                batch["sample_idx"].to_list(),
-                tokenizer=self.tokenizer,
+            inputs = tokenize_with_sentence_boundaries(
+                docs,
+                self.tokenizer,
                 max_length=max_length,
                 chunk_docs=chunk_docs,
-                doc_overlap=doc_overlap,
+                overlap=doc_overlap,
+                batch_size=batch_size,
+                n_jobs=num_jobs,
+                return_tokenized_dataset=True,
             )
-            for batch in tqdm(
-                data.iter_slices(batch_size), desc="Tokenizing", total=num_batches
+        else:
+            inputs = tokenize_docs(
+                docs,
+                self.tokenizer,
+                max_length=max_length,
+                truncation=True,
+                chunk_docs=chunk_docs,
+                overlap=doc_overlap,
+                batch_size=batch_size,
+                n_jobs=num_jobs,
+                return_tokenized_dataset=True,
             )
-        )
-        # Concatenate inputs
-        inputs = {k: [] for k in batched_inputs[0].keys()}
-        for key in inputs:
-            if isinstance(batched_inputs[0][key], np.ndarray):
-                inputs[key] = np.concatenate([x[key] for x in batched_inputs])
-            if isinstance(batched_inputs[0][key], list):
-                inputs[key] = [y for x in batched_inputs for y in x[key]]
-        # Add sequence index
-        inputs["sequence_idx"] = np.arange(len(inputs["input_ids"]))
-        inputs = Dataset.from_dict(inputs)
-        inputs.set_format(type="torch")
         return inputs
 
     def _generate_token_embeds(
@@ -406,10 +388,10 @@ class FinePhrase:
                     }
                     if "sentence_ids" in batch:
                         results["sentence_ids"] = batch["sentence_ids"]
-                    yield move_or_convert_results(
+                    yield move_or_convert_tensors(
                         results,
                         return_tensors=return_tensors,
-                        move_results_to_cpu=move_results_to_cpu,
+                        move_to_cpu=move_results_to_cpu,
                     )
 
     def _generate_phrase_embeds(
@@ -451,10 +433,10 @@ class FinePhrase:
             results["batch_idx"] = torch.full(
                 results["sequence_idx"].shape, batch["batch_idx"][0]
             )
-            yield move_or_convert_results(
+            yield move_or_convert_tensors(
                 results,
                 return_tensors=return_tensors,
-                move_results_to_cpu=move_results_to_cpu,
+                move_to_cpu=move_results_to_cpu,
             )
 
     @property
@@ -608,7 +590,9 @@ class FinePhrase:
             batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
-            num_workers=self._num_loader_jobs,
+            collate_fn=partial(
+                dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id
+            ),
         )
         batches = self._generate_phrase_embeds(
             loader,
@@ -640,6 +624,8 @@ class FinePhrase:
             "phrase_size": [],
             "phrase_embeds": [],
         }
+        if sentences:
+            results["sentence_ids"] = []
         for batch in batches:
             if not self.pca_mode:
                 # Postprocess on the fly to potentially conserve memory
@@ -654,8 +640,8 @@ class FinePhrase:
                     # Update PCA if not ready yet
                     self.update_pca(batch["phrase_embeds"])
             # Offload batch to CPU
-            batch = move_or_convert_results(
-                batch, return_tensors="pt", move_results_to_cpu=True
+            batch = move_or_convert_tensors(
+                batch, return_tensors="pt", move_to_cpu=True
             )
             results["batch_idx"].append(batch["batch_idx"])
             results["sequence_idx"].append(batch["sequence_idx"])
@@ -682,13 +668,17 @@ class FinePhrase:
         results["phrase"] = self._decode_phrases(results.pop("phrase_ids"))
         # Combine results
         for key, value in results.items():
-            if isinstance(value[0], torch.Tensor):
+            if len(value) and isinstance(value[0], torch.Tensor):
                 results[key] = torch.cat(value, dim=0)
         if chunk_docs:
-            mapping = inputs["overflow_to_sample_mapping"]
+            mapping = torch.tensor(inputs.data["overflow_to_sample_mapping"])
+            if inputs.sort_by_token_count:
+                mapping = mapping[inputs.sort_idx]
             results["sample_idx"] = mapping[results["sequence_idx"]]
         else:
             results["sample_idx"] = results["sequence_idx"]
+        if inputs.sort_by_token_count:
+            results = inputs.unsort_results(results)
         results["embed_idx"] = torch.arange(results["phrase_embeds"].shape[0])
         return _build_results_dataframe(
             results,
@@ -744,7 +734,9 @@ class FinePhrase:
             batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
-            num_workers=1 if num_batches <= small_thresh else self._num_loader_jobs,
+            collate_fn=partial(
+                dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id
+            ),
         )
         batches = self._generate_token_embeds(
             loader, move_results_to_cpu=False, return_tensors="pt"

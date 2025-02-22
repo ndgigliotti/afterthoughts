@@ -1,22 +1,36 @@
 import math
 import os
 import warnings
+from types import MappingProxyType
 
 import numpy as np
 import polars as pl
 import torch
+import torch.nn.functional as F
 from joblib import Parallel, delayed
+from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 from tqdm.auto import tqdm
 from transformers import PreTrainedTokenizerFast
 
-from finephrase.utils import get_overlap_count
+from finephrase.utils import get_overlap_count, sort_by_indices
+
+DEFAULT_PAD_VALUES = MappingProxyType(
+    {
+        "attention_mask": 0,
+        "token_type_ids": 0,
+        "special_tokens_mask": 0,
+        "sentence_ids": -1,
+    }
+)
 
 
 class TokenizedDataset(Dataset):
     """A dataset class for tokenized data."""
 
-    def __init__(self, data: dict[str, torch.Tensor]):
+    def __init__(
+        self, data: dict[str, list[torch.Tensor]], sort_by_token_count: bool = False
+    ) -> None:
         """
         Initialize the TokenizedDataset.
 
@@ -26,14 +40,82 @@ class TokenizedDataset(Dataset):
             A dictionary containing the tokenized data.
         """
         self.data = data
+        self.validate_data()
+        self.sort_by_token_count = sort_by_token_count
+        self.sort_idx = self.get_sort_idx(descending=True)
+        self.unsort_idx = torch.arange(len(self))[self.sort_idx]
+
+    def validate_data(self):
+        """Validate the data in the dataset.
+
+        Raises
+        ------
+        ValueError
+            If the data is not a dictionary.
+        ValueError
+            If the data does not contain any tensors.
+        ValueError
+            If the data contains empty lists.
+        ValueError
+            If the data does not contain 'input_ids'.
+        ValueError
+            If the data contains lists of different lengths.
+        """
+        if not isinstance(self.data, dict):
+            raise ValueError("Data must be a dictionary.")
+        if not all(isinstance(val, list) for val in self.data.values()):
+            raise ValueError("Data must contain only lists.")
+        # Check non-empty
+        if not all(len(val) > 0 for val in self.data.values()):
+            raise ValueError("Data must contain only non-empty lists.")
+        # Check consistent length
+        lengths = [len(val) for val in self.data.values()]
+        if len(set(lengths)) > 1:
+            raise ValueError("All lists in the data must have the same length.")
+        if "input_ids" not in self.data:
+            raise ValueError("Data must contain 'input_ids'.")
+        if not isinstance(self.data["input_ids"], list) or not all(
+            isinstance(x, list) for x in self.data["input_ids"]
+        ):
+            raise ValueError("'input_ids' must be a list of ragged lists.")
+        if "sentence_ids" in self.data:
+            if not isinstance(self.data["sentence_ids"], list) or not all(
+                isinstance(x, list) for x in self.data["sentence_ids"]
+            ):
+                raise ValueError("'sentence_ids' must be a list of ragged lists.")
+
+    def keys(self) -> list[str]:
+        """Return the keys of the dataset."""
+        return list(self.data.keys())
+
+    def get_sort_idx(self, descending: bool = True) -> list[int]:
+        """Return the indices for sorting the dataset by token count."""
+        token_counts = torch.tensor([len(x) for x in self.data["input_ids"]])
+        sort_idx = torch.argsort(token_counts, descending=descending)
+        return sort_idx
 
     def __len__(self) -> int:
         """Return the length of the dataset."""
         return len(self.data["input_ids"])
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        """Return a single item from the dataset."""
-        return {key: val[idx] for key, val in self.data.items()}
+        """Return a single item from the sorted dataset."""
+        true_idx = self.sort_idx[idx] if self.sort_by_token_count else idx
+        return {key: self.data[key][true_idx] for key in self.keys()}
+
+    def unsort_results(
+        self, results: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
+        """Unsort the results of the dataset."""
+        unsorted = {}
+        for key in results.keys():
+            if isinstance(results[key], list):
+                unsorted[key] = sort_by_indices(results[key], self.unsort_idx)
+            elif isinstance(results[key], torch.Tensor):
+                unsorted[key] = results[key][self.unsort_idx]
+            elif isinstance(results[key], np.ndarray):
+                unsorted[key] = results[key][self.unsort_idx.numpy()]
+        return unsorted
 
 
 def get_max_length(
@@ -80,16 +162,16 @@ def _tokenize_batch(
     sample_idx: list[int],
     tokenizer: PreTrainedTokenizerFast,
     max_length: int | None = None,
-    padding: str = "max_length",
+    padding: str = False,
     truncation: bool = True,
     return_overflowing_tokens: bool = True,
     stride: int = 0,
-    return_tensors: str = "np",
+    return_tensors: str = None,
     add_special_tokens: bool = True,
     return_attention_mask: bool = True,
     return_offsets_mapping: bool = False,
     **kwargs,
-) -> dict[str, np.ndarray]:
+) -> dict[str, torch.Tensor]:
     """
     Tokenize a list of documents into input sequences for the model.
 
@@ -104,7 +186,7 @@ def _tokenize_batch(
     max_length : int or None, optional
         Maximum length of the tokenized sequences. If None, the tokenizer's default max length is used.
     padding : str, optional
-        Padding strategy to use. Default is "max_length".
+        Padding strategy to use. Default is False.
     truncation : bool, optional
         Whether to truncate sequences to the maximum length. Default is True.
     return_overflowing_tokens : bool, optional
@@ -112,7 +194,7 @@ def _tokenize_batch(
     stride : int, optional
         Stride to use when handling overflowing tokens. Default is 0.
     return_tensors : str, optional
-        Format of the returned tensors. Default is "np" (NumPy).
+        Format of the returned tensors. Default is None.
     add_special_tokens : bool, optional
         Whether to add special tokens to the sequences. Default is True.
     return_attention_mask : bool, optional
@@ -124,12 +206,16 @@ def _tokenize_batch(
 
     Returns
     -------
-    dict of str to np.ndarray
+    dict of str to torch.Tensor
         Dictionary containing the tokenized inputs and other relevant information.
     """
-    max_length = get_max_length(
-        max_length, tokenizer, required=padding is True or padding == "max_length"
-    )
+    max_length = get_max_length(max_length, tokenizer, required=padding == "max_length")
+    if return_tensors == "np":
+        sample_idx = np.array(sample_idx)
+    elif return_tensors == "pt":
+        sample_idx = torch.tensor(sample_idx)
+    else:
+        sample_idx = list(sample_idx)
     inputs = tokenizer(
         docs,
         max_length=max_length,
@@ -145,9 +231,14 @@ def _tokenize_batch(
     )
     # Globalize overflow_to_sample_mapping
     if "overflow_to_sample_mapping" in inputs:
-        inputs["overflow_to_sample_mapping"] = np.asarray(sample_idx)[
-            inputs["overflow_to_sample_mapping"]
-        ]
+        if isinstance(sample_idx, list):
+            inputs["overflow_to_sample_mapping"] = [
+                sample_idx[i] for i in inputs["overflow_to_sample_mapping"]
+            ]
+        else:
+            inputs["overflow_to_sample_mapping"] = sample_idx[
+                inputs["overflow_to_sample_mapping"]
+            ]
     # Flatten offset mapping
     if "offset_mapping" in inputs:
         inputs["offset_mapping"] = [
@@ -157,89 +248,196 @@ def _tokenize_batch(
     return inputs
 
 
-def _pad_and_concat(
-    batches: list[dict], key: str, tokenizer: PreTrainedTokenizerFast
-) -> np.ndarray:
-    """Pad and concatenate the arrays at a certain key in a list of dictionaries."""
-    # Find the widths of the arrays in this batch
-    widths = np.array(batch[key].shape[1] for batch in batches)
-    pad_width = widths.max()
-    # Pad all arrays to the maximum width
-    pad_diff = pad_width - widths
-    for i, (batch, pad_diff) in enumerate(zip(batches, pad_diff)):
-        # Determine the padding value based on the key
-        pad_values = {
-            "input_ids": tokenizer.pad_token_id,
-            "attention_mask": 0,
-            "token_type_ids": 0,
-            "special_tokens_mask": 0,
-            "sentence_ids": -1,
-        }
-        # Pad the array with the appropriate value
-        batches[i][key] = np.pad(
-            batch[key],
-            ((0, 0), (0, pad_diff)),
-            constant_values=pad_values.get(key, 0),
-            mode="constant",
+# def _pad_and_concat(
+#     batches: list[dict], key: str, tokenizer: PreTrainedTokenizerFast
+# ) -> np.ndarray:
+#     """Pad and concatenate the arrays at a certain key in a list of dictionaries."""
+#     # Find the widths of the arrays in this batch
+#     widths = np.array(batch[key].shape[1] for batch in batches)
+#     pad_width = widths.max()
+#     # Pad all arrays to the maximum width
+#     pad_diff = pad_width - widths
+#     for i, (batch, pad_diff) in enumerate(zip(batches, pad_diff)):
+#         # Determine the padding value based on the key
+#         pad_values = {"input_ids": tokenizer.pad_token_id} | DEFAULT_PAD_VALUES
+#         # Pad the array with the appropriate value
+#         batches[i][key] = np.pad(
+#             batch[key],
+#             ((0, 0), (0, pad_diff)),
+#             constant_values=pad_values.get(key, 0),
+#             mode="constant",
+#         )
+#     # Concatenate the arrays along the first axis
+#     return np.concatenate([batch[key] for batch in batches], axis=0)
+
+
+@torch.no_grad()
+def pad(
+    sequences: list[torch.Tensor],
+    pad_value: int,
+    strategy: str = "longest",
+    max_length: int = None,
+) -> torch.Tensor | list[torch.Tensor]:
+    """Pads a list of sequences to a uniform length.
+
+    Parameters
+    ----------
+    sequences : list of torch.Tensor
+        A list of sequences to pad. Each sequence should be a list or a PyTorch tensor of numerical IDs.
+    pad_value : int
+        The value to use for padding.
+    strategy : str, optional
+        The padding strategy to use. Can be one of the following:
+        - 'longest': Pad all sequences to the length of the longest sequence in the list.
+        - 'max_length': Pad all sequences to a specified maximum length. `max_length` must be provided.
+        - None: No padding is applied. The input sequences are returned as is.
+        (default: 'longest')
+    max_length : int, optional
+        The maximum length to pad sequences to when `strategy='max_length'`. Must be provided if `strategy='max_length'`. (default: None)
+
+    Returns
+    -------
+    torch.Tensor or list of torch.Tensor
+        A PyTorch tensor containing the padded sequences if padding is applied, or the original list of sequences if `strategy=None`.
+        If padding is applied, the tensor has shape (len(sequences), max_len), where max_len is the length of the longest sequence
+        in `sequences` or `max_length` if specified.
+
+    Raises
+    ------
+    ValueError
+        If `sequences` is empty.
+    ValueError
+        If `strategy='max_length'` and `max_length` is not specified.
+    ValueError
+        If `strategy='max_length'` and any sequence in `sequences` exceeds `max_length`.
+    ValueError
+        If `strategy` is not one of 'longest', 'max_length', or None.
+    """
+    if not len(sequences):
+        raise ValueError("Input list must not be empty.")
+    input_is_numpy = isinstance(sequences[0], np.ndarray)
+    if input_is_numpy or isinstance(sequences[0], list):
+        sequences = [torch.tensor(seq) for seq in sequences]
+    if strategy == "max_length":
+        if max_length is None:
+            raise ValueError("max_length must be specified when strategy='max_length'.")
+        seq_lengths = torch.tensor([len(seq) for seq in sequences])
+        if any(seq_lengths > max_length):
+            raise ValueError(
+                f"Input sequence length {seq_lengths.max()} exceeds `max_length`."
+            )
+        # Pad the first sequence to `max_length`
+        sequences[0] = F.pad(
+            sequences[0], (0, max_length - len(sequences[0])), value=pad_value
         )
-    # Concatenate the arrays along the first axis
-    return np.concatenate([batch[key] for batch in batches], axis=0)
+        # Pad the remaining sequences to the length of the first sequence
+        padded_sequences = pad_sequence(
+            sequences, batch_first=True, padding_value=pad_value
+        )
+    elif strategy == "longest":
+        padded_sequences = pad_sequence(
+            sequences, batch_first=True, padding_value=pad_value
+        )
+    elif strategy is None:
+        padded_sequences = sequences
+    else:
+        raise ValueError(f"Invalid value '{strategy}' for `strategy`.")
+    if input_is_numpy:
+        # Convert the padded tensor back to NumPy
+        padded_sequences = padded_sequences.numpy()
+    return padded_sequences
+
+
+def dynamic_pad_collate(
+    batch: list[dict[str, torch.Tensor]],
+    pad_token_id: int = 0,
+) -> dict[str, torch.Tensor]:
+    """
+    Collate function for tokenized data which dynamically pads.
+
+    Parameters
+    ----------
+    batch : list of dict
+        A list of dictionaries containing tokenized data.
+        Each dictionary should have the same keys, and the values
+        should be PyTorch tensors.
+    pad_token_id : int, optional
+        The token ID to use for padding. Default is 0.
+        It is recommended to wrap this function in `functools.partial`
+        to set the `pad_token_id` to the tokenizer's pad token ID.
+
+    Returns
+    -------
+    dict of str to torch.Tensor
+        A dictionary containing the collated data. The keys are the
+        same as the input batch, and the values are PyTorch tensors.
+    """
+    collated = {}
+    if batch:
+        # Pad and concatenate the arrays at each key in the batch
+        pad_values = {"input_ids": pad_token_id} | DEFAULT_PAD_VALUES
+        first_batch = batch[0]
+        for key in first_batch.keys():
+            first_val = first_batch[key]
+            if isinstance(first_val, list):
+                collated[key] = pad(
+                    [item[key] for item in batch],
+                    pad_value=pad_values.get(key, 0),
+                    strategy="longest",
+                )
+            else:
+                collated[key] = [item[key] for item in batch]
+                if isinstance(collated[key][0], (int, float)):
+                    collated[key] = torch.tensor(collated[key])
+    collated["attention_mask"] = collated["input_ids"].ne(pad_token_id).long()
+    return collated
 
 
 def tokenize_docs(
-    data: pl.DataFrame,
+    docs: list[str],
     tokenizer: PreTrainedTokenizerFast,
-    text_field: str = "text",
-    sample_idx_field: str = "sample_idx",
     max_length: int | None = None,
-    padding: str = "max_length",
     truncation: bool = True,
     chunk_docs: bool = True,
     overlap: float | int = 0,
     add_special_tokens: bool = True,
-    return_attention_mask: bool = True,
+    return_attention_mask: bool = False,
     return_offsets_mapping: bool = False,
+    return_tokenized_dataset: bool = False,
     batch_size: int = 10,
     n_jobs: int | None = None,
     show_progress: bool = True,
-    **kwargs,
-) -> dict:
+) -> dict | TokenizedDataset:
     """
     Tokenize documents in a dataset using a tokenizer.
 
     Parameters
     ----------
-    data : pl.DataFrame
-        The dataset containing the documents to be tokenized.
+    docs : list of str
+        The list of documents to be tokenized.
     tokenizer : PreTrainedTokenizer
         The tokenizer to be used for tokenization.
-    text_field : str, optional
-        The name of the field containing the text to be tokenized.
-        Default is "text".
-    sample_idx_field : str, optional
-        The name of the field containing the sample indices.
-        Default is "sample_idx".
     max_length : int or None, optional
         The maximum length of the tokenized sequences. If None,
         the tokenizer's default max length is used. Default is None.
-    padding : str, optional
-        The padding strategy to be used. Default is "max_length".
     truncation : bool, optional
         Whether to truncate sequences that exceed the maximum length.
         Default is True.
     chunk_docs : bool, optional
         Whether to return overflowing tokens. Default is True.
     overlap : float or int, optional
-        The overlap between phrases. Default is 0.
+        The overlap between documents. Default is 0.
     add_special_tokens : bool, optional
         Whether to add special tokens to the tokenized sequences.
         Default is True.
     return_attention_mask : bool, optional
         Whether to return the attention mask for the tokenized sequences.
-        Default is True.
+        Default is False.
     return_offsets_mapping : bool, optional
         Whether to return the offsets mapping for the tokenized sequences.
         Default is False.
+    return_tokenized_dataset : bool, optional
+        Whether to return a TokenizedDataset object instead of a dictionary.
     batch_size : int, optional
         The batch size to be used for tokenization. Default is 10.
     n_jobs : int or None, optional
@@ -258,13 +456,15 @@ def tokenize_docs(
     ValueError
         If the `max_length` parameter is None and the tokenizer does not
         have a `model_max_length`.
-        If the `padding` parameter is not one of "max_length", "longest",
-        or False.
         If the `truncation` parameter is not a boolean.
     """
-    max_length = get_max_length(
-        max_length, tokenizer, required=padding is True or padding == "max_length"
-    )
+    if len(docs) == 0:
+        raise ValueError("Docs must contain at least one document.")
+
+    # Convert docs to a polars DataFrame and add sample_idx
+    data = pl.DataFrame({"text": docs, "sample_idx": range(len(docs))})
+
+    max_length = get_max_length(max_length, tokenizer, required=truncation)
     stride = get_overlap_count(overlap, max_length)
     num_batches = math.ceil(len(data) / batch_size)
     batches = tqdm(
@@ -277,39 +477,29 @@ def tokenize_docs(
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     # Threading is surprisingly fast because tokenizers are Rust-based and GIL free
     # MP has serialization difficulties and high overhead
-    batched_results = Parallel(n_jobs=n_jobs, prefer="threads")(
+    tok_batches = Parallel(n_jobs=n_jobs, prefer="threads")(
         delayed(_tokenize_batch)(
-            docs=batch[text_field].to_list(),
-            sample_idx=batch[sample_idx_field].to_list(),
+            docs=batch["text"].to_list(),
+            sample_idx=batch["sample_idx"].to_list(),
             tokenizer=tokenizer,
             max_length=max_length,
-            padding=padding,
+            padding=False,
             truncation=truncation,
             return_overflowing_tokens=chunk_docs,
             stride=stride,
-            return_tensors="np",
+            return_tensors=None,
             add_special_tokens=add_special_tokens,
             return_attention_mask=return_attention_mask,
             return_offsets_mapping=return_offsets_mapping,
-            **kwargs,
         )
         for batch in batches
     )
     # Combine the results into a single dictionary
-    combined_results = {}
-    for key, val in batched_results[0].items():
-        if isinstance(val, np.ndarray):
-            if val.ndim > 1:
-                if padding is True or padding == "longest":
-                    combined_results[key] = _pad_and_concat(
-                        batched_results, key, tokenizer
-                    )
-            combined_results[key] = np.concatenate(
-                [batch[key] for batch in batched_results], axis=0
-            )
-
-        elif isinstance(val, list):
-            combined_results[key] = [y for x in batched_results for y in x[key]]
+    combined = {}
+    for key, val in tok_batches[0].items():
+        if isinstance(val, list):
+            combined[key] = [y for x in tok_batches for y in x[key]]
         else:
             warnings.warn(f"Unsupported data type {type(val)} for key {key}. Skipping.")
-    return combined_results
+    combined["sequence_idx"] = list(range(len(combined["input_ids"])))
+    return TokenizedDataset(combined) if return_tokenized_dataset else combined

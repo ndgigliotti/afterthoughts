@@ -17,6 +17,7 @@ import os
 import time
 import warnings
 from functools import singledispatch
+from operator import itemgetter
 from typing import Callable
 
 import numpy as np
@@ -549,19 +550,19 @@ def search_phrases(
     return index, hits
 
 
-def move_or_convert_results(
-    results: dict, return_tensors: str = "pt", move_results_to_cpu: bool = False
+def move_or_convert_tensors(
+    data: dict, return_tensors: str = "pt", move_to_cpu: bool = False
 ):
     """Move or convert the results to the specified format.
 
     Parameters
     ----------
-    results : dict
-        Dictionary containing the results to move or convert.
+    data : dict
+        Dictionary containing the tensors or arrays to move or convert.
     return_tensors : str, optional
         Format to return the tensors in, either 'pt' for PyTorch tensors or 'np' for NumPy arrays, by default "pt".
-    move_results_to_cpu : bool, optional
-        Whether to move the results to CPU, by default False.
+    move_to_cpu : bool, optional
+        Whether to move the data to CPU, by default False.
 
     Returns
     -------
@@ -573,29 +574,39 @@ def move_or_convert_results(
     ValueError
         If `return_tensors` is not 'np' or 'pt'.
     """
-    if move_results_to_cpu or return_tensors == "np":
-        for key, value in results.items():
+    if move_to_cpu or return_tensors == "np":
+        for key, value in data.items():
             if isinstance(value, torch.Tensor):
-                results[key] = value.cpu()
+                data[key] = value.cpu()
             if (
                 isinstance(value, list)
                 and len(value)
                 and isinstance(value[0], torch.Tensor)
             ):
-                results[key] = [v.cpu() for v in value]
+                data[key] = [v.cpu() for v in value]
     if return_tensors == "np":
-        for key, value in results.items():
+        for key, value in data.items():
             if isinstance(value, torch.Tensor):
-                results[key] = value.numpy()
+                data[key] = value.numpy()
             elif (
                 isinstance(value, list)
                 and len(value)
                 and isinstance(value[0], torch.Tensor)
             ):
-                results[key] = [v.numpy() for v in value]
-    elif not return_tensors == "pt":
+                data[key] = [v.numpy() for v in value]
+    elif return_tensors == "pt":
+        for key, value in data.items():
+            if isinstance(value, np.ndarray):
+                data[key] = torch.from_numpy(value)
+            elif (
+                isinstance(value, list)
+                and len(value)
+                and isinstance(value[0], np.ndarray)
+            ):
+                data[key] = [torch.from_numpy(v) for v in value]
+    else:
         raise ValueError("`return_tensors` must be 'np' or 'pt'.")
-    return results
+    return data
 
 
 def _build_results_dataframe(
@@ -634,15 +645,18 @@ def _build_results_dataframe(
         "embed_idx",
         "sample_idx",
         "sequence_idx",
+        "sentence_idx",
         "batch_idx",
         "phrase_size",
         "phrase",
     ]
+    if "sentence_idx" not in results:
+        keys.remove("sentence_idx")
     for key in keys:
         if key in results:
             df[key] = results[key]
     # Convert 1d arrays to NumPy and move to CPU
-    df = move_or_convert_results(df, return_tensors="np", move_results_to_cpu=True)
+    df = move_or_convert_tensors(df, return_tensors="np", move_to_cpu=True)
     # Convert embeddings if needed
     embeds = results["phrase_embeds"]
     if not isinstance(embeds, torch.Tensor):
@@ -666,3 +680,14 @@ def _build_results_dataframe(
     else:
         raise ValueError(f"Invalid value for return_frame: {return_frame}")
     return df, embeds
+
+
+def sort_by_indices(elements: list, idx: list[int]) -> list:
+    """Sort a Python list by a given index using itemgetter."""
+    if len(elements) != len(idx):
+        raise ValueError("List and index must have the same length.")
+    if len(elements):
+        ordered_elements = list(itemgetter(*idx)(elements))
+    else:
+        ordered_elements = elements
+    return ordered_elements

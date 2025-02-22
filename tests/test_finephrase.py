@@ -6,7 +6,7 @@ import torch
 
 from finephrase import FinePhrase
 from finephrase.phrase_utils import get_phrase_idx
-from finephrase.utils import _build_results_dataframe, move_or_convert_results
+from finephrase.utils import _build_results_dataframe, move_or_convert_tensors
 
 MODEL_NAME = "sentence-transformers/paraphrase-MiniLM-L3-v2"
 
@@ -166,7 +166,7 @@ def test_move_or_convert_results_to_cpu():
         "sequence_idx": torch.tensor([0, 1], device="cpu"),
         "phrase_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]], device="cpu"),
     }
-    converted_results = move_or_convert_results(results, move_results_to_cpu=True)
+    converted_results = move_or_convert_tensors(results, move_to_cpu=True)
     for key in results:
         assert torch.equal(converted_results[key], expected_results[key])
 
@@ -182,8 +182,8 @@ def test_move_or_convert_results_to_numpy():
         "sequence_idx": np.array([0, 1]),
         "phrase_embeds": np.array([[0.1, 0.2], [0.3, 0.4]]),
     }
-    converted_results = move_or_convert_results(
-        results, return_tensors="np", move_results_to_cpu=True
+    converted_results = move_or_convert_tensors(
+        results, return_tensors="np", move_to_cpu=True
     )
     for key in results:
         np.testing.assert_allclose(converted_results[key], expected_results[key])
@@ -196,7 +196,7 @@ def test_move_or_convert_results_invalid_return_tensors():
         "phrase_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]], device="cuda"),
     }
     with pytest.raises(ValueError):
-        move_or_convert_results(results, return_tensors="invalid")
+        move_or_convert_tensors(results, return_tensors="invalid")
 
 
 @pytest.fixture
