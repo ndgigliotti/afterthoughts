@@ -682,12 +682,17 @@ def _build_results_dataframe(
     return df, embeds
 
 
-def sort_by_indices(elements: list, idx: list[int]) -> list:
-    """Sort a Python list by a given index using itemgetter."""
-    if len(elements) != len(idx):
-        raise ValueError("List and index must have the same length.")
+def order_by_indices(elements: list, indices: list[int]) -> list:
+    """Order a Python list by the given indices."""
+    if len(elements) != len(indices):
+        raise ValueError(f"List and indices must have the same length, but got {len(elements)}, {len(indices)}.")
     if len(elements):
-        ordered_elements = list(itemgetter(*idx)(elements))
+        ordered_elements = list(itemgetter(*indices)(elements))
     else:
         ordered_elements = elements
     return ordered_elements
+
+
+def round_up_to_power_of_2(x: int) -> int:
+    """Round up to the nearest power of 2."""
+    return 2 ** math.ceil(math.log2(x))

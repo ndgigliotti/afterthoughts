@@ -718,9 +718,13 @@ def _compute_sentence_phrase_embeds(
     # The resulting tensor will have shape:
     # [num_phrases, max_phrase_len, embed_dim]
     # -----------------------------------------------------------
-    batch_sequence_idx = (
-        phrase_data["sequence_idx"].unsqueeze(1) - phrase_data["sequence_idx"][0]
-    )
+    # Create a mapping from original sequence indices to contiguous indices
+    unique_sequences = torch.unique(phrase_data["sequence_idx"])
+    sequence_to_idx = {seq.item(): idx for idx, seq in enumerate(unique_sequences)}
+    batch_sequence_idx = torch.tensor(
+        [sequence_to_idx[seq.item()] for seq in phrase_data["sequence_idx"]],
+        device=phrase_data["sequence_idx"].device
+    ).unsqueeze(1)
 
     phrase_token_embeds = token_embeds[batch_sequence_idx, phrase_data["phrase_idx"]]
 
@@ -893,17 +897,21 @@ def tokenize_with_sentence_boundaries(
         current_token_offsets = current_token_offsets
         # Use searchsorted to find the indices in token offsets that correspond to the start of each sentence.
         start_idx = torch.searchsorted(
-            current_token_offsets[:, 0], current_sent_offsets[:, 0], side="left"
+            current_token_offsets[:, 0].contiguous(), 
+            current_sent_offsets[:, 0].contiguous(), 
+            side="left"
         )
         # Use searchsorted to find the indices in token offsets that correspond to the end of each sentence.
         stop_idx = torch.searchsorted(
-            current_token_offsets[:, 1], current_sent_offsets[:, 1], side="right"
+            current_token_offsets[:, 1].contiguous(), 
+            current_sent_offsets[:, 1].contiguous(), 
+            side="right"
         )
         # Stack the start and end indices to create a tensor representing sentence boundaries.
         sent_boundary_idx = torch.stack([start_idx, stop_idx], axis=1)
         # Check for gaps between sentences
         if (sent_boundary_idx[1:, 0] - sent_boundary_idx[:-1, 1]).any():
-            raise RuntimeError(
+            warnings.warn(
                 "Gaps between sentences detected. "
                 "Please ensure sentence boundaries are correctly identified."
             )

@@ -41,6 +41,7 @@ from finephrase.sentence_utils import (
 from finephrase.tokenize import (
     DEFAULT_PAD_VALUES,
     TokenizedDataset,
+    DynamicTokenSampler,
     dynamic_pad_collate,
     pad,
     tokenize_docs,
@@ -55,6 +56,7 @@ from finephrase.utils import (
     search_phrases,
     timer,
     truncate_dims,
+    order_by_indices,
 )
 
 # def collate_fn(batch):
@@ -78,6 +80,8 @@ class FinePhrase:
         model_dtype: torch.dtype = torch.float32,
         amp: bool = False,
         amp_dtype: torch.dtype = torch.float16,
+        attn_implementation: str | None = None,
+        compile: bool | str = True,
         reduce_precision: bool = False,
         truncate_dims: int | None = None,
         normalize_embeds: bool = False,
@@ -98,6 +102,16 @@ class FinePhrase:
             Enable automatic mixed precision, by default False.
         amp_dtype : torch.dtype, optional
             Data type for automatic mixed precision, by default torch.float16.
+        attn_implementation : str | None, optional
+            Attention implementation to use, by default None. If None, the model will use the
+            default attention implementation.
+        compile : bool | str, optional
+            Compile the model, by default True. If True, the model will be compiled using
+            torch.compile(mode="reduce-overhead"). If False, the model will not be compiled.
+            You can specify the compilation mode using a string:
+            - "reduce-overhead"
+            - "default"
+            - "max-autotune"
         reduce_precision : bool, optional
             Reduce the final embedding precision to float16 if they are float32 or float64,
             by default False. Note that the primary benefit of this is memory savings,
@@ -134,7 +148,19 @@ class FinePhrase:
             model_name,
             clean_up_tokenization_spaces=True,
         )
-        self.model = AutoModel.from_pretrained(model_name, torch_dtype=model_dtype)
+        self.attn_implementation = attn_implementation
+        model_kws = {"torch_dtype": self.model_dtype, "device_map": {"": device}}
+        if self.attn_implementation is not None:
+            model_kws["attn_implementation"] = self.attn_implementation
+        self.model = AutoModel.from_pretrained(model_name, **model_kws).eval()
+        self.compile = compile
+        match compile:
+            case True | "reduce-overhead":
+                self.model = torch.compile(
+                    self.model, mode="reduce-overhead", dynamic=False
+                )
+            case str():
+                self.model = torch.compile(self.model, mode=compile, dynamic=False)
         self.amp = amp
         self.amp_dtype = amp_dtype
         self.reduce_precision = reduce_precision
@@ -143,7 +169,7 @@ class FinePhrase:
         self.pca = pca
         self.pca_fit_batch_count = pca_fit_batch_count
         self.num_token_jobs = num_token_jobs
-        self.model.eval().to(device)
+
         if truncate_dims is not None and pca is not None:
             if truncate_dims < pca:
                 raise ValueError("`truncate_dims` must be greater than `pca`.")
@@ -358,6 +384,7 @@ class FinePhrase:
             )
         return inputs
 
+    @torch.no_grad()
     def _generate_token_embeds(
         self,
         loader: DataLoader,
@@ -365,34 +392,34 @@ class FinePhrase:
         return_tensors: str = "pt",
     ):
         """Obtain the token embeddings for a list of documents, one batch at at time."""
-        with torch.no_grad():
-            with torch.cuda.amp.autocast(enabled=self.amp, dtype=self.amp_dtype):
-                progress_loader = tqdm(loader, desc="Encoding")
-                for batch_idx, batch in enumerate(progress_loader):
-                    batch = {
-                        k: v.to(self.device, non_blocking=True)
-                        for k, v in batch.items()
-                    }
-                    outputs = self.model(
-                        input_ids=batch["input_ids"],
-                        attention_mask=batch["attention_mask"],
-                    )
-                    results = {
-                        "sequence_idx": batch["sequence_idx"],
-                        "input_ids": batch["input_ids"],
-                        "attention_mask": batch["attention_mask"],
-                        "token_embeds": self.truncate_dims_if_needed(
-                            outputs.last_hidden_state
-                        ),
-                        "batch_idx": torch.full(batch["sequence_idx"].shape, batch_idx),
-                    }
-                    if "sentence_ids" in batch:
-                        results["sentence_ids"] = batch["sentence_ids"]
-                    yield move_or_convert_tensors(
-                        results,
-                        return_tensors=return_tensors,
-                        move_to_cpu=move_results_to_cpu,
-                    )
+        with torch.autocast(
+            device_type=self.device.type, enabled=self.amp, dtype=self.amp_dtype
+        ):
+            progress_loader = tqdm(loader, desc="Encoding")
+            for batch_idx, batch in enumerate(progress_loader):
+                batch = {
+                    k: v.to(self.device, non_blocking=True) for k, v in batch.items()
+                }
+                outputs = self.model(
+                    input_ids=batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                )
+                results = {
+                    "sequence_idx": batch["sequence_idx"],
+                    "input_ids": batch["input_ids"],
+                    "attention_mask": batch["attention_mask"],
+                    "token_embeds": self.truncate_dims_if_needed(
+                        outputs.last_hidden_state
+                    ),
+                    "batch_idx": torch.full(batch["sequence_idx"].shape, batch_idx),
+                }
+                if "sentence_ids" in batch:
+                    results["sentence_ids"] = batch["sentence_ids"]
+                yield move_or_convert_tensors(
+                    results,
+                    return_tensors=return_tensors,
+                    move_to_cpu=move_results_to_cpu,
+                )
 
     def _generate_phrase_embeds(
         self,
@@ -504,7 +531,7 @@ class FinePhrase:
         docs: list[str],
         sentences: bool = False,
         max_length: int | None = None,
-        batch_size: int = 32,
+        batch_max_tokens: int = 16384,
         token_batch_size: int = 10,
         phrase_sizes: int | list | tuple = 12,
         phrase_overlap: int | float | list | dict = 0.5,
@@ -587,9 +614,12 @@ class FinePhrase:
         )
         loader = DataLoader(
             inputs,
-            batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
+            batch_sampler=DynamicTokenSampler(
+                inputs,
+                max_tokens=batch_max_tokens,
+            ),
             collate_fn=partial(
                 dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id
             ),
@@ -672,19 +702,19 @@ class FinePhrase:
                 results[key] = torch.cat(value, dim=0)
         if chunk_docs:
             mapping = torch.tensor(inputs.data["overflow_to_sample_mapping"])
-            if inputs.sort_by_token_count:
-                mapping = mapping[inputs.sort_idx]
             results["sample_idx"] = mapping[results["sequence_idx"]]
         else:
             results["sample_idx"] = results["sequence_idx"]
-        if inputs.sort_by_token_count:
-            results = inputs.unsort_results(results)
         results["embed_idx"] = torch.arange(results["phrase_embeds"].shape[0])
-        return _build_results_dataframe(
+        pdf, vecs = _build_results_dataframe(
             results,
             convert_to_numpy=convert_to_numpy,
-            return_frame=return_frame,
+            return_frame="polars",
         )
+        if inputs.sort_by_token_count:
+            pdf = pdf.sort("sequence_idx", descending=False)
+            vecs = vecs[pdf["embed_idx"]]
+        return pdf, vecs
 
     def encode_queries(
         self,

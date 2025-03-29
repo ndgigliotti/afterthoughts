@@ -263,7 +263,7 @@ def test_finephrase_encode_multiple_phrase_sizes():
     )
     phrase_sizes = [3, 5]
     df, X = finephrase.encode(
-        docs, phrase_sizes=phrase_sizes, max_length=10, batch_size=1
+        docs, phrase_sizes=phrase_sizes, max_length=10, batch_max_tokens=1
     )
     assert isinstance(df, pl.DataFrame)
     assert isinstance(X, np.ndarray)
