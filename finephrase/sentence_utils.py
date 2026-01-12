@@ -865,7 +865,7 @@ def tokenize_with_sentence_boundaries(
     inputs = tokenize_docs(
         docs,
         tokenizer,
-        max_length=torch.inf,
+        max_length=max_length if not chunk_docs else torch.inf,
         truncation=not chunk_docs,
         add_special_tokens=not chunk_docs,
         return_attention_mask=False,
@@ -938,8 +938,14 @@ def tokenize_with_sentence_boundaries(
             results["sentence_ids"].extend(chunked_inputs["sentence_ids"])
         else:
             # Add the input IDs, attention mask, and sentence boundary indices to the results dictionary.
+            # Convert tensors to lists for TokenizedDataset compatibility
+            if isinstance(input_ids, torch.Tensor):
+                input_ids = input_ids.tolist()
+            if isinstance(sentence_ids, torch.Tensor):
+                sentence_ids = sentence_ids.tolist()
             results["input_ids"].append(input_ids)
             results["sentence_ids"].append(sentence_ids)
+            results["overflow_to_sample_mapping"].append(i)
 
     # Concatenate the lists of tensors in the results dictionary to create single tensors.
     # results["input_ids"] = torch.cat(results["input_ids"])
