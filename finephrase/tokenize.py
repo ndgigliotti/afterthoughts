@@ -89,14 +89,8 @@ class TokenizedDataset(Dataset):
     def sort_data(self):
         """Sort the data by token count."""
         for key in self.data:
-            if isinstance(self.data[key][0], list):
-                if len(self.data[key]):
-                    self.data[key] = order_by_indices(self.data[key], self.sort_idx)
-                else:
-                    self.data[key] = []
-            elif isinstance(self.data[key][0], (torch.Tensor, np.ndarray)):
-                if len(self.data[key]):
-                    self.data[key] = order_by_indices(self.data[key], self.sort_idx)
+            if len(self.data[key]):
+                self.data[key] = order_by_indices(self.data[key], self.sort_idx)
         self.token_counts = order_by_indices(self.token_counts, self.sort_idx)
 
     def keys(self) -> list[str]:

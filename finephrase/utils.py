@@ -510,7 +510,10 @@ def move_or_convert_tensors(
 
 
 def _build_results_dataframe(
-    results: dict, return_frame: str = "polars", convert_to_numpy: bool = True
+    results: dict,
+    return_frame: str = "polars",
+    convert_to_numpy: bool = True,
+    debug: bool = False,
 ) -> tuple[pl.DataFrame | pa.Table, np.ndarray | torch.Tensor]:
     """
     Consolidates the results by combining the segment indices and segments into a DataFrame
@@ -519,13 +522,17 @@ def _build_results_dataframe(
     Parameters
     ----------
     results : dict
-        A dictionary containing the results with keys such as 'sample_idx',
+        A dictionary containing the results with keys such as 'document_idx',
         'sequence_idx', 'batch_idx', 'segment_size', 'segment', and 'segment_embeds'.
     return_frame : str, optional
         The type of DataFrame to return. Options are 'polars', 'pandas', or 'arrow'.
         Defaults to 'polars'.
     convert_to_numpy : bool, optional
         Whether to convert the embeddings to NumPy arrays. Defaults to True.
+    debug : bool, optional
+        Include additional columns for debugging. When False, only essential columns
+        are returned: document_idx, segment_idx, segment_size, segment. When True,
+        additional columns are included: sequence_idx, batch_idx. Defaults to False.
 
     Returns
     -------
@@ -541,17 +548,12 @@ def _build_results_dataframe(
     """
     # Get indices and 1d-arrays
     df = {}
-    keys = [
-        "embed_idx",
-        "sample_idx",
-        "sequence_idx",
-        "sentence_idx",
-        "batch_idx",
-        "segment_size",
-        "segment",
-    ]
-    if "sentence_idx" not in results:
-        keys.remove("sentence_idx")
+    # embed_idx and sequence_idx are always needed internally for reordering (dropped later by caller)
+    # Essential columns returned in non-debug mode
+    essential_keys = ["embed_idx", "sequence_idx", "document_idx", "segment_idx", "segment_size", "segment"]
+    # Additional columns only returned in debug mode
+    debug_keys = ["batch_idx", "sentence_idx"]
+    keys = essential_keys + (debug_keys if debug else [])
     for key in keys:
         if key in results:
             df[key] = results[key]

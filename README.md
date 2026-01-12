@@ -79,30 +79,29 @@ Another key advantage of this approach is that the segment embeddings are enrich
     The `encode` method returns a tuple containing the Polars DataFrame and the NumPy array of segment embeddings. If `return_frame="pandas"` is passed, it returns a Pandas DataFrame instead.
 
     The DataFrame contains the following columns:
-    * `embed_idx`: The index of the segment embedding in `X`
-    * `sample_idx`: The index of the document from which the segment was extracted
-    * `sequence_idx`: The index of the whole sequence from which the segment was extracted
-        > `sequence_idx` is identical to `sample_idx` if no document chunking was necessary
-    * `batch_idx`: The index of the batch in which the segment was extracted
+    * `document_idx`: The index of the document from which the segment was extracted
+    * `segment_idx`: A global index preserving segment extraction order
     * `segment_size`: The number of sentences in the segment
     * `segment`: The segment itself, as text
 
-    The most useful columns are `embed_idx`, `sample_idx`, `segment_size`, and `segment`. The others are provided for reference and debugging purposes.
+    Additional columns are available when `debug=True`:
+    * `orig_embed_idx`: The original embedding index before re-sorting
+    * `sequence_idx`: The index of the tokenized sequence (differs from `document_idx` when long documents are chunked)
+    * `batch_idx`: The index of the batch in which the segment was processed
 
     To access the segment embeddings from the `i`-th document, use the following:
 
     ```python
     i = 10
-    doc_segments = X[df.filter(pl.col("sample_idx") == i)["embed_idx"]]
+    doc_mask = df["document_idx"] == i
+    doc_segments = X[doc_mask]
     ```
 
     Or in Pandas:
 
     ```python
     i = 10
-    doc_segments = X[df.query("sample_idx == @i")["embed_idx"]]
-    # or
-    doc_segments = X[df.loc[lambda x: x["sample_idx"] == i, "embed_idx"]]
+    doc_segments = X[df["document_idx"] == i]
     ```
 
 ### Optimizations

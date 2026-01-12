@@ -504,6 +504,7 @@ class FinePhrase:
         doc_overlap: float | int = 0.5,
         return_frame: str = "polars",
         convert_to_numpy: bool = True,
+        debug: bool = False,
     ) -> dict[str, np.ndarray | torch.Tensor]:
         """Obtain the segments and segment embeddings from a list of documents.
 
@@ -546,6 +547,11 @@ class FinePhrase:
             'polars', 'pandas', or 'arrow'.
         convert_to_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
+        debug : bool, optional
+            Include additional columns in the output DataFrame for debugging,
+            by default False. When False, only essential columns are returned:
+            document_idx, segment_idx, segment_size, segment. When True, additional
+            columns are included: orig_embed_idx, sequence_idx, batch_idx.
 
         Returns
         -------
@@ -601,11 +607,13 @@ class FinePhrase:
         results = {
             "batch_idx": [],
             "sequence_idx": [],
+            "segment_idx": [],
             "segment_token_ids": [],
             "segment_size": [],
             "segment_embeds": [],
             "sentence_ids": [],
         }
+        segment_offset = 0
         for batch in batches:
             if not self.pca_mode:
                 # Postprocess on the fly to potentially conserve memory
@@ -625,6 +633,9 @@ class FinePhrase:
             )
             results["batch_idx"].append(batch["batch_idx"])
             results["sequence_idx"].append(batch["sequence_idx"])
+            # Make segment_idx global by adding offset
+            results["segment_idx"].append(batch["segment_idx"] + segment_offset)
+            segment_offset += len(batch["segment_idx"])
             if isinstance(batch["segment_token_ids"], list):
                 results["segment_token_ids"].extend(batch["segment_token_ids"])
             else:  # If segment_token_ids is a tensor, convert to list
@@ -651,19 +662,34 @@ class FinePhrase:
             if len(value) and isinstance(value[0], torch.Tensor):
                 results[key] = torch.cat(value, dim=0)
         if chunk_docs:
-            mapping = torch.tensor(inputs.data["overflow_to_sample_mapping"])
-            results["sample_idx"] = mapping[results["sequence_idx"]]
+            # Both sequence_idx and overflow_to_sample_mapping are sorted together,
+            # so create a mapping from original sequence index to sample index
+            seq_to_sample = dict(zip(
+                inputs.data["sequence_idx"],
+                inputs.data["overflow_to_sample_mapping"]
+            ))
+            results["document_idx"] = torch.tensor([
+                seq_to_sample[s.item()] for s in results["sequence_idx"]
+            ])
         else:
-            results["sample_idx"] = results["sequence_idx"]
+            results["document_idx"] = results["sequence_idx"]
         results["embed_idx"] = torch.arange(results["segment_embeds"].shape[0])
         pdf, vecs = _build_results_dataframe(
             results,
             convert_to_numpy=convert_to_numpy,
             return_frame="polars",
+            debug=debug,
         )
         if inputs.sort_by_token_count:
-            pdf = pdf.sort("sequence_idx", descending=False)
+            pdf = pdf.sort("sequence_idx", "segment_idx", descending=False)
             vecs = vecs[pdf["embed_idx"]]
+        # Handle internal columns
+        if debug:
+            # Rename embed_idx to orig_embed_idx for clarity
+            pdf = pdf.rename({"embed_idx": "orig_embed_idx"})
+        else:
+            # Drop internal columns in non-debug mode
+            pdf = pdf.drop(["embed_idx", "sequence_idx"])
         return pdf, vecs
 
     def encode_queries(

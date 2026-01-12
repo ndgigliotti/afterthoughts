@@ -522,9 +522,11 @@ def get_segment_idx(
         "sentence_ids": [],
         "segment_size": [],
         "sequence_idx": [],
+        "segment_idx": [],
     }
     if isinstance(segment_sizes, int):
         segment_sizes = [segment_sizes]
+    segment_counter = 0
     for i, size in enumerate(segment_sizes):
         overlap_sents = get_overlap_count(overlap, size, i)
         step = size - overlap_sents
@@ -541,15 +543,21 @@ def get_segment_idx(
             segment_token_idx = [
                 torch.nonzero(mask, as_tuple=False).squeeze() for mask in segment_masks
             ]
+            num_segments = len(segment_token_ids)
             results["segment_token_ids"].extend(segment_token_ids)
             results["sentence_ids"].extend(
                 [seq_sentence_ids[mask] for mask in segment_masks]
             )
             results["segment_token_idx"].extend(segment_token_idx)
-            results["segment_size"].append(torch.full((len(segment_token_ids),), size))
-            results["sequence_idx"].append(seq_idx.repeat_interleave(len(segment_token_ids)))
+            results["segment_size"].append(torch.full((num_segments,), size))
+            results["sequence_idx"].append(seq_idx.repeat_interleave(num_segments))
+            results["segment_idx"].append(
+                torch.arange(segment_counter, segment_counter + num_segments)
+            )
+            segment_counter += num_segments
     results["segment_size"] = torch.cat(results["segment_size"])
     results["sequence_idx"] = torch.cat(results["sequence_idx"])
+    results["segment_idx"] = torch.cat(results["segment_idx"])
     results["attention_mask"] = pad_sequence(
         [torch.ones_like(p) for p in results["segment_token_idx"]],
         batch_first=True,
@@ -570,6 +578,7 @@ def get_segment_idx(
         == results["sentence_ids"].size(0)
         == results["segment_size"].size(0)
         == results["sequence_idx"].size(0)
+        == results["segment_idx"].size(0)
     )
     return results
 
@@ -741,6 +750,7 @@ def _compute_segment_embeds(
 
     results = {
         "sequence_idx": segment_data["sequence_idx"],
+        "segment_idx": segment_data["segment_idx"],
         "segment_token_ids": segment_data["segment_token_ids"],
         "sentence_ids": segment_data["sentence_ids"],
         "segment_size": segment_data["segment_size"],
@@ -752,6 +762,7 @@ def _compute_segment_embeds(
         == results["segment_embeds"].size(0)
         == results["sequence_idx"].numel()
         == results["segment_size"].numel()
+        == results["segment_idx"].numel()
     )
     return results
 
