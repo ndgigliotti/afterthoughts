@@ -65,17 +65,15 @@ def test_pad_invalid_strategy():
 
 def test_dynamic_pad_collate():
     batch = [
-        {
-            "input_ids": torch.tensor([1, 2, 3]),
-            "attention_mask": torch.tensor([1, 1, 1]),
-        },
-        {"input_ids": torch.tensor([4, 5]), "attention_mask": torch.tensor([1, 1])},
-        {"input_ids": torch.tensor([6]), "attention_mask": torch.tensor([1])},
+        {"input_ids": [1, 2, 3]},
+        {"input_ids": [4, 5]},
+        {"input_ids": [6]},
     ]
     pad_token_id = 0
     collated = dynamic_pad_collate(batch, pad_token_id)
-    expected_input_ids = torch.tensor([[1, 2, 3], [4, 5, 0], [6, 0, 0]])
-    expected_attention_mask = torch.tensor([[1, 1, 1], [1, 1, 0], [1, 0, 0]])
+    # Standardize=True rounds up to power of 2, so length 3 -> 4
+    expected_input_ids = torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0], [6, 0, 0, 0]])
+    expected_attention_mask = torch.tensor([[1, 1, 1, 0], [1, 1, 0, 0], [1, 0, 0, 0]])
     assert torch.equal(collated["input_ids"], expected_input_ids)
     assert torch.equal(collated["attention_mask"], expected_attention_mask)
 
@@ -125,26 +123,16 @@ def test_get_max_length_required_without_model_max_length():
 
 def test_tokenized_dataset_init():
     data = {
-        "input_ids": [torch.tensor([1, 2, 3]), torch.tensor([4, 5]), torch.tensor([6])],
-        "attention_mask": [
-            torch.tensor([1, 1, 1]),
-            torch.tensor([1, 1]),
-            torch.tensor([1]),
-        ],
+        "input_ids": [[1, 2, 3], [4, 5], [6]],
     }
     dataset = TokenizedDataset(data)
     assert len(dataset) == 3
-    assert dataset.keys() == ["input_ids", "attention_mask"]
+    assert dataset.keys() == ["input_ids"]
 
 
 def test_tokenized_dataset_validate_data():
     data = {
-        "input_ids": [torch.tensor([1, 2, 3]), torch.tensor([4, 5]), torch.tensor([6])],
-        "attention_mask": [
-            torch.tensor([1, 1, 1]),
-            torch.tensor([1, 1]),
-            torch.tensor([1]),
-        ],
+        "input_ids": [[1, 2, 3], [4, 5], [6]],
     }
     dataset = TokenizedDataset(data)
     dataset.validate_data()  # Should not raise any exceptions
@@ -152,11 +140,8 @@ def test_tokenized_dataset_validate_data():
 
 def test_tokenized_dataset_invalid_data():
     data = {
-        "input_ids": [torch.tensor([1, 2, 3]), torch.tensor([4, 5]), torch.tensor([6])],
-        "attention_mask": [
-            torch.tensor([1, 1, 1]),
-            torch.tensor([1, 1]),
-        ],  # Different length
+        "input_ids": [[1, 2, 3], [4, 5], [6]],
+        "sequence_idx": [0, 1],  # Different length
     }
     with pytest.raises(
         ValueError, match="All lists in the data must have the same length."
@@ -166,63 +151,43 @@ def test_tokenized_dataset_invalid_data():
 
 def test_tokenized_dataset_get_sort_idx():
     data = {
-        "input_ids": [torch.tensor([1, 2, 3]), torch.tensor([4, 5]), torch.tensor([6])],
-        "attention_mask": [
-            torch.tensor([1, 1, 1]),
-            torch.tensor([1, 1]),
-            torch.tensor([1]),
-        ],
+        "input_ids": [[1, 2, 3], [4, 5], [6]],
     }
     dataset = TokenizedDataset(data)
-    sort_idx = dataset.get_sort_idx()
-    assert sort_idx.tolist() == [0, 1, 2]
+    sort_idx = dataset.sort_idx
+    assert sort_idx == [0, 1, 2]
 
 
 def test_tokenized_dataset_getitem():
     data = {
-        "input_ids": [torch.tensor([1, 2, 3]), torch.tensor([4, 5]), torch.tensor([6])],
-        "attention_mask": [
-            torch.tensor([1, 1, 1]),
-            torch.tensor([1, 1]),
-            torch.tensor([1]),
-        ],
+        "input_ids": [[1, 2, 3], [4, 5], [6]],
     }
     dataset = TokenizedDataset(data)
     item = dataset[0]
-    assert torch.equal(item["input_ids"], torch.tensor([1, 2, 3]))
-    assert torch.equal(item["attention_mask"], torch.tensor([1, 1, 1]))
+    assert item["input_ids"] == [1, 2, 3]
 
 
 def test_tokenized_dataset_sorting():
     data = {
-        "input_ids": [torch.tensor([1, 2, 3]), torch.tensor([4, 5]), torch.tensor([6])],
-        "attention_mask": [
-            torch.tensor([1, 1, 1]),
-            torch.tensor([1, 1]),
-            torch.tensor([1]),
-        ],
+        "input_ids": [[1, 2, 3], [4, 5], [6]],
     }
     dataset = TokenizedDataset(data, sort_by_token_count=True)
     sorted_data = [dataset[i] for i in range(len(dataset))]
-    assert torch.equal(sorted_data[0]["input_ids"], torch.tensor([1, 2, 3]))
-    assert torch.equal(sorted_data[1]["input_ids"], torch.tensor([4, 5]))
-    assert torch.equal(sorted_data[2]["input_ids"], torch.tensor([6]))
+    # Sorted by length descending: [1,2,3] (len 3), [4,5] (len 2), [6] (len 1)
+    assert sorted_data[0]["input_ids"] == [1, 2, 3]
+    assert sorted_data[1]["input_ids"] == [4, 5]
+    assert sorted_data[2]["input_ids"] == [6]
 
 
 def test_tokenized_dataset_unsorted():
     data = {
-        "input_ids": [torch.tensor([1, 2, 3]), torch.tensor([4, 5]), torch.tensor([6])],
-        "attention_mask": [
-            torch.tensor([1, 1, 1]),
-            torch.tensor([1, 1]),
-            torch.tensor([1]),
-        ],
+        "input_ids": [[1, 2, 3], [4, 5], [6]],
     }
     dataset = TokenizedDataset(data, sort_by_token_count=False)
     unsorted_data = [dataset[i] for i in range(len(dataset))]
-    assert torch.equal(unsorted_data[0]["input_ids"], torch.tensor([1, 2, 3]))
-    assert torch.equal(unsorted_data[1]["input_ids"], torch.tensor([4, 5]))
-    assert torch.equal(unsorted_data[2]["input_ids"], torch.tensor([6]))
+    assert unsorted_data[0]["input_ids"] == [1, 2, 3]
+    assert unsorted_data[1]["input_ids"] == [4, 5]
+    assert unsorted_data[2]["input_ids"] == [6]
 
 
 def test_tokenize_batch_basic():
@@ -329,9 +294,7 @@ def test_tokenize_docs_basic():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     result = tokenize_docs(docs, tokenizer)
     assert "input_ids" in result
-    assert "attention_mask" in result
     assert len(result["input_ids"]) == 2
-    assert len(result["attention_mask"]) == 2
 
 
 def test_tokenize_docs_max_length():
@@ -381,5 +344,6 @@ def test_tokenize_docs_return_tokenized_dataset():
     result = tokenize_docs(docs, tokenizer, return_tokenized_dataset=True)
     assert isinstance(result, TokenizedDataset)
     assert len(result) == 2
-    assert result[0]["input_ids"].shape == (6,)
-    assert result[0]["attention_mask"].shape == (6,)
+    # Dataset is sorted by length, so result[0] is the longest
+    assert isinstance(result[0]["input_ids"], list)
+    assert len(result[0]["input_ids"]) > 0

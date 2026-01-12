@@ -22,7 +22,6 @@ def test_finephrase_init():
     pca_fit_batch_count = 1.0
     device = "cuda"
     num_token_jobs = 8
-    num_loader_jobs = 4
 
     finephrase = FinePhrase(
         model_name=model_name,
@@ -35,7 +34,6 @@ def test_finephrase_init():
         pca_fit_batch_count=pca_fit_batch_count,
         device=device,
         num_token_jobs=num_token_jobs,
-        num_loader_jobs=num_loader_jobs,
     )
 
     assert finephrase.tokenizer is not None
@@ -49,7 +47,6 @@ def test_finephrase_init():
     assert finephrase.pca_fit_batch_count == pca_fit_batch_count
     assert finephrase.device.type == device
     assert finephrase.num_token_jobs == num_token_jobs
-    assert finephrase.num_loader_jobs == num_loader_jobs
 
     # Test invalid truncate_dims and pca combination
     with pytest.raises(ValueError):
@@ -206,7 +203,6 @@ def model():
         device="cpu",
         amp=False,
         num_token_jobs=1,
-        num_loader_jobs=1,
     )
 
 
@@ -246,7 +242,7 @@ def test_finephrase_to_device(model):
 
 def test_finephrase_encode(model):
     docs = ["This is a test document.", "Another test document."]
-    df, X = model.encode(docs, phrase_sizes=3, max_length=10, batch_size=1)
+    df, X = model.encode(docs, phrase_sizes=3, max_length=10, batch_max_tokens=1)
     assert isinstance(df, pl.DataFrame)
     assert isinstance(X, np.ndarray)
     assert len(df) == len(X)
@@ -259,7 +255,6 @@ def test_finephrase_encode_multiple_phrase_sizes():
         device="cpu",
         amp=False,
         num_token_jobs=1,
-        num_loader_jobs=1,
     )
     phrase_sizes = [3, 5]
     df, X = finephrase.encode(

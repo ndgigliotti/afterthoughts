@@ -96,7 +96,7 @@ class TokenizedDataset(Dataset):
                     self.data[key] = []
             elif isinstance(self.data[key][0], (torch.Tensor, np.ndarray)):
                 if len(self.data[key]):
-                    self.data[key] = self.data[key][self.sort_idx]
+                    self.data[key] = order_by_indices(self.data[key], self.sort_idx)
         self.token_counts = order_by_indices(self.token_counts, self.sort_idx)
 
     def keys(self) -> list[str]:
@@ -530,7 +530,7 @@ def dynamic_pad_collate(
                 collated[key] = batch_vals
                 if isinstance(collated[key][0], (int, float)):
                     collated[key] = torch.tensor(collated[key])
-    collated["attention_mask"] = collated["input_ids"].ne(pad_token_id).long()
+        collated["attention_mask"] = collated["input_ids"].ne(pad_token_id).long()
     return collated
 
 
