@@ -2,43 +2,42 @@
 
 # FinePhrase
 
-Generate fine-grained phrase embeddings with state-of-the-art transformers.
+Generate fine-grained, sentence-based segment embeddings with state-of-the-art transformers.
 
 This is a new project that is heavily under development. Please check back soon for updates.
 
 ## Concept
 
-FinePhrase provides a fast, memory efficient, and context-aware method of generating massive numbers of phrase embeddings using transformers. It can be used for a variety of tasks, including semantic search, rules-based classification, clustering, and more. Its primary feature is the ability to efficiently combine the transformer's contextually enriched token embeddings to derive phrase embeddings. This is done by calculating all the possible overlapping sub-sequences and averaging the corresponding token embeddings from the model's final hidden state. The result is a set of contextually enriched phrase embeddings.
+FinePhrase provides a fast, memory efficient, and context-aware method of generating embeddings for sentence-based segments using transformers. It can be used for a variety of tasks, including semantic search, rules-based classification, clustering, and more. Its primary feature is the ability to efficiently combine the transformer's contextually enriched token embeddings to derive segment embeddings. This is done by detecting sentence boundaries using BlingFire, then extracting overlapping groups of consecutive sentences and averaging the corresponding token embeddings from the model's final hidden state. The result is a set of contextually enriched segment embeddings.
 
-Unlike tools like [KeyBERT](https://github.com/MaartenGr/KeyBERT), the purpose of FinePhrase is not to extract the top key-phrases from a document. Rather, the purpose is to extract all of the overlapping sub-sequence embeddings to facilitate fine-grained analysis. FinePhrase is designed to be highly memory efficient, allowing you to generate phrase embeddings for tens of thousands of documents without running out of memory. That means holding tens of millions of phrase embeddings in memory at once, depending on the configuration.
-
-The word "phrase" is used here loosely to mean any sub-sequence of tokens. This can include everything from short sub-sequences (e.g. bigrams or trigrams) to extremely long sub-sequences (e.g. 500-grams). FinePhrase allows you to extract embeddings for sub-sequences of any length, with any degree of overlap. You can even extract embeddings for sub-sequences of multiple different lengths at the same time.
+The purpose of FinePhrase is to extract embeddings for groups of sentences (segments) to facilitate fine-grained analysis. FinePhrase is designed to be highly memory efficient, allowing you to generate segment embeddings for tens of thousands of documents without running out of memory. That means holding tens of millions of segment embeddings in memory at once, depending on the configuration.
 
 ### Motivation
 
-Typically data scientists opt to use document-level embeddings for tasks like semantic search, clustering, and classification. This works well for a wide range of use cases, especially those which involve shorter documents. However, these embeddings can be too coarse to capture the nuances of the data, representing the overall meaning at the expense of the details. This is particularly true when working with long or complex documents, where multiple topics are discussed in different sections. By using phrase embeddings, you can capture the meaning of the data at a much finer level of granularity.
+Typically data scientists opt to use document-level embeddings for tasks like semantic search, clustering, and classification. This works well for a wide range of use cases, especially those which involve shorter documents. However, these embeddings can be too coarse to capture the nuances of the data, representing the overall meaning at the expense of the details. This is particularly true when working with long or complex documents, where multiple topics are discussed in different sections. By using segment embeddings, you can capture the meaning of the data at a much finer level of granularity.
 
-One example use case would be searching through legal contracts to find certain clauses (e.g. a non-compete clause). If you use document-level embeddings, you may find that you miss contracts where the clause is buried in one small section of the document. However, if you use sub-sequence embeddings, you can find any part of the contract where the clause is mentioned. Furthermore, the sub-sequence embeddings are enriched with meaning from the surrounding context, allowing you to find sub-sequences which semantically match but do not lexically match your query.
+One example use case would be searching through legal contracts to find certain clauses (e.g. a non-compete clause). If you use document-level embeddings, you may find that you miss contracts where the clause is buried in one small section of the document. However, if you use segment embeddings, you can find any part of the contract where the clause is mentioned. Furthermore, the segment embeddings are enriched with meaning from the surrounding context, allowing you to find segments which semantically match but do not lexically match your query.
 
-Another example use case would be looking for a particular claim of interest in a dataset of lengthy movie reviews. For example, suppose that you are looking for any mention of one-dimensional characters. If you use document-level embeddings, you may find that you miss reviews where character development is a minor concern and not the central topic of the review. However, if you use phrase embeddings, you can find any part of the review where one-dimensional characters are mentioned.
+Another example use case would be looking for a particular claim of interest in a dataset of lengthy movie reviews. For example, suppose that you are looking for any mention of one-dimensional characters. If you use document-level embeddings, you may find that you miss reviews where character development is a minor concern and not the central topic of the review. However, if you use segment embeddings, you can find any part of the review where one-dimensional characters are mentioned.
 
 ### Advantages
 
-One of the key advantages of this approach is the efficiency of deriving phrase embeddings downstream of the model. Rather than finding phrases first and running each phrase through the model as a separate sequence, the entire document is run through the model at once. Since running sequences through the model is computationally intensive, it is much faster to run a small number of documents through than a massive number of short sequences.
+One of the key advantages of this approach is the efficiency of deriving segment embeddings downstream of the model. Rather than finding segments first and running each segment through the model as a separate sequence, the entire document is run through the model at once. Since running sequences through the model is computationally intensive, it is much faster to run a small number of documents through than a massive number of short sequences.
 
-Another key advantage of this approach is that the phrase embeddings are enriched with meaning from the surrounding context. For example, the embedding of "the characters were really something" from a movie review would be enriched with meaning from the surrounding context, allowing it to capture either a positive or negative attitude towards the characters. Even though the phrase does not contain any explicit positive or negative tokens, the model will have shifted the constituent token vectors according to the surrounding context, resulting in a phrase embedding that accurately captures the sentiment.
+Another key advantage of this approach is that the segment embeddings are enriched with meaning from the surrounding context. For example, the embedding of "the characters were really something" from a movie review would be enriched with meaning from the surrounding context, allowing it to capture either a positive or negative attitude towards the characters. Even though the segment does not contain any explicit positive or negative tokens, the model will have shifted the constituent token vectors according to the surrounding context, resulting in a segment embedding that accurately captures the sentiment.
 
 
 ## Features
 
-* Efficiently derive phrase embeddings from state-of-the-art transformer models
-* Customize the size and overlap of the phrases to extract
+* Efficiently derive sentence-based segment embeddings from state-of-the-art transformer models
+* Customize the number of sentences per segment and overlap between segments
+* Sentence boundary detection using BlingFire for accurate sentence segmentation
 * Dynamically fit PCA (using GPU) to reduce the dimensionality of the embeddings
 * Custom PyTorch implementation of incremental PCA (derived from `sklearn`)
-* Easily embed queries or other strings in the same space as the phrases
+* Easily embed queries or other strings in the same space as the segments
 * Uses the `transformers` library for easy integration with the Hugging Face model hub
 * Built in support for automatic mixed precision (AMP)
-* Outputs the phrases and indices as a Polars DataFrame for easy, scalable, manipulation
+* Outputs the segments and indices as a Polars DataFrame for easy, scalable, manipulation
 
 ## Usage Guide
 
@@ -57,88 +56,60 @@ Another key advantage of this approach is that the phrase embeddings are enriche
     model = FinePhrase("sentence-transformers/multi-qa-MiniLM-L6-cos-v1")
     ```
 
-3. Prepare a list of documents `docs` (strings) from which to extract phrase embeddings.
+3. Prepare a list of documents `docs` (strings) from which to extract segment embeddings.
 
     ```python
     docs = [
-        "I am a document.",
-        "I am another document.",
-        "I am yet another document.",
-        "I'm not like the others.",
+        "I am a document. It has multiple sentences.",
+        "I am another document. This one also has sentences.",
+        "I am yet another document. Sentences are great.",
+        "I'm not like the others. I'm special.",
     ]
     ```
 
-4. Encode and extract phrase embeddings:
+4. Encode and extract segment embeddings:
 
     ```python
     df, X = model.encode(
         docs,
-        batch_size=512,  # Model batch size, can set larger if AMP is enabled
-        phrase_sizes=[12, 24],  # Range of phrase sizes to extract
-        phrase_overlap=0.5,  # Overlap between phrases
+        segment_sizes=[1, 2],  # Extract 1-sentence and 2-sentence segments
+        segment_overlap=0.5,  # Overlap between segments (in sentences)
     )
     ```
-    The `encode` method returns a tuple containing the Polars DataFrame and the NumPy array of phrase embeddings. If `return_frame="pandas"` is passed, it returns a Pandas DataFrame instead.
+    The `encode` method returns a tuple containing the Polars DataFrame and the NumPy array of segment embeddings. If `return_frame="pandas"` is passed, it returns a Pandas DataFrame instead.
 
     The DataFrame contains the following columns:
-    * `embed_idx`: The index of the phrase embedding in `X`
-    * `sample_idx`: The index of the document from which the phrase was extracted
-    * `sequence_idx`: The index of the whole sequence from which the phrase was extracted
+    * `embed_idx`: The index of the segment embedding in `X`
+    * `sample_idx`: The index of the document from which the segment was extracted
+    * `sequence_idx`: The index of the whole sequence from which the segment was extracted
         > `sequence_idx` is identical to `sample_idx` if no document chunking was necessary
-    * `batch_idx`: The index of the batch in which the phrase was extracted
-    * `phrase_size`: The token count of the phrase
-    * `phrase`: The the phrase itself, as text
+    * `batch_idx`: The index of the batch in which the segment was extracted
+    * `segment_size`: The number of sentences in the segment
+    * `segment`: The segment itself, as text
 
-    The most useful columns are `embed_idx`, `sample_idx`, `phrase_size`, and `phrase`. The others are provided for reference and debugging purposes.
+    The most useful columns are `embed_idx`, `sample_idx`, `segment_size`, and `segment`. The others are provided for reference and debugging purposes.
 
-    To access the phrase embeddings from the `i`-th document, use the following:
+    To access the segment embeddings from the `i`-th document, use the following:
 
     ```python
     i = 10
-    doc_phrases = X[df.filter(pl.col("sample_idx") == i)["embed_idx"]]
+    doc_segments = X[df.filter(pl.col("sample_idx") == i)["embed_idx"]]
     ```
 
     Or in Pandas:
 
     ```python
     i = 10
-    doc_phrases = X[df.query("sample_idx == @i")["embed_idx"]]
+    doc_segments = X[df.query("sample_idx == @i")["embed_idx"]]
     # or
-    doc_phrases = X[df.loc[lambda x: x["sample_idx"] == i, "embed_idx"]]
+    doc_segments = X[df.loc[lambda x: x["sample_idx"] == i, "embed_idx"]]
     ```
-
-5. Optionally, search the phrases (requires FAISS).
-
-    ```python
-    queries = [
-        "I am a query.",
-        "I am another query.",
-        "I am yet another query.",
-        "I'm a little bit different.",
-    ]
-    # Perform a one-off search using the model
-    search_results = model.search(
-        queries, # Encode queries on the fly
-        phrase_embeds=X,
-        phrase_df=df,
-        sim_thresh=0.5,  # Cosine similarity threshold
-    )
-    ```
-
-    This method is intended as a convenient way to perform one-off searches while encoding the queries on the fly. Note that the following functions and methods can be used
-    for greater flexibility:
-
-    * `FinePhrase.encode_queries`
-    * `utils.search_phrases`
-    * `utils.build_faiss_index`
-
-    For more advanced use cases, it is recommended to use the `faiss` library directly, or other semantic search tools.
 
 ### Optimizations
 
 #### Using PCA with FinePhrase
 
-If you are working with an extremely large dataset (hundreds of thousands of documents, extremely long documents, or extremely fine-grained phrase settings), it may be necessary to use the PCA feature. If PCA is enabled, `FinePhrase` will incrementally learn a PCA transformation and then, once finished, begin applying it to each batch. The transformation is considered fit when it has seen the specified number (or proportion) of batches. This implementation of PCA harnesses the GPU, so it is fast to train and apply. Using PCA can significantly reduce the memory requirements of the pipeline without sacrificing too much quality or speed. Be sure to set the `pca` parameter to a value that balances memory efficiency and accuracy for your use case. Also be sure to set the `pca_fit_batch_count` parameter to a value that is large enough to learn the transformation. Initialize the model like so:
+If you are working with an extremely large dataset (hundreds of thousands of documents, extremely long documents, or extremely fine-grained segment settings), it may be necessary to use the PCA feature. If PCA is enabled, `FinePhrase` will incrementally learn a PCA transformation and then, once finished, begin applying it to each batch. The transformation is considered fit when it has seen the specified number (or proportion) of batches. This implementation of PCA harnesses the GPU, so it is fast to train and apply. Using PCA can significantly reduce the memory requirements of the pipeline without sacrificing too much quality or speed. Be sure to set the `pca` parameter to a value that balances memory efficiency and accuracy for your use case. Also be sure to set the `pca_fit_batch_count` parameter to a value that is large enough to learn the transformation. Initialize the model like so:
 
 ```python
 import torch
@@ -153,7 +124,7 @@ model = FinePhrase(
 
 By default, `pca_fit_batch_count` is set to `1.0`, meaning that the entire dataset will be used to fit PCA. This is good if you are not worried about memory usage and just want to apply the transformation after all the batches are finished. However, if you are working with a very large dataset and have limited memory, you can set `pca_fit_batch_count` to a value less than `1.0` to fit PCA on a subset of the batches. This will allow you to start applying the transformation sooner, at the cost of potentially lower quality embeddings.
 
-Also keep in mind that using too small a batch size may cause the PCA transformation to be less effective, as each batch will be less representative of the overall dataset. It is recommended to use a batch size that is large enough to capture the overall distribution of the data. You may also want to shuffle your dataset before passing it in, to increase the representativeness of each batch. Furthermore, keep in mind that what PCA is being updated on are the phrase embeddings, of which there are many per sequence. So if the batch size is set to 128 and there are 100 phrases per sequence, then PCA is being updated on batches of 12,800 phrase embeddings.
+Also keep in mind that using too small a batch size may cause the PCA transformation to be less effective, as each batch will be less representative of the overall dataset. It is recommended to use a batch size that is large enough to capture the overall distribution of the data. You may also want to shuffle your dataset before passing it in, to increase the representativeness of each batch. Furthermore, keep in mind that what PCA is being updated on are the segment embeddings, of which there are many per sequence. So if the batch size is set to 128 and there are 100 segments per sequence, then PCA is being updated on batches of 12,800 segment embeddings.
 
 If you wish to clear the PCA transformation and start over, you can call the `clear_pca` method:
 
@@ -249,17 +220,14 @@ model = FinePhrase(
 
 #### Memory Requirements
 
-Since each document can contain thousands of phrases, the memory requirements for this approach can be quite high.
+Since each document can contain many segments, the memory requirements for this approach can be quite high.
 
 #### Sequence Length
 
-The context-awareness is limited by the maximum sequence length of the model. Currently, documents that exceed the maximum sequence length are handled by chunking the sequence into smaller overlapping sequences. This can lead to a loss of context at the boundaries of the chunks and also results in duplicate phrases.
+The context-awareness is limited by the maximum sequence length of the model. Currently, documents that exceed the maximum sequence length are handled by chunking the sequence into smaller overlapping sequences while preserving sentence boundaries. This can lead to a loss of context at the boundaries of the chunks and also results in duplicate segments.
 
 ## Future Work
 
-* ~~Introduce phrase overlap to reduce redundant phrases~~
-* ~~Add optional normalization for the phrase embeddings~~
-* ~~Add sentence segmentation~~
 * Add paragraph segmentation
 * Decouple tokenization from sentence alignment and chunking
 

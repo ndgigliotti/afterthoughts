@@ -451,15 +451,15 @@ def check_tensors(
     return tensors
 
 
-def get_sentence_phrase_idx(
+def get_segment_idx(
     input_ids: torch.Tensor,
     sentence_ids: torch.Tensor,
-    phrase_sizes: list | tuple | int,
+    segment_sizes: list | tuple | int,
     overlap: int | float | list | dict = 0.5,
     sequence_idx: torch.Tensor | None = None,
     pad_token_id: int = 0,
 ) -> dict:
-    """Get phrase indices while preserving sentence structure.
+    """Get segment indices while preserving sentence structure.
 
     Parameters
     ----------
@@ -467,26 +467,26 @@ def get_sentence_phrase_idx(
         Tensor containing input token IDs.
     sentence_ids : torch.Tensor
         Tensor containing sentence IDs, padded with -1.
-    phrase_sizes : list, tuple, or int
-        Sizes of the phrases to extract.
+    segment_sizes : list, tuple, or int
+        Sizes of the segments to extract (in number of sentences).
     overlap : int, float, list, or dict, optional
-        Overlap between phrases (number or fraction of sentences).
+        Overlap between segments (number or fraction of sentences).
         Default is 0.5.
     sequence_idx : torch.Tensor or None, optional
         Tensor containing sequence indices. If None, a default sequence index is generated.
         Default is None.
     pad_token_id : int, optional
-        Token ID used for padding phrase token IDs. Default is 0.
+        Token ID used for padding segment token IDs. Default is 0.
 
     Returns
     -------
     dict
         Dictionary containing the following keys:
-        - "phrase_idx": 0-padded matrix of phrase indices.
-        - "phrase_ids": Padded matrix of phrase token IDs.
+        - "segment_token_idx": 0-padded matrix of token indices within segments.
+        - "segment_token_ids": Padded matrix of segment token IDs.
         - "sentence_ids": Padded matrix of sentence IDs.
-        - "attention_mask": Attention mask for the phrase indices.
-        - "phrase_size": Sizes of the phrases (in sentences).
+        - "attention_mask": Attention mask for the segment indices.
+        - "segment_size": Sizes of the segments (in sentences).
         - "sequence_idx": Sequence indices.
 
     Raises
@@ -497,8 +497,8 @@ def get_sentence_phrase_idx(
 
     Notes
     -----
-    This function processes each sentence boundary index and extracts phrases of specified sizes,
-    ensuring that the sentence structure is preserved. The overlap between phrases can be controlled
+    This function processes each sentence boundary index and extracts segments of specified sizes,
+    ensuring that the sentence structure is preserved. The overlap between segments can be controlled
     using the `overlap` parameter.
     """
     if sequence_idx is None:
@@ -517,15 +517,15 @@ def get_sentence_phrase_idx(
             f"must match size of `input_ids` ({input_ids.size(0)})."
         )
     results = {
-        "phrase_idx": [],
-        "phrase_ids": [],
+        "segment_token_idx": [],
+        "segment_token_ids": [],
         "sentence_ids": [],
-        "phrase_size": [],
+        "segment_size": [],
         "sequence_idx": [],
     }
-    if isinstance(phrase_sizes, int):
-        phrase_sizes = [phrase_sizes]
-    for i, size in enumerate(phrase_sizes):
+    if isinstance(segment_sizes, int):
+        segment_sizes = [segment_sizes]
+    for i, size in enumerate(segment_sizes):
         overlap_sents = get_overlap_count(overlap, size, i)
         step = size - overlap_sents
         for seq_input_ids, seq_sentence_ids, seq_idx in zip(
@@ -533,58 +533,58 @@ def get_sentence_phrase_idx(
         ):
             unique_sent_ids = torch.unique(seq_sentence_ids[seq_sentence_ids != -1])
             eff_size = min(size, len(unique_sent_ids))
-            phrase_sent_ids = unique_sent_ids.unfold(0, eff_size, step)
-            phrase_masks = [
-                torch.isin(seq_sentence_ids, phrase) for phrase in phrase_sent_ids
+            segment_sent_ids = unique_sent_ids.unfold(0, eff_size, step)
+            segment_masks = [
+                torch.isin(seq_sentence_ids, segment) for segment in segment_sent_ids
             ]
-            phrase_ids = [seq_input_ids[mask] for mask in phrase_masks]
-            phrase_idx = [
-                torch.nonzero(mask, as_tuple=False).squeeze() for mask in phrase_masks
+            segment_token_ids = [seq_input_ids[mask] for mask in segment_masks]
+            segment_token_idx = [
+                torch.nonzero(mask, as_tuple=False).squeeze() for mask in segment_masks
             ]
-            results["phrase_ids"].extend(phrase_ids)
+            results["segment_token_ids"].extend(segment_token_ids)
             results["sentence_ids"].extend(
-                [seq_sentence_ids[mask] for mask in phrase_masks]
+                [seq_sentence_ids[mask] for mask in segment_masks]
             )
-            results["phrase_idx"].extend(phrase_idx)
-            results["phrase_size"].append(torch.full((len(phrase_ids),), size))
-            results["sequence_idx"].append(seq_idx.repeat_interleave(len(phrase_ids)))
-    results["phrase_size"] = torch.cat(results["phrase_size"])
+            results["segment_token_idx"].extend(segment_token_idx)
+            results["segment_size"].append(torch.full((len(segment_token_ids),), size))
+            results["sequence_idx"].append(seq_idx.repeat_interleave(len(segment_token_ids)))
+    results["segment_size"] = torch.cat(results["segment_size"])
     results["sequence_idx"] = torch.cat(results["sequence_idx"])
     results["attention_mask"] = pad_sequence(
-        [torch.ones_like(p) for p in results["phrase_idx"]],
+        [torch.ones_like(p) for p in results["segment_token_idx"]],
         batch_first=True,
         padding_value=0,
     ).to(input_ids.device)
-    results["phrase_idx"] = pad_sequence(
-        results["phrase_idx"], batch_first=True, padding_value=0
+    results["segment_token_idx"] = pad_sequence(
+        results["segment_token_idx"], batch_first=True, padding_value=0
     ).to(input_ids.device)
-    results["phrase_ids"] = pad_sequence(
-        results["phrase_ids"], batch_first=True, padding_value=pad_token_id
+    results["segment_token_ids"] = pad_sequence(
+        results["segment_token_ids"], batch_first=True, padding_value=pad_token_id
     ).to(input_ids.device)
     results["sentence_ids"] = pad_sequence(
         results["sentence_ids"], batch_first=True, padding_value=-1
     ).to(input_ids.device)
     assert (
-        results["phrase_idx"].size(0)
-        == results["phrase_ids"].size(0)
+        results["segment_token_idx"].size(0)
+        == results["segment_token_ids"].size(0)
         == results["sentence_ids"].size(0)
-        == results["phrase_size"].size(0)
+        == results["segment_size"].size(0)
         == results["sequence_idx"].size(0)
     )
     return results
 
 
-def _compute_sentence_phrase_embeds_slow(
+def _compute_segment_embeds_slow(
     input_ids: torch.Tensor,
     token_embeds: torch.Tensor,
     sent_boundary_idx: list[torch.Tensor] | torch.Tensor,
     sequence_idx: torch.Tensor,
     tokenizer,
-    phrase_sizes: int | list | tuple = 2,
+    segment_sizes: int | list | tuple = 2,
     overlap: int | float | list | dict = 0.5,
 ) -> dict[str, torch.Tensor]:
     """
-    Compute sentence phrase embeddings.
+    Compute segment embeddings (slow version).
 
     Parameters
     ----------
@@ -600,24 +600,24 @@ def _compute_sentence_phrase_embeds_slow(
         Tensor containing sequence indices.
     tokenizer : object
         Tokenizer object used to identify special tokens.
-    phrase_sizes : int or list or tuple, optional
-        Size(s) of the phrases to be considered. Default is 2.
+    segment_sizes : int or list or tuple, optional
+        Size(s) of the segments to be considered (in sentences). Default is 2.
     overlap : int or float or list or dict, optional
-        Overlap between phrases. Default is 0.5.
+        Overlap between segments. Default is 0.5.
 
     Returns
     -------
     dict[str, torch.Tensor]
         Dictionary containing the following keys:
         - "sequence_idx": Tensor of sequence indices.
-        - "phrase_ids": Tensor of phrase IDs.
-        - "phrase_size": Tensor of phrase sizes.
-        - "phrase_embeds": Tensor of phrase embeddings.
+        - "segment_token_ids": Tensor of segment token IDs.
+        - "segment_size": Tensor of segment sizes.
+        - "segment_embeds": Tensor of segment embeddings.
     """
-    phrase_data = get_sentence_phrase_idx(
+    segment_data = get_segment_idx(
         input_ids,
         sent_boundary_idx,
-        phrase_sizes=phrase_sizes,
+        segment_sizes=segment_sizes,
         overlap=overlap,
         sequence_idx=sequence_idx,
     )
@@ -628,41 +628,41 @@ def _compute_sentence_phrase_embeds_slow(
         invert=True,
     ).to(torch.uint8)
     results = {
-        "sequence_idx": phrase_data["sequence_idx"],
-        "phrase_ids": phrase_data["phrase_ids"],
-        "phrase_size": phrase_data["phrase_size"],
-        "phrase_embeds": [],
+        "sequence_idx": segment_data["sequence_idx"],
+        "segment_token_ids": segment_data["segment_token_ids"],
+        "segment_size": segment_data["segment_size"],
+        "segment_embeds": [],
     }
     masked_token_embeds = token_embeds * special_tokens_mask.unsqueeze(-1)
-    for seq_idx, phrase_idx in zip(
-        phrase_data["sequence_idx"], phrase_data["phrase_idx"]
+    for seq_idx, segment_token_idx in zip(
+        segment_data["sequence_idx"], segment_data["segment_token_idx"]
     ):
-        divisor = special_tokens_mask[seq_idx, phrase_idx].sum().clamp(min=1)
-        embed = masked_token_embeds[seq_idx, phrase_idx].sum(dim=0) / divisor
-        results["phrase_embeds"].append(embed)
+        divisor = special_tokens_mask[seq_idx, segment_token_idx].sum().clamp(min=1)
+        embed = masked_token_embeds[seq_idx, segment_token_idx].sum(dim=0) / divisor
+        results["segment_embeds"].append(embed)
 
-    results["phrase_embeds"] = torch.vstack(results["phrase_embeds"])
+    results["segment_embeds"] = torch.vstack(results["segment_embeds"])
     assert (
-        len(results["phrase_ids"])
-        == results["phrase_embeds"].size(0)
+        len(results["segment_token_ids"])
+        == results["segment_embeds"].size(0)
         == results["sequence_idx"].numel()
-        == results["phrase_size"].numel()
+        == results["segment_size"].numel()
     )
     return results
 
 
 @torch.no_grad()
-def _compute_sentence_phrase_embeds(
+def _compute_segment_embeds(
     input_ids: torch.Tensor,
     token_embeds: torch.Tensor,
     sentence_ids: torch.Tensor,
     sequence_idx: torch.Tensor,
     tokenizer,
-    phrase_sizes: int | list | tuple = 2,
+    segment_sizes: int | list | tuple = 2,
     overlap: int | float | list | dict = 0.5,
 ) -> dict[str, torch.Tensor]:
     """
-    Compute embeddings for phrases within sentences using token embeddings.
+    Compute embeddings for segments (sentence groups) using token embeddings.
 
     Parameters
     ----------
@@ -676,25 +676,25 @@ def _compute_sentence_phrase_embeds(
         Tensor containing sequence indices.
     tokenizer : PreTrainedTokenizer
         Tokenizer used to process the input text.
-    phrase_sizes : int or list or tuple, optional
-        Number of sentences per phrase, by default 2.
+    segment_sizes : int or list or tuple, optional
+        Number of sentences per segment, by default 2.
     overlap : int or float or list or dict, optional
-        Overlap between phrases (number or fraction of sentences),
+        Overlap between segments (number or fraction of sentences),
         by default 0.5.
     Returns
     -------
     dict[str, torch.Tensor]
         Dictionary containing the following keys:
-        - "sequence_idx": Tensor of sequence indices for each phrase.
-        - "phrase_ids": Tensor of phrase IDs.
-        - "phrase_size": Tensor of phrase sizes.
-        - "phrase_embeds": Tensor of computed phrase embeddings.
+        - "sequence_idx": Tensor of sequence indices for each segment.
+        - "segment_token_ids": Tensor of segment token IDs.
+        - "segment_size": Tensor of segment sizes.
+        - "segment_embeds": Tensor of computed segment embeddings.
     """
-    # Get the phrase grouping information as before
-    phrase_data = get_sentence_phrase_idx(
+    # Get the segment grouping information
+    segment_data = get_segment_idx(
         input_ids,
         sentence_ids,
-        phrase_sizes=phrase_sizes,
+        segment_sizes=segment_sizes,
         overlap=overlap,
         sequence_idx=sequence_idx,
         pad_token_id=tokenizer.pad_token_id,
@@ -702,56 +702,56 @@ def _compute_sentence_phrase_embeds(
 
     # Compute the mask for non-special tokens
     valid_token_mask = torch.isin(
-        phrase_data["phrase_ids"],
+        segment_data["segment_token_ids"],
         torch.tensor(tokenizer.all_special_ids, device=input_ids.device),
         invert=True,
     ).float()
 
     # -----------------------------------------------------------
     # Use advanced, vectorized indexing to select tokens
-    # corresponding to each phrase.
+    # corresponding to each segment.
     #
     # token_embeds:         [batch, tokens, embed_dim]
-    # batch_sequence_idx:  [num_phrases, 1]
-    # phrase_idx:           [num_phrases, max_phrase_len]
+    # batch_sequence_idx:  [num_segments, 1]
+    # segment_token_idx:    [num_segments, max_segment_len]
     #
     # The resulting tensor will have shape:
-    # [num_phrases, max_phrase_len, embed_dim]
+    # [num_segments, max_segment_len, embed_dim]
     # -----------------------------------------------------------
     # Create a mapping from original sequence indices to contiguous indices
-    unique_sequences = torch.unique(phrase_data["sequence_idx"])
+    unique_sequences = torch.unique(segment_data["sequence_idx"])
     sequence_to_idx = {seq.item(): idx for idx, seq in enumerate(unique_sequences)}
     batch_sequence_idx = torch.tensor(
-        [sequence_to_idx[seq.item()] for seq in phrase_data["sequence_idx"]],
-        device=phrase_data["sequence_idx"].device
+        [sequence_to_idx[seq.item()] for seq in segment_data["sequence_idx"]],
+        device=segment_data["sequence_idx"].device
     ).unsqueeze(1)
 
-    phrase_token_embeds = token_embeds[batch_sequence_idx, phrase_data["phrase_idx"]]
+    segment_token_embeds = token_embeds[batch_sequence_idx, segment_data["segment_token_idx"]]
 
     # Sum the embeddings over the token dimension
     # (taking into account only valid positions)
     summed_embeds = torch.sum(
-        phrase_token_embeds * valid_token_mask.unsqueeze(-1), dim=1
+        segment_token_embeds * valid_token_mask.unsqueeze(-1), dim=1
     )
 
     # Compute the divisor: sum of mask values, clamp to at least one.
     valid_token_count = valid_token_mask.sum(dim=1).clamp(min=1).unsqueeze(-1)
 
-    phrase_embeds = summed_embeds / valid_token_count
+    segment_embeds = summed_embeds / valid_token_count
 
     results = {
-        "sequence_idx": phrase_data["sequence_idx"],
-        "phrase_ids": phrase_data["phrase_ids"],
-        "sentence_ids": phrase_data["sentence_ids"],
-        "phrase_size": phrase_data["phrase_size"],
-        "phrase_embeds": phrase_embeds,
+        "sequence_idx": segment_data["sequence_idx"],
+        "segment_token_ids": segment_data["segment_token_ids"],
+        "sentence_ids": segment_data["sentence_ids"],
+        "segment_size": segment_data["segment_size"],
+        "segment_embeds": segment_embeds,
     }
     assert (
-        results["phrase_ids"].size(0)
+        results["segment_token_ids"].size(0)
         == results["sentence_ids"].size(0)
-        == results["phrase_embeds"].size(0)
+        == results["segment_embeds"].size(0)
         == results["sequence_idx"].numel()
-        == results["phrase_size"].numel()
+        == results["segment_size"].numel()
     )
     return results
 

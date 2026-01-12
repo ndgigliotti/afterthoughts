@@ -19,10 +19,3 @@ try:
 except ImportError:
     _HAS_PANDAS = False
 
-try:
-    import faiss
-
-    _HAS_FAISS = True
-    del faiss
-except ImportError:
-    _HAS_FAISS = False

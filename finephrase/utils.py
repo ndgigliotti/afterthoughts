@@ -26,7 +26,7 @@ import pyarrow as pa
 import torch
 import torch.nn.functional as F
 
-from finephrase.available import _HAS_FAISS, _HAS_PANDAS
+from finephrase.available import _HAS_PANDAS
 
 if _HAS_PANDAS:
     import pandas as pd
@@ -450,106 +450,6 @@ def _(embeds: np.ndarray, dim: int) -> np.ndarray:
     return embeds
 
 
-@timer(readout="Built FAISS index in {time:.4f} seconds.")
-def build_faiss_index(embeds: np.ndarray):
-    """Build a FAISS index for the given embeddings.
-
-    Parameters
-    ----------
-    embeds : np.ndarray
-        Matrix of semantic vector representations.
-
-    Returns
-    -------
-    faiss.Index
-        The FAISS index used for finding nearest neighbors.
-    """
-    if _HAS_FAISS:
-        import faiss
-    else:
-        raise ImportError("FAISS is not installed.")
-    embeds = normalize(embeds)
-    print("Building FAISS index...")
-    index = faiss.IndexFlatIP(embeds.shape[1])  # Inner product index
-    index.add(embeds)
-    return index
-
-
-@timer(readout="Search completed in {time:.4f} seconds.")
-def search_phrases(
-    queries: list,
-    query_embeds: np.ndarray,
-    phrase_df: pl.DataFrame,
-    phrase_embeds: np.ndarray,
-    sim_thresh: float = 0.5,
-    index=None,
-) -> dict[str, pl.DataFrame]:
-    """
-    Search for documents that match the given queries based on their vector representations using FAISS.
-
-    Parameters
-    ----------
-    queries : list of str
-        List of query strings.
-    query_embeds : np.ndarray
-        Matrix of vector representations for the queries.
-    phrase_df : pl.DataFrame
-        DataFrame containing phrase information. It should have a column "embed_idx"
-        for indexing.
-    phrase_embeds : np.ndarray
-        Matrix of vector representations for the phrases.
-    sim_thresh : float, optional
-        Cosine similarity threshold for the nearest neighbors search. Default is 0.5.
-        Will return all results with similarity equal to or above this threshold.
-    index : faiss.Index, optional
-        Pre-built FAISS index. If not provided, a new index will be created.
-
-    Returns
-    -------
-    index : faiss.Index
-        The FAISS index used for finding nearest neighbors.
-    hits: dict
-        A dictionary where keys are query strings and values are DataFrames
-        containing the matching phrases.
-
-    Raises
-    ------
-    ImportError
-        If FAISS is not installed.
-
-    See Also
-    --------
-    finephrase.utils.build_faiss_index
-        Build a FAISS index for the given phrase embeddings.
-    finephrase.finephrase.FinePhrase.search
-        Convenient search method which embeds query strings on the fly.
-    """
-    if not _HAS_FAISS:
-        raise ImportError("FAISS is not installed.")
-    pandas_input = _HAS_PANDAS and isinstance(phrase_df, pd.DataFrame)
-    if pandas_input:
-        phrase_df = pl.from_pandas(phrase_df)
-    query_embeds = normalize(query_embeds)
-    if index is None:
-        index = build_faiss_index(phrase_embeds)
-    print("Searching...")
-    similarities, indices = index.search(query_embeds, len(phrase_embeds))
-
-    hits = dict.fromkeys(queries, pl.DataFrame())
-    for sims, idx, query in zip(similarities, indices, queries):
-        mask = sims >= sim_thresh
-        valid_idx, valid_sims = idx[mask], sims[mask]
-        if mask.any():
-            df_hits = phrase_df.filter(pl.col("embed_idx").is_in(valid_idx))
-            df_hits = df_hits.with_columns(pl.Series("query_sim", valid_sims)).sort(
-                "query_sim", descending=True
-            )
-            hits[query] = df_hits
-    if pandas_input:
-        hits = {k: v.to_pandas() for k, v in hits.items()}
-    return index, hits
-
-
 def move_or_convert_tensors(
     data: dict, return_tensors: str = "pt", move_to_cpu: bool = False
 ):
@@ -613,14 +513,14 @@ def _build_results_dataframe(
     results: dict, return_frame: str = "polars", convert_to_numpy: bool = True
 ) -> tuple[pl.DataFrame | pa.Table, np.ndarray | torch.Tensor]:
     """
-    Consolidates the results by combining the phrase indices and phrases into a DataFrame
+    Consolidates the results by combining the segment indices and segments into a DataFrame
     and returning it alongside the embeddings.
 
     Parameters
     ----------
     results : dict
         A dictionary containing the results with keys such as 'sample_idx',
-        'sequence_idx', 'batch_idx', 'phrase_size', 'phrases', and 'phrase_embeds'.
+        'sequence_idx', 'batch_idx', 'segment_size', 'segment', and 'segment_embeds'.
     return_frame : str, optional
         The type of DataFrame to return. Options are 'polars', 'pandas', or 'arrow'.
         Defaults to 'polars'.
@@ -631,13 +531,13 @@ def _build_results_dataframe(
     -------
     tuple
         A tuple with two elements:
-        - A DataFrame containing the phrase indices and phrases.
-        - The phrase embeddings in the specified format.
+        - A DataFrame containing the segment indices and segments.
+        - The segment embeddings in the specified format.
 
     Raises
     ------
     TypeError
-        If 'phrase_embeds' in results is not a torch.Tensor.
+        If 'segment_embeds' in results is not a torch.Tensor.
     """
     # Get indices and 1d-arrays
     df = {}
@@ -647,8 +547,8 @@ def _build_results_dataframe(
         "sequence_idx",
         "sentence_idx",
         "batch_idx",
-        "phrase_size",
-        "phrase",
+        "segment_size",
+        "segment",
     ]
     if "sentence_idx" not in results:
         keys.remove("sentence_idx")
@@ -658,9 +558,9 @@ def _build_results_dataframe(
     # Convert 1d arrays to NumPy and move to CPU
     df = move_or_convert_tensors(df, return_tensors="np", move_to_cpu=True)
     # Convert embeddings if needed
-    embeds = results["phrase_embeds"]
+    embeds = results["segment_embeds"]
     if not isinstance(embeds, torch.Tensor):
-        raise TypeError("Phrase embeddings must be torch.Tensor.")
+        raise TypeError("Segment embeddings must be torch.Tensor.")
     if convert_to_numpy:
         embeds = embeds.cpu().numpy()
     else:

@@ -5,7 +5,7 @@ import pytest
 import torch
 
 from finephrase import FinePhrase
-from finephrase.phrase_utils import get_phrase_idx
+from finephrase.sentence_utils import get_segment_idx
 from finephrase.utils import _build_results_dataframe, move_or_convert_tensors
 
 MODEL_NAME = "sentence-transformers/paraphrase-MiniLM-L3-v2"
@@ -57,111 +57,50 @@ def test_finephrase_init():
         )
 
 
-def test_get_phrase_idx_single_size():
+def test_get_segment_idx_single_size():
     input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
-    attention_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1]])
-    phrase_sizes = 3
+    sentence_ids = torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2, -1]])
+    segment_sizes = 2
     overlap = 0.5
-    phrase_min_token_ratio = 0.5
 
-    result = get_phrase_idx(
-        input_ids, attention_mask, phrase_sizes, overlap, phrase_min_token_ratio
+    result = get_segment_idx(
+        input_ids, sentence_ids, segment_sizes, overlap
     )
 
-    assert "phrase_idx" in result
-    assert "phrase_ids" in result
-    assert "valid_phrase_mask" in result
+    assert "segment_token_idx" in result
+    assert "segment_token_ids" in result
+    assert "sentence_ids" in result
     assert "sequence_idx" in result
-    assert len(result["phrase_idx"]) == 1
-    assert len(result["phrase_ids"]) == 1
-    assert len(result["valid_phrase_mask"]) == 1
-    assert len(result["sequence_idx"]) == 1
+    assert "segment_size" in result
 
 
-def test_get_phrase_idx_multiple_sizes():
+def test_get_segment_idx_multiple_sizes():
     input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
-    attention_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1]])
-    phrase_sizes = [3, 5]
+    sentence_ids = torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2, -1]])
+    segment_sizes = [1, 2]
     overlap = 0.5
-    phrase_min_token_ratio = 0.5
 
-    result = get_phrase_idx(
-        input_ids, attention_mask, phrase_sizes, overlap, phrase_min_token_ratio
+    result = get_segment_idx(
+        input_ids, sentence_ids, segment_sizes, overlap
     )
 
-    assert "phrase_idx" in result
-    assert "phrase_ids" in result
-    assert "valid_phrase_mask" in result
+    assert "segment_token_idx" in result
+    assert "segment_token_ids" in result
+    assert "sentence_ids" in result
     assert "sequence_idx" in result
-    assert len(result["phrase_idx"]) == 2
-    assert len(result["phrase_ids"]) == 2
-    assert len(result["valid_phrase_mask"]) == 2
-    assert len(result["sequence_idx"]) == 2
-
-
-def test_get_phrase_idx_with_sequence_idx():
-    input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
-    attention_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1]])
-    phrase_sizes = 3
-    overlap = 0.5
-    phrase_min_token_ratio = 0.5
-    sequence_idx = torch.tensor([0])
-
-    result = get_phrase_idx(
-        input_ids,
-        attention_mask,
-        phrase_sizes,
-        overlap,
-        phrase_min_token_ratio,
-        sequence_idx,
-    )
-
-    assert "phrase_idx" in result
-    assert "phrase_ids" in result
-    assert "valid_phrase_mask" in result
-    assert "sequence_idx" in result
-    assert len(result["phrase_idx"]) == 1
-    assert len(result["phrase_ids"]) == 1
-    assert len(result["valid_phrase_mask"]) == 1
-    assert len(result["sequence_idx"]) == 1
-
-
-def test_get_phrase_idx_invalid_overlap():
-    input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
-    attention_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1]])
-    phrase_sizes = 3
-    overlap = 1.0
-    phrase_min_token_ratio = 0.5
-
-    with pytest.raises(ValueError):
-        get_phrase_idx(
-            input_ids, attention_mask, phrase_sizes, overlap, phrase_min_token_ratio
-        )
-
-
-def test_get_phrase_idx_invalid_phrase_min_token_ratio():
-    input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
-    attention_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1]])
-    phrase_sizes = 3
-    overlap = 0.5
-    phrase_min_token_ratio = 0.0
-
-    with pytest.raises(ValueError):
-        get_phrase_idx(
-            input_ids, attention_mask, phrase_sizes, overlap, phrase_min_token_ratio
-        )
+    assert "segment_size" in result
 
 
 def test_move_or_convert_results_to_cpu():
     results = {
-        "phrase_ids": torch.tensor([[1, 2, 3], [4, 5, 6]], device="cuda"),
+        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]], device="cuda"),
         "sequence_idx": torch.tensor([0, 1], device="cuda"),
-        "phrase_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]], device="cuda"),
+        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]], device="cuda"),
     }
     expected_results = {
-        "phrase_ids": torch.tensor([[1, 2, 3], [4, 5, 6]], device="cpu"),
+        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]], device="cpu"),
         "sequence_idx": torch.tensor([0, 1], device="cpu"),
-        "phrase_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]], device="cpu"),
+        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]], device="cpu"),
     }
     converted_results = move_or_convert_tensors(results, move_to_cpu=True)
     for key in results:
@@ -170,14 +109,14 @@ def test_move_or_convert_results_to_cpu():
 
 def test_move_or_convert_results_to_numpy():
     results = {
-        "phrase_ids": torch.tensor([[1, 2, 3], [4, 5, 6]], device="cuda"),
+        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]], device="cuda"),
         "sequence_idx": torch.tensor([0, 1], device="cuda"),
-        "phrase_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]], device="cuda"),
+        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]], device="cuda"),
     }
     expected_results = {
-        "phrase_ids": np.array([[1, 2, 3], [4, 5, 6]]),
+        "segment_token_ids": np.array([[1, 2, 3], [4, 5, 6]]),
         "sequence_idx": np.array([0, 1]),
-        "phrase_embeds": np.array([[0.1, 0.2], [0.3, 0.4]]),
+        "segment_embeds": np.array([[0.1, 0.2], [0.3, 0.4]]),
     }
     converted_results = move_or_convert_tensors(
         results, return_tensors="np", move_to_cpu=True
@@ -188,9 +127,9 @@ def test_move_or_convert_results_to_numpy():
 
 def test_move_or_convert_results_invalid_return_tensors():
     results = {
-        "phrase_ids": torch.tensor([[1, 2, 3], [4, 5, 6]], device="cuda"),
+        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]], device="cuda"),
         "sequence_idx": torch.tensor([0, 1], device="cuda"),
-        "phrase_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]], device="cuda"),
+        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]], device="cuda"),
     }
     with pytest.raises(ValueError):
         move_or_convert_tensors(results, return_tensors="invalid")
@@ -241,29 +180,31 @@ def test_finephrase_to_device(model):
 
 
 def test_finephrase_encode(model):
-    docs = ["This is a test document.", "Another test document."]
-    df, X = model.encode(docs, phrase_sizes=3, max_length=10, batch_max_tokens=1)
+    docs = ["This is a test document. Another sentence here.", "Another test document. With more sentences."]
+    df, X = model.encode(docs, segment_sizes=1, max_length=64, batch_max_tokens=256)
     assert isinstance(df, pl.DataFrame)
     assert isinstance(X, np.ndarray)
     assert len(df) == len(X)
+    assert "segment" in df.columns
+    assert "segment_size" in df.columns
 
 
-def test_finephrase_encode_multiple_phrase_sizes():
-    docs = ["This is a test document.", "Another test document."]
+def test_finephrase_encode_multiple_segment_sizes():
+    docs = ["This is a test document. Another sentence here.", "Another test document. With more sentences."]
     finephrase = FinePhrase(
         model_name=MODEL_NAME,
         device="cpu",
         amp=False,
         num_token_jobs=1,
     )
-    phrase_sizes = [3, 5]
+    segment_sizes = [1, 2]
     df, X = finephrase.encode(
-        docs, phrase_sizes=phrase_sizes, max_length=10, batch_max_tokens=1
+        docs, segment_sizes=segment_sizes, max_length=64, batch_max_tokens=256
     )
     assert isinstance(df, pl.DataFrame)
     assert isinstance(X, np.ndarray)
     assert len(df) == len(X)
-    assert all(size in df["phrase_size"].unique() for size in phrase_sizes)
+    assert all(size in df["segment_size"].unique() for size in segment_sizes)
 
 
 def test_finephrase_encode_queries(model):
@@ -336,9 +277,9 @@ def test_build_results_dataframe(return_frame, convert_to_numpy):
         "sample_idx": torch.tensor([0, 1]),
         "sequence_idx": torch.tensor([0, 1]),
         "batch_idx": torch.tensor([0, 1]),
-        "phrase_size": torch.tensor([3, 3]),
-        "phrase": ["phrase1", "phrase2"],
-        "phrase_embeds": torch.randn(2, 10),
+        "segment_size": torch.tensor([2, 2]),
+        "segment": ["segment1", "segment2"],
+        "segment_embeds": torch.randn(2, 10),
     }
 
     # Test for invalid return_frame value
@@ -367,9 +308,9 @@ def test_build_results_dataframe_pandas():
         "sample_idx": torch.tensor([0, 1]),
         "sequence_idx": torch.tensor([0, 1]),
         "batch_idx": torch.tensor([0, 1]),
-        "phrase_size": torch.tensor([3, 3]),
-        "phrases": ["phrase1", "phrase2"],
-        "phrase_embeds": torch.randn(2, 10),
+        "segment_size": torch.tensor([2, 2]),
+        "segment": ["segment1", "segment2"],
+        "segment_embeds": torch.randn(2, 10),
     }
 
     expected_length = len(results["sample_idx"])
