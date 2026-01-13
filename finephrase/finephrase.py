@@ -22,7 +22,6 @@ from functools import partial
 import numpy as np
 import pyarrow as pa
 import torch
-from datasets import Dataset
 from joblib import Parallel, delayed
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
@@ -35,6 +34,7 @@ from finephrase.sentence_utils import (
 )
 from finephrase.tokenize import (
     DynamicTokenSampler,
+    TokenizedDataset,
     dynamic_pad_collate,
 )
 from finephrase.utils import (
@@ -303,7 +303,7 @@ class FinePhrase:
         doc_overlap: float | int = 0.5,
         batch_size: int = 10,
         num_jobs: int | None = None,
-    ) -> Dataset:
+    ) -> TokenizedDataset:
         """Tokenize a list of documents into input sequences for the model.
 
         Tokenization preserves sentence boundaries using BlingFire sentence detection.
@@ -330,7 +330,7 @@ class FinePhrase:
 
         Returns
         -------
-        Dataset
+        TokenizedDataset
             Dataset containing the tokenized input sequences.
 
         Raises
@@ -481,7 +481,7 @@ class FinePhrase:
         segment_overlap: int | float | list | dict = 0.5,
         chunk_docs: bool = True,
         doc_overlap: float | int = 0.5,
-        return_frame: str = "polars",
+        return_frame: str = "pandas",
         convert_to_numpy: bool = True,
         debug: bool = False,
     ) -> dict[str, np.ndarray | torch.Tensor]:
@@ -522,8 +522,8 @@ class FinePhrase:
             fraction of the maximum sequence length. If an integer, it is interpreted
             as the number of tokens to overlap. Does nothing if `chunk_docs` is False.
         return_frame : str, optional
-            The type of DataFrame of segments and indices to return. Options are
-            'polars', 'pandas', or 'arrow'.
+            The type of DataFrame of segments and indices to return, by default 'pandas'.
+            Options are 'pandas', 'polars', or 'arrow'.
         convert_to_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
         debug : bool, optional
@@ -534,7 +534,7 @@ class FinePhrase:
 
         Returns
         -------
-        tuple[pl.DataFrame | pd.DataFrame | pa.Table, np.ndarray | torch.Tensor]
+        tuple[pd.DataFrame | pl.DataFrame | pa.Table, np.ndarray | torch.Tensor]
             Tuple containing the DataFrame of segments and the segment embeddings.
 
         Raises
@@ -664,6 +664,13 @@ class FinePhrase:
         else:
             # Drop internal columns in non-debug mode
             pdf = pdf.drop(["embed_idx", "sequence_idx"])
+        # Convert to requested DataFrame format
+        if return_frame == "pandas":
+            pdf = pdf.to_pandas()
+        elif return_frame == "arrow":
+            pdf = pdf.to_arrow()
+        elif return_frame != "polars":
+            raise ValueError(f"Invalid value for return_frame: {return_frame}")
         return pdf, vecs
 
     def encode_queries(

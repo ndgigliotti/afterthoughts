@@ -18,7 +18,15 @@ classifiers = [
 ]
 license = {text = "Apache-2.0"}
 dependencies = [
-
+    "blingfire",
+    "joblib",
+    "numpy",
+    "pandas",
+    "polars",
+    "pyarrow",
+    "torch",
+    "tqdm",
+    "transformers",
 ]
 
 [project.optional-dependencies]
