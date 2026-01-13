@@ -431,6 +431,7 @@ class _FinePhraseBase(ABC):
             batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
+            pin_memory_device="",
             collate_fn=partial(dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id),
         )
         batches = self._generate_token_embeds(
@@ -592,6 +593,7 @@ class FinePhrase(_FinePhraseBase):
             inputs,
             shuffle=False,
             pin_memory=True,
+            pin_memory_device="",
             batch_sampler=DynamicTokenSampler(
                 inputs,
                 max_tokens=batch_max_tokens,
@@ -922,6 +924,7 @@ class FinePhraseLite(_FinePhraseBase):
             inputs,
             shuffle=False,
             pin_memory=True,
+            pin_memory_device="",
             batch_sampler=DynamicTokenSampler(
                 inputs,
                 max_tokens=batch_max_tokens,
