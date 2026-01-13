@@ -381,7 +381,10 @@ class _FinePhraseBase(ABC):
         """Obtain the segments and segment embeddings from a list of documents."""
         pass
 
-    @abstractmethod
+    def _postprocess_query_embeds(self, mean_tokens: torch.Tensor) -> torch.Tensor:
+        """Postprocess query embeddings. Override in subclasses for additional processing."""
+        return self.normalize_if_needed(mean_tokens)
+
     def encode_queries(
         self,
         queries: list[str],
@@ -390,8 +393,71 @@ class _FinePhraseBase(ABC):
         token_batch_size: int = 10,
         convert_to_numpy: bool = True,
     ) -> np.ndarray:
-        """Obtain the mean-tokens embeddings for a list of query strings."""
-        pass
+        """Obtain the mean-tokens embeddings for a list of query strings.
+
+        This is a convenient method for embedding query strings into the same space
+        as the segments extracted from documents. It is mainly useful for doing semantic
+        search.
+
+        Parameters
+        ----------
+        queries : list[str]
+            List of queries to encode.
+        max_length : int, optional
+            Maximum length of the query sequences, by default None.
+        batch_size : int, optional
+            Batch size for encoding, by default 32.
+        token_batch_size : int, optional
+            Batch size for tokenization, by default 10.
+        convert_to_numpy : bool, optional
+            Convert the tensors to numpy arrays before returning, by default True.
+
+        Returns
+        -------
+        np.ndarray
+            Mean-token embeddings for each query.
+        """
+        small_thresh = 5
+        num_token_batches = math.ceil(len(queries) / token_batch_size)
+        inputs = self._tokenize(
+            queries,
+            max_length=max_length,
+            chunk_docs=False,
+            batch_size=token_batch_size,
+            num_jobs=1 if num_token_batches <= small_thresh else self._num_token_jobs,
+        )
+        loader = DataLoader(
+            inputs,
+            batch_size=batch_size,
+            shuffle=False,
+            pin_memory=True,
+            collate_fn=partial(dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id),
+        )
+        batches = self._generate_token_embeds(
+            loader,
+            move_results_to_cpu=False,
+            return_tensors="pt",
+            truncate_dim=getattr(self, "truncate_dims", None),
+        )
+        query_embeds = []
+        for batch in batches:
+            token_embeds = batch["token_embeds"]
+            input_ids = batch["input_ids"]
+            valid_token_mask = torch.isin(
+                input_ids,
+                torch.tensor(self.tokenizer.all_special_ids, device=self.device),
+                invert=True,
+            )
+            valid_token_weight = valid_token_mask.unsqueeze(2).float()
+            mean_tokens = (token_embeds * valid_token_weight).sum(dim=1) / valid_token_weight.sum(
+                dim=1
+            )
+            mean_tokens = self._postprocess_query_embeds(mean_tokens)
+            query_embeds.append(mean_tokens.cpu())
+        query_embeds = torch.vstack(query_embeds)
+        if convert_to_numpy:
+            query_embeds = query_embeds.numpy()
+        return query_embeds
 
 
 class FinePhrase(_FinePhraseBase):
@@ -606,77 +672,6 @@ class FinePhrase(_FinePhraseBase):
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
         return pdf, vecs
-
-    def encode_queries(
-        self,
-        queries: list[str],
-        max_length: int | None = None,
-        batch_size: int = 32,
-        token_batch_size: int = 10,
-        convert_to_numpy: bool = True,
-    ) -> np.ndarray:
-        """Obtain the mean-tokens embeddings for a list of query strings.
-
-        This is a convenient method for embedding query strings into the same space
-        as the segments extracted from documents. It is mainly useful for doing semantic
-        search.
-
-        Parameters
-        ----------
-        queries : list[str]
-            List of queries to encode.
-        max_length : int, optional
-            Maximum length of the query sequences, by default None.
-        batch_size : int, optional
-            Batch size for encoding, by default 32.
-        token_batch_size : int, optional
-            Batch size for tokenization, by default 10.
-        convert_to_numpy : bool, optional
-            Convert the tensors to numpy arrays before returning, by default True.
-
-        Returns
-        -------
-        np.ndarray
-            Mean-token embeddings for each query.
-        """
-        small_thresh = 5
-        num_token_batches = math.ceil(len(queries) / token_batch_size)
-        inputs = self._tokenize(
-            queries,
-            max_length=max_length,
-            chunk_docs=False,
-            batch_size=token_batch_size,
-            num_jobs=1 if num_token_batches <= small_thresh else self._num_token_jobs,
-        )
-        loader = DataLoader(
-            inputs,
-            batch_size=batch_size,
-            shuffle=False,
-            pin_memory=True,
-            collate_fn=partial(dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id),
-        )
-        batches = self._generate_token_embeds(
-            loader, move_results_to_cpu=False, return_tensors="pt"
-        )
-        query_embeds = []
-        for batch in batches:
-            token_embeds = batch["token_embeds"]
-            input_ids = batch["input_ids"]
-            valid_token_mask = torch.isin(
-                input_ids,
-                torch.tensor(self.tokenizer.all_special_ids, device=self.device),
-                invert=True,
-            )
-            valid_token_weight = valid_token_mask.unsqueeze(2).float()
-            mean_tokens = (token_embeds * valid_token_weight).sum(dim=1) / valid_token_weight.sum(
-                dim=1
-            )
-            mean_tokens = self.normalize_if_needed(mean_tokens)
-            query_embeds.append(mean_tokens.cpu())
-        query_embeds = torch.vstack(query_embeds)
-        if convert_to_numpy:
-            query_embeds = query_embeds.numpy()
-        return query_embeds
 
 
 class FinePhraseLite(_FinePhraseBase):
@@ -1047,79 +1042,9 @@ class FinePhraseLite(_FinePhraseBase):
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
         return pdf, vecs
 
-    def encode_queries(
-        self,
-        queries: list[str],
-        max_length: int | None = None,
-        batch_size: int = 32,
-        token_batch_size: int = 10,
-        convert_to_numpy: bool = True,
-    ) -> np.ndarray:
-        """Obtain the mean-tokens embeddings for a list of query strings.
-
-        This is a convenient method for embedding query strings into the same space
-        as the segments extracted from documents. It is mainly useful for doing semantic
-        search.
-
-        Parameters
-        ----------
-        queries : list[str]
-            List of queries to encode.
-        max_length : int, optional
-            Maximum length of the query sequences, by default None.
-        batch_size : int, optional
-            Batch size for encoding, by default 32.
-        token_batch_size : int, optional
-            Batch size for tokenization, by default 10.
-        convert_to_numpy : bool, optional
-            Convert the tensors to numpy arrays before returning, by default True.
-
-        Returns
-        -------
-        np.ndarray
-            Mean-token embeddings for each query.
-        """
-        small_thresh = 5
-        num_token_batches = math.ceil(len(queries) / token_batch_size)
-        inputs = self._tokenize(
-            queries,
-            max_length=max_length,
-            chunk_docs=False,
-            batch_size=token_batch_size,
-            num_jobs=1 if num_token_batches <= small_thresh else self._num_token_jobs,
-        )
-        loader = DataLoader(
-            inputs,
-            batch_size=batch_size,
-            shuffle=False,
-            pin_memory=True,
-            collate_fn=partial(dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id),
-        )
-        batches = self._generate_token_embeds(
-            loader,
-            move_results_to_cpu=False,
-            return_tensors="pt",
-            truncate_dim=self.truncate_dims,
-        )
-        query_embeds = []
-        for batch in batches:
-            token_embeds = batch["token_embeds"]
-            input_ids = batch["input_ids"]
-            valid_token_mask = torch.isin(
-                input_ids,
-                torch.tensor(self.tokenizer.all_special_ids, device=self.device),
-                invert=True,
-            )
-            valid_token_weight = valid_token_mask.unsqueeze(2).float()
-            mean_tokens = (token_embeds * valid_token_weight).sum(dim=1) / valid_token_weight.sum(
-                dim=1
-            )
-            if self.pca_mode and self.pca_is_ready:
-                self.pca_transform_.to(self.device)
-                mean_tokens = self.apply_pca(mean_tokens)
-            mean_tokens = self.postprocess(mean_tokens)
-            query_embeds.append(mean_tokens.cpu())
-        query_embeds = torch.vstack(query_embeds)
-        if convert_to_numpy:
-            query_embeds = query_embeds.numpy()
-        return query_embeds
+    def _postprocess_query_embeds(self, mean_tokens: torch.Tensor) -> torch.Tensor:
+        """Apply PCA (if ready) and postprocessing to query embeddings."""
+        if self.pca_mode and self.pca_is_ready:
+            self.pca_transform_.to(self.device)
+            mean_tokens = self.apply_pca(mean_tokens)
+        return self.postprocess(mean_tokens)
