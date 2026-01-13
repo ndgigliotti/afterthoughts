@@ -16,9 +16,9 @@ import math
 import os
 import time
 import warnings
+from collections.abc import Callable
 from functools import singledispatch
 from operator import itemgetter
-from typing import Callable
 
 import numpy as np
 import polars as pl
@@ -549,11 +549,19 @@ def _build_results_dataframe(
     # Get indices and 1d-arrays
     df = {}
     # embed_idx and sequence_idx are always needed internally for reordering (dropped later by caller)
-    # Essential columns returned in non-debug mode
-    essential_keys = ["embed_idx", "sequence_idx", "document_idx", "segment_idx", "segment_size", "segment"]
-    # Additional columns only returned in debug mode
-    debug_keys = ["batch_idx", "sentence_idx"]
-    keys = essential_keys + (debug_keys if debug else [])
+    # Base columns (segment comes after debug columns when debug=True)
+    base_keys = [
+        "embed_idx",
+        "sequence_idx",
+        "document_idx",
+        "segment_idx",
+        "segment_size",
+    ]
+    # Build key list with proper ordering (batch_idx before segment when debug=True)
+    if debug:
+        keys = base_keys + ["batch_idx", "segment"]
+    else:
+        keys = base_keys + ["segment"]
     for key in keys:
         if key in results:
             df[key] = results[key]
@@ -587,11 +595,16 @@ def _build_results_dataframe(
 def order_by_indices(elements: list, indices: list[int]) -> list:
     """Order a Python list by the given indices."""
     if len(elements) != len(indices):
-        raise ValueError(f"List and indices must have the same length, but got {len(elements)}, {len(indices)}.")
-    if len(elements):
-        ordered_elements = list(itemgetter(*indices)(elements))
-    else:
+        raise ValueError(
+            f"List and indices must have the same length, but got {len(elements)}, {len(indices)}."
+        )
+    if len(elements) == 0:
         ordered_elements = elements
+    elif len(elements) == 1:
+        # itemgetter with single index returns the element, not a tuple
+        ordered_elements = [elements[indices[0]]]
+    else:
+        ordered_elements = list(itemgetter(*indices)(elements))
     return ordered_elements
 
 
