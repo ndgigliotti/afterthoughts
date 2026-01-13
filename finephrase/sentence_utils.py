@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import warnings
-from functools import singledispatch
 
 import blingfire as bf
 import numpy as np
@@ -23,7 +22,7 @@ from torch.nn.utils.rnn import pad_sequence
 from tqdm.auto import tqdm
 
 from finephrase.tokenize import TokenizedDataset, get_max_length, pad, tokenize_docs
-from finephrase.utils import get_overlap_count, move_or_convert_tensors
+from finephrase.utils import get_overlap_count
 
 
 def get_sentence_offsets_syntok(text: str) -> torch.Tensor:
@@ -184,10 +183,8 @@ def _add_special_tokens(
 
     to_cat = [input_ids]
     if cls_token_id is not None:
-
         to_cat.insert(0, torch.tensor([cls_token_id]))
     if sep_token_id is not None:
-
         to_cat.append(torch.tensor([sep_token_id]))
     result = torch.cat(to_cat)
 
@@ -526,14 +523,16 @@ def get_segment_idx(
     }
     if isinstance(segment_sizes, int):
         segment_sizes = [segment_sizes]
-    segment_counter = 0
-    for i, size in enumerate(segment_sizes):
-        overlap_sents = get_overlap_count(overlap, size, i)
-        step = size - overlap_sents
-        for seq_input_ids, seq_sentence_ids, seq_idx in zip(
-            input_ids, sentence_ids, sequence_idx
-        ):
-            unique_sent_ids = torch.unique(seq_sentence_ids[seq_sentence_ids != -1])
+    # Process sequences first, then segment sizes within each sequence
+    # segment_idx resets for each sequence (per-document indexing)
+    for seq_input_ids, seq_sentence_ids, seq_idx in zip(
+        input_ids, sentence_ids, sequence_idx
+    ):
+        unique_sent_ids = torch.unique(seq_sentence_ids[seq_sentence_ids != -1])
+        segment_counter = 0  # Reset for each sequence
+        for i, size in enumerate(segment_sizes):
+            overlap_sents = get_overlap_count(overlap, size, i)
+            step = size - overlap_sents
             eff_size = min(size, len(unique_sent_ids))
             segment_sent_ids = unique_sent_ids.unfold(0, eff_size, step)
             segment_masks = [
@@ -727,15 +726,18 @@ def _compute_segment_embeds(
     # The resulting tensor will have shape:
     # [num_segments, max_segment_len, embed_dim]
     # -----------------------------------------------------------
-    # Create a mapping from original sequence indices to contiguous indices
-    unique_sequences = torch.unique(segment_data["sequence_idx"])
-    sequence_to_idx = {seq.item(): idx for idx, seq in enumerate(unique_sequences)}
+    # Create a mapping from original sequence indices to their batch positions.
+    # IMPORTANT: We must use the order that sequences appear in the input batch,
+    # NOT sorted order. token_embeds[i] contains embeddings for sequence_idx[i].
+    sequence_to_batch_pos = {seq.item(): idx for idx, seq in enumerate(sequence_idx)}
     batch_sequence_idx = torch.tensor(
-        [sequence_to_idx[seq.item()] for seq in segment_data["sequence_idx"]],
-        device=segment_data["sequence_idx"].device
+        [sequence_to_batch_pos[seq.item()] for seq in segment_data["sequence_idx"]],
+        device=segment_data["sequence_idx"].device,
     ).unsqueeze(1)
 
-    segment_token_embeds = token_embeds[batch_sequence_idx, segment_data["segment_token_idx"]]
+    segment_token_embeds = token_embeds[
+        batch_sequence_idx, segment_data["segment_token_idx"]
+    ]
 
     # Sum the embeddings over the token dimension
     # (taking into account only valid positions)
@@ -897,7 +899,11 @@ def tokenize_with_sentence_boundaries(
     }
 
     # Iterate through each document and its corresponding tokenization and sentence offsets.
-    for i, (input_ids, current_token_offsets, current_sent_offsets,) in enumerate(
+    for i, (
+        input_ids,
+        current_token_offsets,
+        current_sent_offsets,
+    ) in enumerate(
         zip(
             tqdm(inputs["input_ids"], desc="Chunking"),
             token_offsets,
@@ -908,15 +914,15 @@ def tokenize_with_sentence_boundaries(
         current_token_offsets = current_token_offsets
         # Use searchsorted to find the indices in token offsets that correspond to the start of each sentence.
         start_idx = torch.searchsorted(
-            current_token_offsets[:, 0].contiguous(), 
-            current_sent_offsets[:, 0].contiguous(), 
-            side="left"
+            current_token_offsets[:, 0].contiguous(),
+            current_sent_offsets[:, 0].contiguous(),
+            side="left",
         )
         # Use searchsorted to find the indices in token offsets that correspond to the end of each sentence.
         stop_idx = torch.searchsorted(
-            current_token_offsets[:, 1].contiguous(), 
-            current_sent_offsets[:, 1].contiguous(), 
-            side="right"
+            current_token_offsets[:, 1].contiguous(),
+            current_sent_offsets[:, 1].contiguous(),
+            side="right",
         )
         # Stack the start and end indices to create a tensor representing sentence boundaries.
         sent_boundary_idx = torch.stack([start_idx, stop_idx], axis=1)

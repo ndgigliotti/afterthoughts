@@ -20,13 +20,11 @@ import warnings
 from functools import partial
 
 import numpy as np
-import polars as pl
 import pyarrow as pa
 import torch
 from datasets import Dataset
 from joblib import Parallel, delayed
-from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import DataLoader, default_collate
+from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import AutoModel, AutoTokenizer
 
@@ -36,23 +34,17 @@ from finephrase.sentence_utils import (
     tokenize_with_sentence_boundaries,
 )
 from finephrase.tokenize import (
-    DEFAULT_PAD_VALUES,
-    TokenizedDataset,
     DynamicTokenSampler,
     dynamic_pad_collate,
-    pad,
-    tokenize_docs,
 )
 from finephrase.utils import (
     _build_results_dataframe,
-    get_overlap_count,
     move_or_convert_tensors,
     normalize,
     normalize_num_jobs,
     reduce_precision,
     timer,
     truncate_dims,
-    order_by_indices,
 )
 
 # def collate_fn(batch):
@@ -145,7 +137,7 @@ class FinePhrase:
             clean_up_tokenization_spaces=True,
         )
         self.attn_implementation = attn_implementation
-        model_kws = {"torch_dtype": self.model_dtype, "device_map": {"": device}}
+        model_kws = {"dtype": self.model_dtype, "device_map": {"": device}}
         if self.attn_implementation is not None:
             model_kws["attn_implementation"] = self.attn_implementation
         self.model = AutoModel.from_pretrained(model_name, **model_kws).eval()
@@ -613,7 +605,6 @@ class FinePhrase:
             "segment_embeds": [],
             "sentence_ids": [],
         }
-        segment_offset = 0
         for batch in batches:
             if not self.pca_mode:
                 # Postprocess on the fly to potentially conserve memory
@@ -633,9 +624,8 @@ class FinePhrase:
             )
             results["batch_idx"].append(batch["batch_idx"])
             results["sequence_idx"].append(batch["sequence_idx"])
-            # Make segment_idx global by adding offset
-            results["segment_idx"].append(batch["segment_idx"] + segment_offset)
-            segment_offset += len(batch["segment_idx"])
+            # segment_idx is per-document (resets for each document)
+            results["segment_idx"].append(batch["segment_idx"])
             if isinstance(batch["segment_token_ids"], list):
                 results["segment_token_ids"].extend(batch["segment_token_ids"])
             else:  # If segment_token_ids is a tensor, convert to list
@@ -664,13 +654,15 @@ class FinePhrase:
         if chunk_docs:
             # Both sequence_idx and overflow_to_sample_mapping are sorted together,
             # so create a mapping from original sequence index to sample index
-            seq_to_sample = dict(zip(
-                inputs.data["sequence_idx"],
-                inputs.data["overflow_to_sample_mapping"]
-            ))
-            results["document_idx"] = torch.tensor([
-                seq_to_sample[s.item()] for s in results["sequence_idx"]
-            ])
+            seq_to_sample = dict(
+                zip(
+                    inputs.data["sequence_idx"],
+                    inputs.data["overflow_to_sample_mapping"],
+                )
+            )
+            results["document_idx"] = torch.tensor(
+                [seq_to_sample[s.item()] for s in results["sequence_idx"]]
+            )
         else:
             results["document_idx"] = results["sequence_idx"]
         results["embed_idx"] = torch.arange(results["segment_embeds"].shape[0])
