@@ -185,9 +185,9 @@ class TestEmbeddingAlignment:
             target_doc=0,
         )
 
-        assert ml_avg > py_avg, (
-            f"Single segment size: ML avg={ml_avg:.3f} should be > Python avg={py_avg:.3f}"
-        )
+        assert (
+            ml_avg > py_avg
+        ), f"Single segment size: ML avg={ml_avg:.3f} should be > Python avg={py_avg:.3f}"
 
     def test_alignment_with_larger_segment_sizes(self, model):
         """Test alignment with larger segment sizes."""
@@ -206,9 +206,9 @@ class TestEmbeddingAlignment:
             target_doc=0,
         )
 
-        assert ml_avg > py_avg, (
-            f"Larger segments: ML avg={ml_avg:.3f} should be > Python avg={py_avg:.3f}"
-        )
+        assert (
+            ml_avg > py_avg
+        ), f"Larger segments: ML avg={ml_avg:.3f} should be > Python avg={py_avg:.3f}"
 
     def test_alignment_with_overlap(self, model):
         """Test alignment with overlapping segments."""
@@ -227,9 +227,9 @@ class TestEmbeddingAlignment:
             target_doc=0,
         )
 
-        assert ml_avg > py_avg, (
-            f"With overlap: ML avg={ml_avg:.3f} should be > Python avg={py_avg:.3f}"
-        )
+        assert (
+            ml_avg > py_avg
+        ), f"With overlap: ML avg={ml_avg:.3f} should be > Python avg={py_avg:.3f}"
 
     def test_alignment_preserves_document_order(self, model):
         """Test that document_idx correctly identifies source documents."""
@@ -244,8 +244,7 @@ class TestEmbeddingAlignment:
         # Query for cats should match doc 0
         q_cats = model.encode_queries(["cats furry pets purr"])[0]
         cat_sims = [
-            (i, cosine_similarity(q_cats, X[i]), df["document_idx"][i])
-            for i in range(len(X))
+            (i, cosine_similarity(q_cats, X[i]), df["document_idx"][i]) for i in range(len(X))
         ]
         top_cat = max(cat_sims, key=lambda x: x[1])
         assert top_cat[2] == 0, f"Top result for 'cats' should be doc 0, got doc {top_cat[2]}"
@@ -253,8 +252,7 @@ class TestEmbeddingAlignment:
         # Query for dogs should match doc 1
         q_dogs = model.encode_queries(["dogs loyal bark"])[0]
         dog_sims = [
-            (i, cosine_similarity(q_dogs, X[i]), df["document_idx"][i])
-            for i in range(len(X))
+            (i, cosine_similarity(q_dogs, X[i]), df["document_idx"][i]) for i in range(len(X))
         ]
         top_dog = max(dog_sims, key=lambda x: x[1])
         assert top_dog[2] == 1, f"Top result for 'dogs' should be doc 1, got doc {top_dog[2]}"
@@ -262,8 +260,7 @@ class TestEmbeddingAlignment:
         # Query for birds should match doc 2
         q_birds = model.encode_queries(["birds fly feathers wings"])[0]
         bird_sims = [
-            (i, cosine_similarity(q_birds, X[i]), df["document_idx"][i])
-            for i in range(len(X))
+            (i, cosine_similarity(q_birds, X[i]), df["document_idx"][i]) for i in range(len(X))
         ]
         top_bird = max(bird_sims, key=lambda x: x[1])
         assert top_bird[2] == 2, f"Top result for 'birds' should be doc 2, got doc {top_bird[2]}"
@@ -287,9 +284,9 @@ class TestEmbeddingAlignment:
             target_doc=1,
         )
 
-        assert py_avg > other_avg, (
-            f"Varying lengths: Python avg={py_avg:.3f} should be > other avg={other_avg:.3f}"
-        )
+        assert (
+            py_avg > other_avg
+        ), f"Varying lengths: Python avg={py_avg:.3f} should be > other avg={other_avg:.3f}"
 
     def test_segment_text_matches_embedding(self, model):
         """Test that each segment's text semantically matches its embedding."""
@@ -311,11 +308,7 @@ class TestEmbeddingAlignment:
             # This segment's embedding should have highest similarity to its own text
             self_sim = cosine_similarity(q, segment_embed)
 
-            other_sims = [
-                cosine_similarity(q, X[j])
-                for j in range(len(X))
-                if j != i
-            ]
+            other_sims = [cosine_similarity(q, X[j]) for j in range(len(X)) if j != i]
 
             # Self-similarity should be highest (or very close to highest)
             max_other = max(other_sims) if other_sims else 0
@@ -331,16 +324,18 @@ class TestAlignmentWithChunking:
     def test_chunked_document_alignment(self, model):
         """Test alignment when a document is split into chunks."""
         # Create a document long enough to potentially be chunked
-        long_ml_doc = " ".join([
-            "Machine learning is a subset of artificial intelligence.",
-            "It enables computers to learn from data.",
-            "Neural networks are inspired by the brain.",
-            "Deep learning uses multiple layers.",
-            "Training requires large datasets.",
-            "Models can recognize patterns.",
-            "Applications include image recognition.",
-            "Natural language processing uses ML.",
-        ])
+        long_ml_doc = " ".join(
+            [
+                "Machine learning is a subset of artificial intelligence.",
+                "It enables computers to learn from data.",
+                "Neural networks are inspired by the brain.",
+                "Deep learning uses multiple layers.",
+                "Training requires large datasets.",
+                "Models can recognize patterns.",
+                "Applications include image recognition.",
+                "Natural language processing uses ML.",
+            ]
+        )
 
         short_py_doc = "Python is a programming language. It is popular."
 
@@ -363,9 +358,9 @@ class TestAlignmentWithChunking:
             target_doc=0,
         )
 
-        assert ml_avg > py_avg, (
-            f"Chunked doc: ML avg={ml_avg:.3f} should be > Python avg={py_avg:.3f}"
-        )
+        assert (
+            ml_avg > py_avg
+        ), f"Chunked doc: ML avg={ml_avg:.3f} should be > Python avg={py_avg:.3f}"
 
     def test_multiple_chunks_same_document(self, model):
         """Test that multiple chunks from the same document are all aligned."""
@@ -391,9 +386,9 @@ class TestAlignmentWithChunking:
         doc_1_count = sum(1 for d in df["document_idx"] if d == 1)
 
         # Doc 0 should have more segments due to chunking
-        assert doc_0_count > doc_1_count, (
-            f"Long doc should have more segments: doc_0={doc_0_count}, doc_1={doc_1_count}"
-        )
+        assert (
+            doc_0_count > doc_1_count
+        ), f"Long doc should have more segments: doc_0={doc_0_count}, doc_1={doc_1_count}"
 
         # All doc 0 segments should still align with ML query
         ml_avg, py_avg = get_avg_similarity(
@@ -404,9 +399,9 @@ class TestAlignmentWithChunking:
             target_doc=0,
         )
 
-        assert ml_avg > py_avg, (
-            f"All chunks should align: ML avg={ml_avg:.3f} > Python avg={py_avg:.3f}"
-        )
+        assert (
+            ml_avg > py_avg
+        ), f"All chunks should align: ML avg={ml_avg:.3f} > Python avg={py_avg:.3f}"
 
 
 class TestAlignmentEdgeCases:
@@ -440,16 +435,16 @@ class TestAlignmentEdgeCases:
         doc_1_indices = [i for i, d in enumerate(df["document_idx"]) if d == 1]
 
         # Same number of segments per document
-        assert len(doc_0_indices) == len(doc_1_indices), (
-            f"Identical docs should have same segment count: {len(doc_0_indices)} vs {len(doc_1_indices)}"
-        )
+        assert (
+            len(doc_0_indices) == len(doc_1_indices)
+        ), f"Identical docs should have same segment count: {len(doc_0_indices)} vs {len(doc_1_indices)}"
 
         # Corresponding segments (by segment_idx) should have nearly identical embeddings
-        for i, (idx_0, idx_1) in enumerate(zip(doc_0_indices, doc_1_indices)):
+        for i, (idx_0, idx_1) in enumerate(zip(doc_0_indices, doc_1_indices, strict=False)):
             sim = cosine_similarity(X[idx_0], X[idx_1])
-            assert sim > 0.99, (
-                f"Segment {i}: identical docs should have near-identical embeddings: {sim:.3f}"
-            )
+            assert (
+                sim > 0.99
+            ), f"Segment {i}: identical docs should have near-identical embeddings: {sim:.3f}"
 
     def test_many_short_documents(self, model):
         """Test alignment with many short documents."""
@@ -470,15 +465,12 @@ class TestAlignmentEdgeCases:
         # Each topic query should match its corresponding document
         for doc_idx, (topic, _) in enumerate(topics):
             q = model.encode_queries([topic])[0]
-            sims = [
-                (i, cosine_similarity(q, X[i]), df["document_idx"][i])
-                for i in range(len(X))
-            ]
+            sims = [(i, cosine_similarity(q, X[i]), df["document_idx"][i]) for i in range(len(X))]
             top_result = max(sims, key=lambda x: x[1])
 
-            assert top_result[2] == doc_idx, (
-                f"Query '{topic}' should match doc {doc_idx}, got doc {top_result[2]}"
-            )
+            assert (
+                top_result[2] == doc_idx
+            ), f"Query '{topic}' should match doc {doc_idx}, got doc {top_result[2]}"
 
     def test_debug_mode_alignment(self, model):
         """Test that debug mode doesn't affect alignment."""
@@ -491,20 +483,20 @@ class TestAlignmentEdgeCases:
         df_normal, X_normal = model.encode(
             docs, segment_sizes=[1, 2], segment_overlap=0, debug=False
         )
-        df_debug, X_debug = model.encode(
-            docs, segment_sizes=[1, 2], segment_overlap=0, debug=True
-        )
+        df_debug, X_debug = model.encode(docs, segment_sizes=[1, 2], segment_overlap=0, debug=True)
 
         # Embeddings should be identical
         np.testing.assert_array_almost_equal(
-            X_normal, X_debug, decimal=5,
-            err_msg="Debug mode should not affect embeddings"
+            X_normal,
+            X_debug,
+            decimal=5,
+            err_msg="Debug mode should not affect embeddings",
         )
 
         # Segments should be identical
-        assert df_normal["segment"].to_list() == df_debug["segment"].to_list(), (
-            "Debug mode should not affect segment order"
-        )
+        assert (
+            df_normal["segment"].to_list() == df_debug["segment"].to_list()
+        ), "Debug mode should not affect segment order"
 
 
 class TestBatchReorderingAlignment:
@@ -551,16 +543,16 @@ class TestBatchReorderingAlignment:
 
         doc_0_cat_sim = cosine_similarity(cat_query, doc_0_avg)
         doc_0_dog_sim = cosine_similarity(dog_query, doc_0_avg)
-        assert doc_0_cat_sim > doc_0_dog_sim, (
-            f"Doc 0 (cats) embedding misaligned: cat_sim={doc_0_cat_sim:.3f} should be > dog_sim={doc_0_dog_sim:.3f}"
-        )
+        assert (
+            doc_0_cat_sim > doc_0_dog_sim
+        ), f"Doc 0 (cats) embedding misaligned: cat_sim={doc_0_cat_sim:.3f} should be > dog_sim={doc_0_dog_sim:.3f}"
 
         # Doc 1 (dogs) should match dog query better than cat query
         doc_1_cat_sim = cosine_similarity(cat_query, doc_1_avg)
         doc_1_dog_sim = cosine_similarity(dog_query, doc_1_avg)
-        assert doc_1_dog_sim > doc_1_cat_sim, (
-            f"Doc 1 (dogs) embedding misaligned: dog_sim={doc_1_dog_sim:.3f} should be > cat_sim={doc_1_cat_sim:.3f}"
-        )
+        assert (
+            doc_1_dog_sim > doc_1_cat_sim
+        ), f"Doc 1 (dogs) embedding misaligned: dog_sim={doc_1_dog_sim:.3f} should be > cat_sim={doc_1_cat_sim:.3f}"
 
     def test_long_doc_first_no_reorder(self, model):
         """
@@ -590,16 +582,16 @@ class TestBatchReorderingAlignment:
         # Doc 0 (dogs) should match dog query better
         doc_0_dog_sim = cosine_similarity(dog_query, doc_0_avg)
         doc_0_cat_sim = cosine_similarity(cat_query, doc_0_avg)
-        assert doc_0_dog_sim > doc_0_cat_sim, (
-            f"Doc 0 (dogs) misaligned: dog_sim={doc_0_dog_sim:.3f} should be > cat_sim={doc_0_cat_sim:.3f}"
-        )
+        assert (
+            doc_0_dog_sim > doc_0_cat_sim
+        ), f"Doc 0 (dogs) misaligned: dog_sim={doc_0_dog_sim:.3f} should be > cat_sim={doc_0_cat_sim:.3f}"
 
         # Doc 1 (cats) should match cat query better
         doc_1_cat_sim = cosine_similarity(cat_query, doc_1_avg)
         doc_1_dog_sim = cosine_similarity(dog_query, doc_1_avg)
-        assert doc_1_cat_sim > doc_1_dog_sim, (
-            f"Doc 1 (cats) misaligned: cat_sim={doc_1_cat_sim:.3f} should be > dog_sim={doc_1_dog_sim:.3f}"
-        )
+        assert (
+            doc_1_cat_sim > doc_1_dog_sim
+        ), f"Doc 1 (cats) misaligned: cat_sim={doc_1_cat_sim:.3f} should be > dog_sim={doc_1_dog_sim:.3f}"
 
     def test_multiple_reorderings(self, model):
         """
@@ -615,7 +607,7 @@ class TestBatchReorderingAlignment:
             "Birds fly high in the sky. They have colorful feathers and sing songs.",  # Longest - index 3
         ]
 
-        df, X = model.encode(docs, segment_sizes=[1], segment_overlap=0)
+        df, _X = model.encode(docs, segment_sizes=[1], segment_overlap=0)
 
         # Create mapping of expected content per document
         expected_content = {
@@ -633,9 +625,7 @@ class TestBatchReorderingAlignment:
             # At least one expected keyword should be in segment
             keywords = expected_content[doc_idx]
             found = any(kw in segment for kw in keywords)
-            assert found, (
-                f"Doc {doc_idx} segment '{segment}' should contain one of {keywords}"
-            )
+            assert found, f"Doc {doc_idx} segment '{segment}' should contain one of {keywords}"
 
     def test_embedding_text_direct_correspondence(self, model):
         """
@@ -654,7 +644,6 @@ class TestBatchReorderingAlignment:
         # For each segment, its text encoded as query should match its embedding best
         for i in range(len(df)):
             segment_text = df["segment"][i]
-            segment_embed = X[i]
 
             # Encode this segment's text as a query
             query_embed = encode_text_as_query(model, segment_text)
@@ -677,8 +666,14 @@ class TestBatchReorderingAlignment:
         # Create 3 very distinct documents with very different lengths
         topics = [
             ("quantum", "Quantum mechanics governs subatomic particles."),
-            ("medieval", "Medieval knights wore heavy armor into battle. Castles provided defense."),
-            ("space", "Astronauts explore outer space. Rockets launch from Earth. The moon has no atmosphere. Mars is called the red planet."),
+            (
+                "medieval",
+                "Medieval knights wore heavy armor into battle. Castles provided defense.",
+            ),
+            (
+                "space",
+                "Astronauts explore outer space. Rockets launch from Earth. The moon has no atmosphere. Mars is called the red planet.",
+            ),
         ]
 
         # Test different orderings
@@ -705,9 +700,18 @@ class TestBatchReorderingAlignment:
                 # All embeddings for this doc should match its topic query best
                 for embed in doc_embeds:
                     sims = {
-                        "quantum": cosine_similarity(encode_text_as_query(model, "quantum mechanics particles"), embed),
-                        "medieval": cosine_similarity(encode_text_as_query(model, "medieval knights castles armor"), embed),
-                        "space": cosine_similarity(encode_text_as_query(model, "astronauts space rockets moon mars"), embed),
+                        "quantum": cosine_similarity(
+                            encode_text_as_query(model, "quantum mechanics particles"),
+                            embed,
+                        ),
+                        "medieval": cosine_similarity(
+                            encode_text_as_query(model, "medieval knights castles armor"),
+                            embed,
+                        ),
+                        "space": cosine_similarity(
+                            encode_text_as_query(model, "astronauts space rockets moon mars"),
+                            embed,
+                        ),
                     }
 
                     best_topic = max(sims, key=sims.get)
@@ -725,18 +729,43 @@ class TestBatchReorderingAlignment:
         # Create documents with very distinct, identifiable content
         # Each document has unique keywords for semantic matching
         docs_data = [
-            ("python indentation scripting", "Python programming uses indentation for code blocks."),
-            ("java classes types", "Java requires explicit type declarations. Classes are fundamental in Java programming."),
-            ("rust memory borrow", "Rust prevents memory errors. The borrow checker ensures safety. Rust is fast and safe."),
-            ("go goroutines channels", "Go has goroutines for concurrency. Channels enable communication. Go compiles quickly."),
-            ("javascript browser dom", "JavaScript runs in browsers and manipulates the DOM."),
-            ("typescript interfaces static", "TypeScript adds static types to JavaScript. Interfaces define contracts and shapes."),
-            ("ruby rails gems", "Ruby emphasizes developer happiness. Rails is a popular web framework. Gems are Ruby packages."),
-            ("c pointers lowlevel", "C is a low-level language with pointers and manual memory management."),
+            (
+                "python indentation scripting",
+                "Python programming uses indentation for code blocks.",
+            ),
+            (
+                "java classes types",
+                "Java requires explicit type declarations. Classes are fundamental in Java programming.",
+            ),
+            (
+                "rust memory borrow",
+                "Rust prevents memory errors. The borrow checker ensures safety. Rust is fast and safe.",
+            ),
+            (
+                "go goroutines channels",
+                "Go has goroutines for concurrency. Channels enable communication. Go compiles quickly.",
+            ),
+            (
+                "javascript browser dom",
+                "JavaScript runs in browsers and manipulates the DOM.",
+            ),
+            (
+                "typescript interfaces static",
+                "TypeScript adds static types to JavaScript. Interfaces define contracts and shapes.",
+            ),
+            (
+                "ruby rails gems",
+                "Ruby emphasizes developer happiness. Rails is a popular web framework. Gems are Ruby packages.",
+            ),
+            (
+                "c pointers lowlevel",
+                "C is a low-level language with pointers and manual memory management.",
+            ),
         ]
 
         # Shuffle to create reordering
         import random
+
         random.seed(42)  # Reproducible
         shuffled = docs_data.copy()
         random.shuffle(shuffled)
@@ -846,17 +875,19 @@ class TestMultiBatchAlignment:
         )
 
         # Same segments in same order
-        assert df_large["segment"].to_list() == df_small["segment"].to_list(), (
-            "Segments should be identical regardless of batch size"
-        )
+        assert (
+            df_large["segment"].to_list() == df_small["segment"].to_list()
+        ), "Segments should be identical regardless of batch size"
 
         # Same document assignments
-        assert df_large["document_idx"].to_list() == df_small["document_idx"].to_list(), (
-            "Document assignments should be identical regardless of batch size"
-        )
+        assert (
+            df_large["document_idx"].to_list() == df_small["document_idx"].to_list()
+        ), "Document assignments should be identical regardless of batch size"
 
         # Embeddings should be nearly identical (within numerical precision)
         np.testing.assert_array_almost_equal(
-            X_large, X_small, decimal=4,
-            err_msg="Embeddings should be identical regardless of batch size"
+            X_large,
+            X_small,
+            decimal=4,
+            err_msg="Embeddings should be identical regardless of batch size",
         )

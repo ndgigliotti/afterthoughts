@@ -167,11 +167,11 @@ class IncrementalPCA:
 
     def __init__(
         self,
-        n_components: int = None,
+        n_components: int | None = None,
         *,
         whiten: bool = False,
         copy: bool = True,
-        batch_size: int = None,
+        batch_size: int | None = None,
         device: str = "cuda",
     ) -> None:
         self.n_components = n_components
@@ -240,10 +240,7 @@ class IncrementalPCA:
 
         # Handle corner cases first
         if self.n_components_ == 0:
-            return (
-                torch.eye(n_features, device=self.components_.device)
-                / self.noise_variance_
-            )
+            return torch.eye(n_features, device=self.components_.device) / self.noise_variance_
 
         if self.noise_variance_ == 0.0:
             return torch.inverse(self.get_covariance())
@@ -327,9 +324,7 @@ class IncrementalPCA:
         exact inverse operation, which includes reversing whitening.
         """
         if self.whiten:
-            scaled_components = (
-                torch.sqrt(self.explained_variance_[:, None]) * self.components_
-            )
+            scaled_components = torch.sqrt(self.explained_variance_[:, None]) * self.components_
             return X @ scaled_components + self.mean_
         else:
             return X @ self.components_ + self.mean_
@@ -446,9 +441,7 @@ class IncrementalPCA:
         else:
             self.n_components_ = self.n_components
 
-        if (self.components_ is not None) and (
-            self.components_.shape[0] != self.n_components_
-        ):
+        if (self.components_ is not None) and (self.components_.shape[0] != self.n_components_):
             raise ValueError(
                 f"Number of input features has changed from {self.components_.shape[0]} "
                 f"to {self.n_components_} between calls to partial_fit! Try "
@@ -466,9 +459,9 @@ class IncrementalPCA:
             X,
             last_mean=self.mean_,
             last_variance=self.var_,
-            last_sample_count=torch.as_tensor(
-                self.n_samples_seen_, device=self.device
-            ).repeat(X.shape[1]),
+            last_sample_count=torch.as_tensor(self.n_samples_seen_, device=self.device).repeat(
+                X.shape[1]
+            ),
         )
         n_total_samples = n_total_samples[0]
         # Whitening
@@ -479,9 +472,9 @@ class IncrementalPCA:
             col_batch_mean = torch.mean(X, axis=0)
             X -= col_batch_mean
             # Build matrix of combined previous basis and new data
-            mean_correction = torch.sqrt(
-                (self.n_samples_seen_ / n_total_samples) * n_samples
-            ) * (self.mean_ - col_batch_mean)
+            mean_correction = torch.sqrt((self.n_samples_seen_ / n_total_samples) * n_samples) * (
+                self.mean_ - col_batch_mean
+            )
             X = torch.vstack(
                 (
                     self.singular_values_.reshape((-1, 1)) * self.components_,

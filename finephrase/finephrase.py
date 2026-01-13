@@ -144,9 +144,7 @@ class FinePhrase:
         self.compile = compile
         match compile:
             case True | "reduce-overhead":
-                self.model = torch.compile(
-                    self.model, mode="reduce-overhead", dynamic=False
-                )
+                self.model = torch.compile(self.model, mode="reduce-overhead", dynamic=False)
             case str():
                 self.model = torch.compile(self.model, mode=compile, dynamic=False)
         self.amp = amp
@@ -158,9 +156,8 @@ class FinePhrase:
         self.pca_fit_batch_count = pca_fit_batch_count
         self.num_token_jobs = num_token_jobs
 
-        if truncate_dims is not None and pca is not None:
-            if truncate_dims < pca:
-                raise ValueError("`truncate_dims` must be greater than `pca`.")
+        if truncate_dims is not None and pca is not None and truncate_dims < pca:
+            raise ValueError("`truncate_dims` must be greater than `pca`.")
 
     @property
     def device(self) -> torch.device:
@@ -364,14 +361,10 @@ class FinePhrase:
         return_tensors: str = "pt",
     ):
         """Obtain the token embeddings for a list of documents, one batch at at time."""
-        with torch.autocast(
-            device_type=self.device.type, enabled=self.amp, dtype=self.amp_dtype
-        ):
+        with torch.autocast(device_type=self.device.type, enabled=self.amp, dtype=self.amp_dtype):
             progress_loader = tqdm(loader, desc="Encoding")
             for batch_idx, batch in enumerate(progress_loader):
-                batch = {
-                    k: v.to(self.device, non_blocking=True) for k, v in batch.items()
-                }
+                batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
                 outputs = self.model(
                     input_ids=batch["input_ids"],
                     attention_mask=batch["attention_mask"],
@@ -380,9 +373,7 @@ class FinePhrase:
                     "sequence_idx": batch["sequence_idx"],
                     "input_ids": batch["input_ids"],
                     "attention_mask": batch["attention_mask"],
-                    "token_embeds": self.truncate_dims_if_needed(
-                        outputs.last_hidden_state
-                    ),
+                    "token_embeds": self.truncate_dims_if_needed(outputs.last_hidden_state),
                     "batch_idx": torch.full(batch["sequence_idx"].shape, batch_idx),
                 }
                 if "sentence_ids" in batch:
@@ -415,9 +406,7 @@ class FinePhrase:
                 segment_sizes=segment_sizes,
                 overlap=segment_overlap,
             )
-            results["batch_idx"] = torch.full(
-                results["sequence_idx"].shape, batch["batch_idx"][0]
-            )
+            results["batch_idx"] = torch.full(results["sequence_idx"].shape, batch["batch_idx"][0])
             yield move_or_convert_tensors(
                 results,
                 return_tensors=return_tensors,
@@ -448,9 +437,7 @@ class FinePhrase:
             Segment embeddings to update the PCA model with.
         """
         if not hasattr(self, "pca_transform_"):
-            self.pca_transform_ = IncrementalPCA(
-                n_components=self.pca, device=self.device
-            )
+            self.pca_transform_ = IncrementalPCA(n_components=self.pca, device=self.device)
         self.pca_transform_.partial_fit(segment_embeds)
         if hasattr(self.pca_transform_, "n_batches_seen_"):
             self.pca_transform_.n_batches_seen_ += 1
@@ -571,9 +558,7 @@ class FinePhrase:
                 inputs,
                 max_tokens=batch_max_tokens,
             ),
-            collate_fn=partial(
-                dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id
-            ),
+            collate_fn=partial(dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id),
         )
         batches = self._generate_segment_embeds(
             loader,
@@ -590,9 +575,7 @@ class FinePhrase:
                 print("PCA is already fit and will be applied to all batches.")
             else:
                 if isinstance(self.pca_fit_batch_count, float):
-                    self.pca_fit_batch_count_ = math.ceil(
-                        len(loader) * self.pca_fit_batch_count
-                    )
+                    self.pca_fit_batch_count_ = math.ceil(len(loader) * self.pca_fit_batch_count)
                 else:
                     self.pca_fit_batch_count_ = self.pca_fit_batch_count
 
@@ -619,9 +602,7 @@ class FinePhrase:
                     # Update PCA if not ready yet
                     self.update_pca(batch["segment_embeds"])
             # Offload batch to CPU
-            batch = move_or_convert_tensors(
-                batch, return_tensors="pt", move_to_cpu=True
-            )
+            batch = move_or_convert_tensors(batch, return_tensors="pt", move_to_cpu=True)
             results["batch_idx"].append(batch["batch_idx"])
             results["sequence_idx"].append(batch["sequence_idx"])
             # segment_idx is per-document (resets for each document)
@@ -644,7 +625,7 @@ class FinePhrase:
                         )
                 self.pca_transform_.to(self.device)  # Move back to device
             else:
-                warnings.warn("PCA did not finish fitting and will not be applied.")
+                warnings.warn("PCA did not finish fitting and will not be applied.", stacklevel=2)
         # Decode segments in existing batches
         results["segment"] = self._decode_segments(results.pop("segment_token_ids"))
         # Combine results
@@ -658,6 +639,7 @@ class FinePhrase:
                 zip(
                     inputs.data["sequence_idx"],
                     inputs.data["overflow_to_sample_mapping"],
+                    strict=False,
                 )
             )
             results["document_idx"] = torch.tensor(
@@ -726,15 +708,12 @@ class FinePhrase:
             batch_size=token_batch_size,
             num_jobs=1 if num_token_batches <= small_thresh else self._num_token_jobs,
         )
-        num_batches = math.ceil(len(inputs) / batch_size)
         loader = DataLoader(
             inputs,
             batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
-            collate_fn=partial(
-                dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id
-            ),
+            collate_fn=partial(dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id),
         )
         batches = self._generate_token_embeds(
             loader, move_results_to_cpu=False, return_tensors="pt"
@@ -749,9 +728,9 @@ class FinePhrase:
                 invert=True,
             )
             valid_token_weight = valid_token_mask.unsqueeze(2).float()
-            mean_tokens = (token_embeds * valid_token_weight).sum(
+            mean_tokens = (token_embeds * valid_token_weight).sum(dim=1) / valid_token_weight.sum(
                 dim=1
-            ) / valid_token_weight.sum(dim=1)
+            )
             if self.pca_mode and self.pca_is_ready:
                 self.pca_transform_.to(self.device)
                 mean_tokens = self.apply_pca(mean_tokens)

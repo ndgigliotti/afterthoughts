@@ -9,7 +9,6 @@ from finephrase.sentence_utils import (
     get_sentence_offsets_nltk,
     get_sentence_offsets_syntok,
 )
-from finephrase.tokenize import pad
 
 
 def test_get_sentence_offsets_syntok_returns_tensor():
@@ -173,9 +172,7 @@ def test_add_special_tokens_with_cls_and_sep_tokens():
     input_ids = torch.tensor([1, 2, 3, 4])
     cls_token_id = 101
     sep_token_id = 102
-    result = _add_special_tokens(
-        input_ids, cls_token_id=cls_token_id, sep_token_id=sep_token_id
-    )
+    result = _add_special_tokens(input_ids, cls_token_id=cls_token_id, sep_token_id=sep_token_id)
     expected = torch.tensor([101, 1, 2, 3, 4, 102])
     assert torch.equal(result, expected)
 

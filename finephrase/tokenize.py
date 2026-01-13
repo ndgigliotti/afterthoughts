@@ -1,10 +1,9 @@
 import math
 import os
 import warnings
+from collections.abc import Iterator
 from functools import cached_property
 from types import MappingProxyType
-from typing import List, Iterator, Generator
-import random
 
 import numpy as np
 import polars as pl
@@ -80,11 +79,11 @@ class TokenizedDataset(Dataset):
             isinstance(x, list) for x in self.data["input_ids"]
         ):
             raise ValueError("'input_ids' must be a list of ragged lists.")
-        if "sentence_ids" in self.data:
-            if not isinstance(self.data["sentence_ids"], list) or not all(
-                isinstance(x, list) for x in self.data["sentence_ids"]
-            ):
-                raise ValueError("'sentence_ids' must be a list of ragged lists.")
+        if "sentence_ids" in self.data and (
+            not isinstance(self.data["sentence_ids"], list)
+            or not all(isinstance(x, list) for x in self.data["sentence_ids"])
+        ):
+            raise ValueError("'sentence_ids' must be a list of ragged lists.")
 
     def sort_data(self):
         """Sort the data by token count."""
@@ -98,12 +97,12 @@ class TokenizedDataset(Dataset):
         return list(self.data.keys())
 
     @cached_property
-    def token_counts(self) -> List[int]:
+    def token_counts(self) -> list[int]:
         """Return the token counts of the dataset."""
         return [len(x) for x in self.data["input_ids"]]
 
     @cached_property
-    def sort_idx(self) -> List[int]:
+    def sort_idx(self) -> list[int]:
         """Return the indices for sorting the dataset by token count."""
         return sorted(
             range(len(self.token_counts)),
@@ -112,9 +111,9 @@ class TokenizedDataset(Dataset):
         )
 
     @cached_property
-    def unsort_idx(self) -> List[int]:
+    def unsort_idx(self) -> list[int]:
         """Return the indices for unsorting the dataset.
-        
+
         This creates an inverse mapping of sort_idx to restore the original order.
         For example, if sort_idx is [2, 0, 1] (meaning item 2 is longest, then 0, then 1),
         then unsort_idx should be [1, 2, 0] to restore the original order.
@@ -143,12 +142,10 @@ class TokenizedDataset(Dataset):
         """Return a single item from the sorted dataset."""
         return {key: self.data[key][idx] for key in self.keys()}
 
-    def unsort_results(
-        self, results: dict[str, torch.Tensor]
-    ) -> dict[str, torch.Tensor]:
+    def unsort_results(self, results: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Unsort the results of the dataset."""
         unsorted = {}
-        for key in results.keys():
+        for key in results:
             if isinstance(results[key], list):
                 if len(results[key]):
                     unsorted[key] = order_by_indices(results[key], self.unsort_idx)
@@ -162,7 +159,7 @@ class TokenizedDataset(Dataset):
         return unsorted
 
 
-class DynamicTokenSampler(Sampler[List[int]]):
+class DynamicTokenSampler(Sampler[list[int]]):
     """A sampler that creates batches based on token count.
 
     This sampler groups sequences into batches such that the total number of tokens
@@ -195,12 +192,12 @@ class DynamicTokenSampler(Sampler[List[int]]):
         self.max_tokens = max_tokens
 
     @property
-    def token_counts(self) -> List[int]:
+    def token_counts(self) -> list[int]:
         """Alias for `data_source.token_counts`."""
         return self.data_source.token_counts
 
     @cached_property
-    def batches(self) -> List[List[int]]:
+    def batches(self) -> list[list[int]]:
         """Return the list of batches of indices."""
         batch_list = []
         current_batch = []
@@ -220,17 +217,17 @@ class DynamicTokenSampler(Sampler[List[int]]):
                 current_longest = 0
 
             current_batch.append(idx)  # Use true index
-            
+
         # Add final batch if not empty
         if current_batch:
             batch_list.append(current_batch)
             batch_token_counts.append(current_tokens)  # Store token count for final batch
-            
+
         print([len(x) for x in batch_list])
         print(batch_token_counts)
         return batch_list
 
-    def __iter__(self) -> Iterator[List[int]]:
+    def __iter__(self) -> Iterator[list[int]]:
         return iter(self.batches)
 
     def __len__(self) -> int:
@@ -286,7 +283,7 @@ def _tokenize_batch(
     truncation: bool = True,
     return_overflowing_tokens: bool = True,
     stride: int = 0,
-    return_tensors: str = None,
+    return_tensors: str | None = None,
     add_special_tokens: bool = True,
     return_attention_mask: bool = True,
     return_offsets_mapping: bool = False,
@@ -356,14 +353,11 @@ def _tokenize_batch(
                 sample_idx[i] for i in inputs["overflow_to_sample_mapping"]
             ]
         else:
-            inputs["overflow_to_sample_mapping"] = sample_idx[
-                inputs["overflow_to_sample_mapping"]
-            ]
+            inputs["overflow_to_sample_mapping"] = sample_idx[inputs["overflow_to_sample_mapping"]]
     # Flatten offset mapping
     if "offset_mapping" in inputs:
         inputs["offset_mapping"] = [
-            [tuple(offset) for offset in offsets]
-            for offsets in inputs["offset_mapping"]
+            [tuple(offset) for offset in offsets] for offsets in inputs["offset_mapping"]
         ]
     return inputs
 
@@ -396,7 +390,7 @@ def pad(
     sequences: list[torch.Tensor],
     pad_value: int,
     strategy: str = "longest",
-    max_length: int = None,
+    max_length: int | None = None,
 ) -> torch.Tensor | list[torch.Tensor]:
     """Pads a list of sequences to a uniform length.
 
@@ -443,21 +437,13 @@ def pad(
             raise ValueError("max_length must be specified when strategy='max_length'.")
         seq_lengths = torch.tensor([len(seq) for seq in sequences])
         if any(seq_lengths > max_length):
-            raise ValueError(
-                f"Input sequence length {seq_lengths.max()} exceeds `max_length`."
-            )
+            raise ValueError(f"Input sequence length {seq_lengths.max()} exceeds `max_length`.")
         # Pad the first sequence to `max_length`
-        sequences[0] = F.pad(
-            sequences[0], (0, max_length - len(sequences[0])), value=pad_value
-        )
+        sequences[0] = F.pad(sequences[0], (0, max_length - len(sequences[0])), value=pad_value)
         # Pad the remaining sequences to the length of the first sequence
-        padded_sequences = pad_sequence(
-            sequences, batch_first=True, padding_value=pad_value
-        )
+        padded_sequences = pad_sequence(sequences, batch_first=True, padding_value=pad_value)
     elif strategy == "longest":
-        padded_sequences = pad_sequence(
-            sequences, batch_first=True, padding_value=pad_value
-        )
+        padded_sequences = pad_sequence(sequences, batch_first=True, padding_value=pad_value)
     elif strategy is None:
         padded_sequences = sequences
     else:
@@ -500,7 +486,7 @@ def dynamic_pad_collate(
         # Pad and concatenate the arrays at each key in the batch
         pad_values = {"input_ids": pad_token_id} | DEFAULT_PAD_VALUES
         first_batch = batch[0]
-        for key in first_batch.keys():
+        for key in first_batch:
             first_val = first_batch[key]
             batch_vals = [item[key] for item in batch]
             pad_val = pad_values.get(key, 0)
@@ -635,6 +621,8 @@ def tokenize_docs(
         if isinstance(val, list):
             combined[key] = [y for x in tok_batches for y in x[key]]
         else:
-            warnings.warn(f"Unsupported data type {type(val)} for key {key}. Skipping.")
+            warnings.warn(
+                f"Unsupported data type {type(val)} for key {key}. Skipping.", stacklevel=2
+            )
     combined["sequence_idx"] = list(range(len(combined["input_ids"])))
     return TokenizedDataset(combined) if return_tokenized_dataset else combined

@@ -48,10 +48,7 @@ def test_get_memory_size():
         buf.size for buf in pa_array.buffers() if buf is not None
     )
     assert get_memory_size(np_array) == np_array.nbytes
-    assert (
-        get_memory_size(torch_tensor)
-        == torch_tensor.element_size() * torch_tensor.numel()
-    )
+    assert get_memory_size(torch_tensor) == torch_tensor.element_size() * torch_tensor.numel()
     assert get_memory_size(pl_series) == pl_series.estimated_size()
     assert get_memory_size(pl_dataframe) == pl_dataframe.estimated_size()
 
@@ -59,12 +56,9 @@ def test_get_memory_size():
     if _HAS_PANDAS:
         pd_series = pd.Series([1, 2, 3])
         pd_dataframe = pd.DataFrame({"a": [1, 2, 3]})
-        assert get_memory_size(pd_series) == pd_series.memory_usage(
-            index=True, deep=True
-        )
+        assert get_memory_size(pd_series) == pd_series.memory_usage(index=True, deep=True)
         assert (
-            get_memory_size(pd_dataframe)
-            == pd_dataframe.memory_usage(index=True, deep=True).sum()
+            get_memory_size(pd_dataframe) == pd_dataframe.memory_usage(index=True, deep=True).sum()
         )
 
 

@@ -142,13 +142,13 @@ def normalize_num_jobs(num_jobs: int | None) -> int:
     if num_jobs is None:
         true_num_jobs = 1
     elif num_jobs == 0:
-        warnings.warn("`num_jobs` cannot be 0. Setting `num_jobs` to 1.")
+        warnings.warn("`num_jobs` cannot be 0. Setting `num_jobs` to 1.", stacklevel=2)
         true_num_jobs = 1
     elif num_jobs < 0:
         true_num_jobs = cpu_count + 1 + num_jobs
     if true_num_jobs > cpu_count:
         warnings.warn(
-            f"`num_jobs` ({num_jobs}) exceeds the number of CPU cores ({cpu_count})."
+            f"`num_jobs` ({num_jobs}) exceeds the number of CPU cores ({cpu_count}).", stacklevel=2
         )
         true_num_jobs = min(num_jobs, cpu_count)
     return true_num_jobs
@@ -265,7 +265,7 @@ def get_memory_report(
         if _HAS_PANDAS:
             valid_types += (pd.Series, pd.DataFrame)
         if not isinstance(arr, valid_types):
-            warnings.warn(f"Encountered invalid input type {type(arr).__name__}.")
+            warnings.warn(f"Encountered invalid input type {type(arr).__name__}.", stacklevel=2)
         else:
             n_bytes = get_memory_size(arr)
             report[name] = n_bytes
@@ -275,9 +275,7 @@ def get_memory_report(
     return report
 
 
-def normalize(
-    embeds: torch.Tensor | np.ndarray, dim: int = 1
-) -> torch.Tensor | np.ndarray:
+def normalize(embeds: torch.Tensor | np.ndarray, dim: int = 1) -> torch.Tensor | np.ndarray:
     """Normalize the embeddings to have unit length.
 
     Parameters
@@ -374,9 +372,7 @@ def _(a: np.ndarray) -> np.ndarray:
 
 
 @singledispatch
-def truncate_dims(
-    embeds: torch.Tensor | np.ndarray, dim: int
-) -> torch.Tensor | np.ndarray:
+def truncate_dims(embeds: torch.Tensor | np.ndarray, dim: int) -> torch.Tensor | np.ndarray:
     """Truncate the dimensions of the embeddings.
 
     Parameters
@@ -450,9 +446,7 @@ def _(embeds: np.ndarray, dim: int) -> np.ndarray:
     return embeds
 
 
-def move_or_convert_tensors(
-    data: dict, return_tensors: str = "pt", move_to_cpu: bool = False
-):
+def move_or_convert_tensors(data: dict, return_tensors: str = "pt", move_to_cpu: bool = False):
     """Move or convert the results to the specified format.
 
     Parameters
@@ -478,31 +472,19 @@ def move_or_convert_tensors(
         for key, value in data.items():
             if isinstance(value, torch.Tensor):
                 data[key] = value.cpu()
-            if (
-                isinstance(value, list)
-                and len(value)
-                and isinstance(value[0], torch.Tensor)
-            ):
+            if isinstance(value, list) and len(value) and isinstance(value[0], torch.Tensor):
                 data[key] = [v.cpu() for v in value]
     if return_tensors == "np":
         for key, value in data.items():
             if isinstance(value, torch.Tensor):
                 data[key] = value.numpy()
-            elif (
-                isinstance(value, list)
-                and len(value)
-                and isinstance(value[0], torch.Tensor)
-            ):
+            elif isinstance(value, list) and len(value) and isinstance(value[0], torch.Tensor):
                 data[key] = [v.numpy() for v in value]
     elif return_tensors == "pt":
         for key, value in data.items():
             if isinstance(value, np.ndarray):
                 data[key] = torch.from_numpy(value)
-            elif (
-                isinstance(value, list)
-                and len(value)
-                and isinstance(value[0], np.ndarray)
-            ):
+            elif isinstance(value, list) and len(value) and isinstance(value[0], np.ndarray):
                 data[key] = [torch.from_numpy(v) for v in value]
     else:
         raise ValueError("`return_tensors` must be 'np' or 'pt'.")

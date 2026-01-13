@@ -63,9 +63,7 @@ def test_get_segment_idx_single_size():
     segment_sizes = 2
     overlap = 0.5
 
-    result = get_segment_idx(
-        input_ids, sentence_ids, segment_sizes, overlap
-    )
+    result = get_segment_idx(input_ids, sentence_ids, segment_sizes, overlap)
 
     assert "segment_token_idx" in result
     assert "segment_token_ids" in result
@@ -80,9 +78,7 @@ def test_get_segment_idx_multiple_sizes():
     segment_sizes = [1, 2]
     overlap = 0.5
 
-    result = get_segment_idx(
-        input_ids, sentence_ids, segment_sizes, overlap
-    )
+    result = get_segment_idx(input_ids, sentence_ids, segment_sizes, overlap)
 
     assert "segment_token_idx" in result
     assert "segment_token_ids" in result
@@ -118,9 +114,7 @@ def test_move_or_convert_results_to_numpy():
         "sequence_idx": np.array([0, 1]),
         "segment_embeds": np.array([[0.1, 0.2], [0.3, 0.4]]),
     }
-    converted_results = move_or_convert_tensors(
-        results, return_tensors="np", move_to_cpu=True
-    )
+    converted_results = move_or_convert_tensors(results, return_tensors="np", move_to_cpu=True)
     for key in results:
         np.testing.assert_allclose(converted_results[key], expected_results[key])
 
@@ -180,7 +174,10 @@ def test_finephrase_to_device(model):
 
 
 def test_finephrase_encode(model):
-    docs = ["This is a test document. Another sentence here.", "Another test document. With more sentences."]
+    docs = [
+        "This is a test document. Another sentence here.",
+        "Another test document. With more sentences.",
+    ]
     df, X = model.encode(docs, segment_sizes=1, max_length=64, batch_max_tokens=256)
     assert isinstance(df, pl.DataFrame)
     assert isinstance(X, np.ndarray)
@@ -190,7 +187,10 @@ def test_finephrase_encode(model):
 
 
 def test_finephrase_encode_multiple_segment_sizes():
-    docs = ["This is a test document. Another sentence here.", "Another test document. With more sentences."]
+    docs = [
+        "This is a test document. Another sentence here.",
+        "Another test document. With more sentences.",
+    ]
     finephrase = FinePhrase(
         model_name=MODEL_NAME,
         device="cpu",

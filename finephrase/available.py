@@ -18,4 +18,3 @@ try:
     del pd
 except ImportError:
     _HAS_PANDAS = False
-

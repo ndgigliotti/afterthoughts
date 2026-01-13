@@ -1,4 +1,3 @@
-import polars as pl
 import pytest
 import torch
 from transformers import AutoTokenizer
@@ -42,7 +41,7 @@ def test_pad_no_padding():
 def test_pad_empty_input():
     input_ids = []
     pad_token_id = 0
-    with pytest.raises(ValueError, match="Input list must not be empty."):
+    with pytest.raises(ValueError, match=r"Input list must not be empty\."):
         pad(input_ids, pad_token_id)
 
 
@@ -50,16 +49,14 @@ def test_pad_max_length_exceeds():
     input_ids = [torch.tensor([1, 2, 3, 4]), torch.tensor([5, 6])]
     pad_token_id = 0
     max_length = 3
-    with pytest.raises(
-        ValueError, match=r"Input sequence length \d+ exceeds `max_length`."
-    ):
+    with pytest.raises(ValueError, match=r"Input sequence length \d+ exceeds `max_length`."):
         pad(input_ids, pad_token_id, strategy="max_length", max_length=max_length)
 
 
 def test_pad_invalid_strategy():
     input_ids = [torch.tensor([1, 2, 3]), torch.tensor([4, 5])]
     pad_token_id = 0
-    with pytest.raises(ValueError, match="Invalid value 'invalid' for `strategy`."):
+    with pytest.raises(ValueError, match=r"Invalid value 'invalid' for `strategy`\."):
         pad(input_ids, pad_token_id, strategy="invalid")
 
 
@@ -116,7 +113,7 @@ def test_get_max_length_required_without_model_max_length():
     tokenizer.model_max_length = None
     with pytest.raises(
         ValueError,
-        match="The `max_length` parameter must be specified if the tokenizer does not have a `model_max_length`.",
+        match=r"The `max_length` parameter must be specified if the tokenizer does not have a `model_max_length`\.",
     ):
         get_max_length(None, tokenizer, required=True)
 
@@ -143,9 +140,7 @@ def test_tokenized_dataset_invalid_data():
         "input_ids": [[1, 2, 3], [4, 5], [6]],
         "sequence_idx": [0, 1],  # Different length
     }
-    with pytest.raises(
-        ValueError, match="All lists in the data must have the same length."
-    ):
+    with pytest.raises(ValueError, match=r"All lists in the data must have the same length\."):
         TokenizedDataset(data)
 
 
@@ -214,9 +209,7 @@ def test_tokenize_batch_padding():
     docs = ["Hello world", "This is a test"]
     sample_idx = [0, 1]
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    result = _tokenize_batch(
-        docs, sample_idx, tokenizer, padding="max_length", max_length=10
-    )
+    result = _tokenize_batch(docs, sample_idx, tokenizer, padding="max_length", max_length=10)
     assert all(len(ids) == 10 for ids in result["input_ids"])
 
 
@@ -252,9 +245,7 @@ def test_tokenize_batch_return_tensors():
     docs = ["Hello world", "This is a test"]
     sample_idx = [0, 1]
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    result = _tokenize_batch(
-        docs, sample_idx, tokenizer, return_tensors="pt", padding=True
-    )
+    result = _tokenize_batch(docs, sample_idx, tokenizer, return_tensors="pt", padding=True)
     assert isinstance(result["input_ids"], torch.Tensor)
     assert isinstance(result["attention_mask"], torch.Tensor)
 
@@ -266,9 +257,7 @@ def test_tokenize_batch_add_special_tokens():
     result = _tokenize_batch(docs, sample_idx, tokenizer, add_special_tokens=False)
     set_input_ids = {y for x in result["input_ids"] for y in x}
     for special_id in tokenizer.all_special_ids:
-        assert (
-            special_id not in set_input_ids
-        ), f"Special token {special_id} found in input_ids"
+        assert special_id not in set_input_ids, f"Special token {special_id} found in input_ids"
 
 
 def test_tokenize_batch_return_attention_mask():
