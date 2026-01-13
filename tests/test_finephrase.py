@@ -5,7 +5,7 @@ import pyarrow as pa
 import pytest
 import torch
 
-from finephrase import FinePhrase
+from finephrase import FinePhrase, FinePhraseLite
 from finephrase.sentence_utils import get_segment_idx
 from finephrase.utils import _build_results_dataframe, move_or_convert_tensors
 
@@ -13,6 +13,34 @@ MODEL_NAME = "sentence-transformers/paraphrase-MiniLM-L3-v2"
 
 
 def test_finephrase_init():
+    """Test basic FinePhrase initialization."""
+    model_name = MODEL_NAME
+    amp = False
+    amp_dtype = torch.float16
+    normalize_embeds = True
+    device = "cuda"
+    num_token_jobs = 8
+
+    finephrase = FinePhrase(
+        model_name=model_name,
+        amp=amp,
+        amp_dtype=amp_dtype,
+        normalize_embeds=normalize_embeds,
+        device=device,
+        num_token_jobs=num_token_jobs,
+    )
+
+    assert finephrase.tokenizer is not None
+    assert finephrase.model is not None
+    assert finephrase.amp == amp
+    assert finephrase.amp_dtype == amp_dtype
+    assert finephrase.normalize_embeds == normalize_embeds
+    assert finephrase.device.type == device
+    assert finephrase.num_token_jobs == num_token_jobs
+
+
+def test_finephrase_lite_init():
+    """Test FinePhraseLite initialization with lossy params."""
     model_name = MODEL_NAME
     amp = False
     amp_dtype = torch.float16
@@ -24,7 +52,7 @@ def test_finephrase_init():
     device = "cuda"
     num_token_jobs = 8
 
-    finephrase = FinePhrase(
+    finephrase = FinePhraseLite(
         model_name=model_name,
         amp=amp,
         amp_dtype=amp_dtype,
@@ -51,7 +79,7 @@ def test_finephrase_init():
 
     # Test invalid truncate_dims and pca combination
     with pytest.raises(ValueError):
-        FinePhrase(
+        FinePhraseLite(
             model_name=model_name,
             truncate_dims=10,
             pca=50,
@@ -216,8 +244,8 @@ def test_finephrase_encode_queries(model):
     assert len(query_embeds) == len(queries)
 
 
-def test_finephrase_reduce_precision_if_needed():
-    model = FinePhrase(model_name=MODEL_NAME, device="cpu", reduce_precision=True)
+def test_finephrase_lite_reduce_precision_if_needed():
+    model = FinePhraseLite(model_name=MODEL_NAME, device="cpu", reduce_precision=True)
     embeds = torch.randn(10, 10, dtype=torch.float32)
     reduced_embeds = model.reduce_precision_if_needed(embeds)
     assert reduced_embeds.dtype == torch.float16
@@ -227,8 +255,8 @@ def test_finephrase_reduce_precision_if_needed():
     assert non_reduced_embeds.dtype == torch.float32
 
 
-def test_finephrase_truncate_dims_if_needed():
-    finephrase = FinePhrase(model_name=MODEL_NAME, device="cpu", truncate_dims=5)
+def test_finephrase_lite_truncate_dims_if_needed():
+    finephrase = FinePhraseLite(model_name=MODEL_NAME, device="cpu", truncate_dims=5)
     embeds = torch.randn(10, 10)
     truncated_embeds = finephrase.truncate_dims_if_needed(embeds)
     assert truncated_embeds.shape[1] == 5

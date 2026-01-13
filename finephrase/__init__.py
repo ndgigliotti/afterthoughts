@@ -4,7 +4,7 @@ __author__ = """Nicholas Gigliotti"""
 __email__ = "ndgigliotti@gmail.com"
 __version__ = "0.1.0"
 
-# Copyright 2024 Nicholas Gigliotti
+# Copyright 2024-2026 Nicholas Gigliotti
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,4 +18,4 @@ __version__ = "0.1.0"
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from finephrase.finephrase import FinePhrase  # noqa
+from finephrase.finephrase import FinePhrase, FinePhraseLite  # noqa

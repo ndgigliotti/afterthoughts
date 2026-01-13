@@ -32,6 +32,7 @@ Another key advantage of this approach is that the segment embeddings are enrich
 * Efficiently derive sentence-based segment embeddings from state-of-the-art transformer models
 * Customize the number of sentences per segment and overlap between segments
 * Sentence boundary detection using BlingFire for accurate sentence segmentation
+* Two classes: `FinePhrase` for simple usage, `FinePhraseLite` for memory-efficient workflows
 * Dynamically fit PCA (using GPU) to reduce the dimensionality of the embeddings
 * Custom PyTorch implementation of incremental PCA (derived from `sklearn`)
 * Easily embed queries or other strings in the same space as the segments
@@ -40,6 +41,12 @@ Another key advantage of this approach is that the segment embeddings are enrich
 * Outputs the segments and indices as a Polars DataFrame for easy, scalable, manipulation
 
 ## Usage Guide
+
+FinePhrase provides two classes:
+- **`FinePhrase`**: Simple API for most use cases
+- **`FinePhraseLite`**: Advanced API with memory optimizations (PCA, precision reduction, dimension truncation)
+
+### Basic Usage
 
 1. Install the package using pip:
 
@@ -104,17 +111,19 @@ Another key advantage of this approach is that the segment embeddings are enrich
     doc_segments = X[df["document_idx"] == i]
     ```
 
-### Optimizations
+### Memory Optimizations with FinePhraseLite
 
-#### Using PCA with FinePhrase
+For advanced users working with large datasets, `FinePhraseLite` provides memory-efficient features including PCA, precision reduction, and dimension truncation. These are "lossy" optimizations that trade some embedding quality for significant memory savings.
 
-If you are working with an extremely large dataset (hundreds of thousands of documents, extremely long documents, or extremely fine-grained segment settings), it may be necessary to use the PCA feature. If PCA is enabled, `FinePhrase` will incrementally learn a PCA transformation and then, once finished, begin applying it to each batch. The transformation is considered fit when it has seen the specified number (or proportion) of batches. This implementation of PCA harnesses the GPU, so it is fast to train and apply. Using PCA can significantly reduce the memory requirements of the pipeline without sacrificing too much quality or speed. Be sure to set the `pca` parameter to a value that balances memory efficiency and accuracy for your use case. Also be sure to set the `pca_fit_batch_count` parameter to a value that is large enough to learn the transformation. Initialize the model like so:
+#### Using PCA
+
+If you are working with an extremely large dataset (hundreds of thousands of documents, extremely long documents, or extremely fine-grained segment settings), it may be necessary to use the PCA feature. If PCA is enabled, `FinePhraseLite` will incrementally learn a PCA transformation and then, once finished, begin applying it to each batch. The transformation is considered fit when it has seen the specified number (or proportion) of batches. This implementation of PCA harnesses the GPU, so it is fast to train and apply. Using PCA can significantly reduce the memory requirements of the pipeline without sacrificing too much quality or speed. Be sure to set the `pca` parameter to a value that balances memory efficiency and accuracy for your use case. Also be sure to set the `pca_fit_batch_count` parameter to a value that is large enough to learn the transformation. Initialize the model like so:
 
 ```python
 import torch
-from finephrase import FinePhrase
+from finephrase import FinePhraseLite
 
-model = FinePhrase(
+model = FinePhraseLite(
     "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",  # Lightweight model
     pca=64,  # 64 components should capture a lot of the variance
     pca_fit_batch_count=0.33,  # The first 33% of batches will be used to fit PCA
@@ -138,9 +147,9 @@ This will reset the PCA transformation and let you fit it again.
 If you are working with a very large dataset and have limited memory, you may want to truncate the embeddings to a smaller size. This can be done by setting the `truncate_dims` parameter to a value less than the model's hidden size. For example, if the model's hidden size is 384 and you set `truncate_dims=256`, then the embeddings will be truncated to the first 256 dimensions. This can significantly reduce the memory requirements of the pipeline, but it will also reduce the quality of the embeddings. It is recommended to use this option only if you are working with a very large dataset and have limited memory. Also, PCA generally produces higher quality results and is extremely fast.
 
 ```python
-from finephrase import FinePhrase
+from finephrase import FinePhraseLite
 
-model = FinePhrase(
+model = FinePhraseLite(
     "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
     truncate_dims=256,  # Truncate the embeddings to 256 dimensions
 )
@@ -148,18 +157,22 @@ model = FinePhrase(
 
 #### Reducing Precision of the Embeddings to 16-bit
 
-To further reduce the memory footprint of the final embeddings, FinePhrase makes it convenient to reduce their precision to 16-bit floating point. This can be done by setting the `reduce_precision` parameter to `True` during initialization. This will reduce the precision of the embeddings to 16-bit floating point after they are extracted from the model and all transformations have been applied. This can be useful when working with large datasets or when memory is a concern, and generally not much quality is lost.
+To further reduce the memory footprint of the final embeddings, FinePhraseLite makes it convenient to reduce their precision to 16-bit floating point. This can be done by setting the `reduce_precision` parameter to `True` during initialization. This will reduce the precision of the embeddings to 16-bit floating point after they are extracted from the model and all transformations have been applied. This can be useful when working with large datasets or when memory is a concern, and generally not much quality is lost.
 
 ```python
-from finephrase import FinePhrase
+from finephrase import FinePhraseLite
 
-model = FinePhrase(
+model = FinePhraseLite(
     "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
     reduce_precision=True,  # Reduce the precision of the final embeds to 16-bit
 )
 ```
 
 > Downcasting the final embeddings to 16-bit may actually lead to slower calculations on CPU, e.g. for semantic search. The main benefit of this option is reducing the memory footprint.
+
+### Performance Optimizations
+
+These optimizations work with both `FinePhrase` and `FinePhraseLite`.
 
 #### Using Automatic Mixed Precision (AMP)
 
@@ -200,13 +213,13 @@ model.half()  # Convert the model to 16-bit precision
 
 #### Example High Efficiency Configuration
 
-An example of a highly memory-efficient configuration is to use `FinePhrase` with AMP, PCA, and reduced-precision final embeddings. This configuration is ideal for working with large datasets on a machine with limited memory. Here is an example of how to initialize the model with this configuration:
+An example of a highly memory-efficient configuration is to use `FinePhraseLite` with AMP, PCA, and reduced-precision final embeddings. This configuration is ideal for working with large datasets on a machine with limited memory. Here is an example of how to initialize the model with this configuration:
 
 ```python
 import torch
-from finephrase import FinePhrase
+from finephrase import FinePhraseLite
 
-model = FinePhrase(
+model = FinePhraseLite(
     "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",  # Lightweight model
     pca=64,  # Enable PCA with 64 components
     pca_fit_batch_count=0.33,  # Use the first 33% of batches to fit PCA
@@ -234,6 +247,6 @@ The context-awareness is limited by the maximum sequence length of the model. Cu
 
 This project is licensed under the Apache License 2.0.
 
-Copyright 2024 Nicholas Gigliotti.
+Copyright 2024-2026 Nicholas Gigliotti.
 
 You may use, distribute, and modify this project under the terms of the Apache License 2.0. For detailed information, see the [LICENSE](LICENSE) file included in this repository or visit the official [Apache License website](http://www.apache.org/licenses/LICENSE-2.0).
