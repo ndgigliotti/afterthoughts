@@ -228,6 +228,31 @@ model = FinePhraseLite(
 )
 ```
 
+### Logging
+
+FinePhrase uses Python's standard logging module for diagnostic output. By default, logging is silent. To enable logging:
+
+```python
+import finephrase
+
+# Quick setup with configure_logging
+finephrase.configure_logging(level="INFO")  # INFO, DEBUG, WARNING, etc.
+```
+
+Or use Python's logging module directly for more control:
+
+```python
+import logging
+
+# Enable debug output from FinePhrase
+logging.getLogger("finephrase").setLevel(logging.DEBUG)
+logging.basicConfig()
+```
+
+**Log levels:**
+- `INFO`: Model loading, compilation, preprocessing time, PCA status
+- `DEBUG`: Batch sizes, token counts, and other diagnostic details
+
 ## Known Limitations
 
 #### Memory Requirements

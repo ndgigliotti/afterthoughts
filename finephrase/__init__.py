@@ -19,3 +19,4 @@ __version__ = "0.1.0"
 # limitations under the License.
 
 from finephrase.finephrase import FinePhrase, FinePhraseLite  # noqa
+from finephrase.utils import configure_logging  # noqa

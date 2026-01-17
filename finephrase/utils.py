@@ -29,6 +29,8 @@ import pyarrow as pa
 import torch
 import torch.nn.functional as F
 
+logger = logging.getLogger(__name__)
+
 
 def configure_logging(
     level: str = "INFO",
@@ -39,6 +41,14 @@ def configure_logging(
     datefmt: str = "%Y-%m-%d %H:%M:%S",
 ) -> None:
     """Configure the logging for the root logger.
+
+    This is a convenience function for users who want to quickly enable logging output
+    from FinePhrase. For more control, configure logging using Python's standard
+    logging module::
+
+        import logging
+        logging.getLogger("finephrase").setLevel(logging.DEBUG)
+        logging.basicConfig()
 
     Parameters
     ----------
@@ -151,12 +161,12 @@ def normalize_num_jobs(num_jobs: int | None) -> int:
 
 
 def timer(readout: str = "Execution time: {time:.4f} seconds") -> Callable:
-    """Decorator to time a function execution and print the result.
+    """Decorator to time a function execution and log the result.
 
     Parameters
     ----------
     readout : str
-        Format string for the printout. Must contain '{time}'.
+        Format string for the log message. Must contain '{time}'.
 
     Returns
     -------
@@ -170,7 +180,7 @@ def timer(readout: str = "Execution time: {time:.4f} seconds") -> Callable:
             result = func(*args, **kwargs)
             end_time = time.perf_counter()
             elapsed_time = end_time - start_time
-            print(readout.format(time=elapsed_time))
+            logger.info(readout.format(time=elapsed_time))
             return result
 
         return wrapper

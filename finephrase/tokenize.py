@@ -1,3 +1,4 @@
+import logging
 import math
 import os
 import warnings
@@ -16,6 +17,8 @@ from tqdm.auto import tqdm
 from transformers import PreTrainedTokenizerFast
 
 from finephrase.utils import get_overlap_count, order_by_indices, round_up_to_power_of_2
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_PAD_VALUES = MappingProxyType(
     {
@@ -223,8 +226,8 @@ class DynamicTokenSampler(Sampler[list[int]]):
             batch_list.append(current_batch)
             batch_token_counts.append(current_tokens)  # Store token count for final batch
 
-        print([len(x) for x in batch_list])
-        print(batch_token_counts)
+        logger.debug("Batch sizes: %s", [len(x) for x in batch_list])
+        logger.debug("Batch token counts: %s", batch_token_counts)
         return batch_list
 
     def __iter__(self) -> Iterator[list[int]]:

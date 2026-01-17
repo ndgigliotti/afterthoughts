@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import logging
 import warnings
 
 import blingfire as bf
@@ -23,6 +24,8 @@ from tqdm.auto import tqdm
 
 from finephrase.tokenize import TokenizedDataset, get_max_length, pad, tokenize_docs
 from finephrase.utils import get_overlap_count
+
+logger = logging.getLogger(__name__)
 
 
 def get_sentence_offsets_syntok(text: str) -> torch.Tensor:

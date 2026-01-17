@@ -14,6 +14,7 @@
 
 """FinePhrase is a library for extracting sentence-segment embeddings using transformer models."""
 
+import logging
 import math
 import os
 import warnings
@@ -47,6 +48,8 @@ from finephrase.utils import (
     timer,
     truncate_dims,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class _FinePhraseBase(ABC):
@@ -114,12 +117,15 @@ class _FinePhraseBase(ABC):
         model_kws = {"dtype": self.model_dtype, "device_map": {"": device}}
         if self.attn_implementation is not None:
             model_kws["attn_implementation"] = self.attn_implementation
+        logger.info("Loading model '%s' on device '%s'", model_name, device)
         self.model = AutoModel.from_pretrained(model_name, **model_kws).eval()
         self.compile = compile
         match compile:
             case True | "reduce-overhead":
+                logger.info("Compiling model with mode='reduce-overhead'")
                 self.model = torch.compile(self.model, mode="reduce-overhead", dynamic=False)
             case str():
+                logger.info("Compiling model with mode='%s'", compile)
                 self.model = torch.compile(self.model, mode=compile, dynamic=False)
         self.amp = amp
         self.amp_dtype = amp_dtype
@@ -860,7 +866,7 @@ class FinePhraseLite(_FinePhraseBase):
         for attr in pca_attrs:
             if hasattr(self, attr):
                 delattr(self, attr)
-        print("PCA cleared.")
+        logger.info("PCA cleared.")
 
     def encode(
         self,
@@ -944,7 +950,7 @@ class FinePhraseLite(_FinePhraseBase):
             if hasattr(self, "pca_transform_"):
                 self.pca_transform_.to(self.device)
             if pca_ready_at_start:
-                print("PCA is already fit and will be applied to all batches.")
+                logger.info("PCA is already fit and will be applied to all batches.")
             else:
                 if isinstance(self.pca_fit_batch_count, float):
                     self.pca_fit_batch_count_ = math.ceil(len(loader) * self.pca_fit_batch_count)

@@ -19,7 +19,11 @@
 # Modifications to the original code were made by Nicholas Gigliotti and are
 # licensed under the Apache 2.0 License.
 
+import logging
+
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 class IncrementalPCA:
