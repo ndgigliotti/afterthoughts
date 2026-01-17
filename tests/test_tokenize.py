@@ -82,28 +82,24 @@ def test_dynamic_pad_collate_empty_batch():
     assert collated == {}
 
 
-def test_get_max_length_with_max_length():
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+def test_get_max_length_with_max_length(tokenizer):
     max_length = 128
     result = get_max_length(max_length, tokenizer)
     assert result == max_length
 
 
-def test_get_max_length_without_max_length():
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+def test_get_max_length_without_max_length(tokenizer):
     result = get_max_length(None, tokenizer)
     assert result == tokenizer.model_max_length
 
 
-def test_get_max_length_required_with_max_length():
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+def test_get_max_length_required_with_max_length(tokenizer):
     max_length = 128
     result = get_max_length(max_length, tokenizer, required=True)
     assert result == max_length
 
 
-def test_get_max_length_required_without_max_length():
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+def test_get_max_length_required_without_max_length(tokenizer):
     result = get_max_length(None, tokenizer, required=True)
     assert result == tokenizer.model_max_length
 
@@ -185,10 +181,9 @@ def test_tokenized_dataset_unsorted():
     assert unsorted_data[2]["input_ids"] == [6]
 
 
-def test_tokenize_batch_basic():
+def test_tokenize_batch_basic(tokenizer):
     docs = ["Hello world", "This is a test"]
     sample_idx = [0, 1]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     result = _tokenize_batch(docs, sample_idx, tokenizer)
     assert "input_ids" in result
     assert "attention_mask" in result
@@ -196,32 +191,29 @@ def test_tokenize_batch_basic():
     assert len(result["attention_mask"]) == 2
 
 
-def test_tokenize_batch_max_length():
+def test_tokenize_batch_max_length(tokenizer):
     docs = ["Hello world", "This is a test"]
     sample_idx = [0, 1]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     max_length = 5
     result = _tokenize_batch(docs, sample_idx, tokenizer, max_length=max_length)
     assert all(len(ids) <= max_length for ids in result["input_ids"])
 
 
-def test_tokenize_batch_padding():
+def test_tokenize_batch_padding(tokenizer):
     docs = ["Hello world", "This is a test"]
     sample_idx = [0, 1]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     result = _tokenize_batch(docs, sample_idx, tokenizer, padding="max_length", max_length=10)
     assert all(len(ids) == 10 for ids in result["input_ids"])
 
 
-def test_tokenize_batch_truncation():
+def test_tokenize_batch_truncation(tokenizer):
     docs = ["Hello world", "This is a test"]
     sample_idx = [0, 1]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     result = _tokenize_batch(docs, sample_idx, tokenizer, truncation=True, max_length=3)
     assert all(len(ids) == 3 for ids in result["input_ids"])
 
 
-def test_tokenize_batch_overflowing_tokens():
+def test_tokenize_batch_overflowing_tokens(tokenizer):
     docs = [
         "This is a longer example with more text to test the tokenizer's "
         "ability to handle overflow.",
@@ -229,7 +221,6 @@ def test_tokenize_batch_overflowing_tokens():
         "longer sequences and overflow tokens.",
     ]
     sample_idx = [0, 1]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     result = _tokenize_batch(
         docs,
         sample_idx,
@@ -241,95 +232,84 @@ def test_tokenize_batch_overflowing_tokens():
     assert "overflow_to_sample_mapping" in result
 
 
-def test_tokenize_batch_return_tensors():
+def test_tokenize_batch_return_tensors(tokenizer):
     docs = ["Hello world", "This is a test"]
     sample_idx = [0, 1]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     result = _tokenize_batch(docs, sample_idx, tokenizer, return_tensors="pt", padding=True)
     assert isinstance(result["input_ids"], torch.Tensor)
     assert isinstance(result["attention_mask"], torch.Tensor)
 
 
-def test_tokenize_batch_add_special_tokens():
+def test_tokenize_batch_add_special_tokens(tokenizer):
     docs = ["Hello world", "This is a test"]
     sample_idx = [0, 1]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     result = _tokenize_batch(docs, sample_idx, tokenizer, add_special_tokens=False)
     set_input_ids = {y for x in result["input_ids"] for y in x}
     for special_id in tokenizer.all_special_ids:
         assert special_id not in set_input_ids, f"Special token {special_id} found in input_ids"
 
 
-def test_tokenize_batch_return_attention_mask():
+def test_tokenize_batch_return_attention_mask(tokenizer):
     docs = ["Hello world", "This is a test"]
     sample_idx = [0, 1]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     result = _tokenize_batch(docs, sample_idx, tokenizer, return_attention_mask=True)
     assert "attention_mask" in result
 
 
-def test_tokenize_batch_return_offsets_mapping():
+def test_tokenize_batch_return_offsets_mapping(tokenizer):
     docs = ["Hello world", "This is a test"]
     sample_idx = [0, 1]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     result = _tokenize_batch(docs, sample_idx, tokenizer, return_offsets_mapping=True)
     assert "offset_mapping" in result
     assert isinstance(result["offset_mapping"][0], list)
     assert isinstance(result["offset_mapping"][0][0], tuple)
 
 
-def test_tokenize_docs_basic():
+def test_tokenize_docs_basic(tokenizer):
     docs = ["Hello world", "This is a test"]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     result = tokenize_docs(docs, tokenizer)
     assert "input_ids" in result
     assert len(result["input_ids"]) == 2
 
 
-def test_tokenize_docs_max_length():
+def test_tokenize_docs_max_length(tokenizer):
     docs = ["Hello world", "This is a test"]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     max_length = 5
     result = tokenize_docs(docs, tokenizer, max_length=max_length)
     assert all(len(ids) <= max_length for ids in result["input_ids"])
 
 
-def test_tokenize_docs_truncation():
+def test_tokenize_docs_truncation(tokenizer):
     docs = ["Hello world", "This is a test"]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     result = tokenize_docs(docs, tokenizer, max_length=3, truncation=True)
     assert all(len(ids) == 3 for ids in result["input_ids"])
 
 
-def test_tokenize_docs_overflowing_tokens():
+def test_tokenize_docs_overflowing_tokens(tokenizer):
     docs = [
         "This is a longer example with more text to test the tokenizer's ability to handle overflow.",
         "This is another test with even more words to see how the tokenizer manages longer sequences and overflow tokens.",
     ]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     result = tokenize_docs(docs, tokenizer, max_length=10, chunk_docs=True, overlap=2)
     assert "sequence_idx" in result
 
 
-def test_tokenize_docs_return_attention_mask():
+def test_tokenize_docs_return_attention_mask(tokenizer):
     docs = ["Hello world", "This is a test"]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     result = tokenize_docs(docs, tokenizer, return_attention_mask=True)
     assert "attention_mask" in result
 
 
-def test_tokenize_docs_return_offsets_mapping():
+def test_tokenize_docs_return_offsets_mapping(tokenizer):
     docs = ["Hello world", "This is a test"]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     result = tokenize_docs(docs, tokenizer, return_offsets_mapping=True)
     assert "offset_mapping" in result
     assert isinstance(result["offset_mapping"][0], list)
     assert isinstance(result["offset_mapping"][0][0], tuple)
 
 
-def test_tokenize_docs_return_tokenized_dataset():
+def test_tokenize_docs_return_tokenized_dataset(tokenizer):
     docs = ["Hello world", "This is a test"]
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     result = tokenize_docs(docs, tokenizer, return_tokenized_dataset=True)
     assert isinstance(result, TokenizedDataset)
     assert len(result) == 2

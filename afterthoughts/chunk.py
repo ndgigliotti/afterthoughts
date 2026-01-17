@@ -801,6 +801,7 @@ def tokenize_with_sentence_boundaries(
     return_tokenized_dataset: bool = False,
     batch_size: int = 10,
     n_jobs: int | None = None,
+    show_progress: bool = True,
 ) -> dict | TokenizedDataset:
     """Tokenizes documents while preserving sentence boundaries.
     This function takes a list of documents, a tokenizer, and optional parameters
@@ -830,6 +831,8 @@ def tokenize_with_sentence_boundaries(
     n_jobs : int, optional
         The number of parallel jobs to run for tokenization. If None, it uses
         sequential processing. If -1, it uses all available cores. Default is None.
+    show_progress : bool, optional
+        Show progress bar during chunking, by default True.
 
 
     Returns
@@ -880,7 +883,7 @@ def tokenize_with_sentence_boundaries(
         current_sent_offsets,
     ) in enumerate(
         zip(
-            tqdm(inputs["input_ids"], desc="Chunking"),
+            tqdm(inputs["input_ids"], desc="Chunking", disable=not show_progress),
             token_offsets,
             sent_offsets,
             strict=False,

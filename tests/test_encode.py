@@ -160,16 +160,6 @@ def test_move_or_convert_results_invalid_return_tensors():
         move_or_convert_tensors(results, return_tensors="invalid")
 
 
-@pytest.fixture
-def model():
-    return Encoder(
-        model_name=MODEL_NAME,
-        device="cpu",
-        amp=False,
-        _num_token_jobs=1,
-    )
-
-
 @requires_cuda
 def test_encoder_to_cpu():
     model_name = MODEL_NAME
@@ -185,22 +175,34 @@ def test_encoder_to_cpu():
 
 
 @requires_cuda
-def test_encoder_to_cuda(model):
-    assert model.device.type == "cpu"
+def test_encoder_to_cuda():
+    encoder = Encoder(
+        model_name=MODEL_NAME,
+        device="cpu",
+        compile=False,
+        _num_token_jobs=1,
+    )
+    assert encoder.device.type == "cpu"
 
-    model.to("cuda")
-    assert model.device.type == "cuda"
+    encoder.to("cuda")
+    assert encoder.device.type == "cuda"
 
 
 @requires_cuda
-def test_encoder_to_device(model):
-    assert model.device.type == "cpu"
+def test_encoder_to_device():
+    encoder = Encoder(
+        model_name=MODEL_NAME,
+        device="cpu",
+        compile=False,
+        _num_token_jobs=1,
+    )
+    assert encoder.device.type == "cpu"
 
-    model.to(torch.device("cuda"))
-    assert model.device.type == "cuda"
+    encoder.to(torch.device("cuda"))
+    assert encoder.device.type == "cuda"
 
-    model.to(torch.device("cpu"))
-    assert model.device.type == "cpu"
+    encoder.to(torch.device("cpu"))
+    assert encoder.device.type == "cpu"
 
 
 def test_encoder_encode(model):
@@ -208,7 +210,7 @@ def test_encoder_encode(model):
         "This is a test document. Another sentence here.",
         "Another test document. With more sentences.",
     ]
-    df, X = model.encode(docs, num_sents=1, max_length=64, batch_tokens=256)
+    df, X = model.encode(docs, num_sents=1, max_length=64, batch_tokens=256, show_progress=False)
     assert isinstance(df, pl.DataFrame)
     assert isinstance(X, np.ndarray)
     assert len(df) == len(X)
@@ -216,19 +218,15 @@ def test_encoder_encode(model):
     assert "chunk_size" in df.columns
 
 
-def test_encoder_encode_multiple_num_sents():
+def test_encoder_encode_multiple_num_sents(model):
     docs = [
         "This is a test document. Another sentence here.",
         "Another test document. With more sentences.",
     ]
-    encoder = Encoder(
-        model_name=MODEL_NAME,
-        device="cpu",
-        amp=False,
-        _num_token_jobs=1,
-    )
     num_sents = [1, 2]
-    df, X = encoder.encode(docs, num_sents=num_sents, max_length=64, batch_tokens=256)
+    df, X = model.encode(
+        docs, num_sents=num_sents, max_length=64, batch_tokens=256, show_progress=False
+    )
     assert isinstance(df, pl.DataFrame)
     assert isinstance(X, np.ndarray)
     assert len(df) == len(X)

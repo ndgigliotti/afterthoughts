@@ -70,7 +70,7 @@ class _EncoderBase(ABC):
         amp: bool = False,
         amp_dtype: torch.dtype = torch.float16,
         attn_implementation: str | None = None,
-        compile: bool | str = True,
+        compile: bool | str = False,
         normalize: bool = False,
         device: torch.device | str | int = "cuda",
         _num_token_jobs: int | None = -1,
@@ -91,7 +91,7 @@ class _EncoderBase(ABC):
             Attention implementation to use, by default None. If None, the model will use the
             default attention implementation.
         compile : bool | str, optional
-            Compile the model, by default True. If True, the model will be compiled using
+            Compile the model, by default False. If True, the model will be compiled using
             torch.compile(mode="reduce-overhead"). If False, the model will not be compiled.
             You can specify the compilation mode using a string:
             - "reduce-overhead"
@@ -195,13 +195,17 @@ class _EncoderBase(ABC):
             embeds = normalize(embeds, dim=dim)
         return embeds
 
-    def _decode_segments(self, segment_token_ids: list[torch.Tensor]) -> pl.Series:
+    def _decode_segments(
+        self, segment_token_ids: list[torch.Tensor], show_progress: bool = True
+    ) -> pl.Series:
         """Decode the segment token IDs into human-readable segments.
 
         Parameters
         ----------
         segment_token_ids : list[torch.Tensor]
             List of segment token IDs to decode.
+        show_progress : bool, optional
+            Show progress bar during decoding, by default True.
 
         Returns
         -------
@@ -217,7 +221,8 @@ class _EncoderBase(ABC):
             )
         )
         segments = Parallel(n_jobs=self.__num_token_jobs, prefer="processes")(
-            _decode(ids) for ids in tqdm(segment_token_ids, desc="Detokenizing")
+            _decode(ids)
+            for ids in tqdm(segment_token_ids, desc="Detokenizing", disable=not show_progress)
         )
         return pl.Series([y for x in segments for y in x])
 
@@ -230,6 +235,7 @@ class _EncoderBase(ABC):
         prechunk_overlap: float | int = 0.5,
         batch_size: int = 10,
         num_jobs: int | None = None,
+        show_progress: bool = True,
     ) -> TokenizedDataset:
         """Tokenize a list of documents into input sequences for the model.
 
@@ -254,6 +260,8 @@ class _EncoderBase(ABC):
         num_jobs : int, optional
             Number of jobs to use for parallel processing on tokenization.
             If None, will default to `self._num_token_jobs`.
+        show_progress : bool, optional
+            Show progress bar during tokenization, by default True.
 
         Returns
         -------
@@ -277,6 +285,7 @@ class _EncoderBase(ABC):
             batch_size=batch_size,
             n_jobs=num_jobs,
             return_tokenized_dataset=True,
+            show_progress=show_progress,
         )
         return inputs
 
@@ -287,6 +296,7 @@ class _EncoderBase(ABC):
         move_results_to_cpu: bool = False,
         return_tensors: str = "pt",
         truncate_dim: int | None = None,
+        show_progress: bool = True,
     ):
         """Obtain the token embeddings for a list of documents, one batch at at time.
 
@@ -300,9 +310,11 @@ class _EncoderBase(ABC):
             Return tensor format, by default "pt".
         truncate_dim : int | None, optional
             Truncate token embeddings to this dimension, by default None.
+        show_progress : bool, optional
+            Show progress bar during encoding, by default True.
         """
         with torch.autocast(device_type=self.device.type, enabled=self.amp, dtype=self.amp_dtype):
-            progress_loader = tqdm(loader, desc="Encoding")
+            progress_loader = tqdm(loader, desc="Encoding", disable=not show_progress)
             for batch_idx, batch in enumerate(progress_loader):
                 batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
                 outputs = self.model(
@@ -335,6 +347,7 @@ class _EncoderBase(ABC):
         move_results_to_cpu: bool = False,
         return_tensors: str = "pt",
         truncate_dim: int | None = None,
+        show_progress: bool = True,
     ):
         """Obtain the segment embeddings for a list of documents, one batch at at time.
 
@@ -352,9 +365,15 @@ class _EncoderBase(ABC):
             Return tensor format, by default "pt".
         truncate_dim : int | None, optional
             Truncate token embeddings to this dimension, by default None.
+        show_progress : bool, optional
+            Show progress bar during encoding, by default True.
         """
         batches = self._generate_token_embeds(
-            loader, move_results_to_cpu=False, return_tensors="pt", truncate_dim=truncate_dim
+            loader,
+            move_results_to_cpu=False,
+            return_tensors="pt",
+            truncate_dim=truncate_dim,
+            show_progress=show_progress,
         )
         for batch in batches:
             results = _compute_chunk_embeds(
@@ -387,6 +406,8 @@ class _EncoderBase(ABC):
         return_frame: str = "polars",
         as_numpy: bool = True,
         debug: bool = False,
+        return_text: bool = True,
+        show_progress: bool = True,
     ):
         """Obtain the segments and segment embeddings from a list of documents."""
         pass
@@ -485,7 +506,7 @@ class Encoder(_EncoderBase):
         amp: bool = False,
         amp_dtype: torch.dtype = torch.float16,
         attn_implementation: str | None = None,
-        compile: bool | str = True,
+        compile: bool | str = False,
         normalize: bool = False,
         device: torch.device | str | int = "cuda",
         _num_token_jobs: int | None = -1,
@@ -506,7 +527,7 @@ class Encoder(_EncoderBase):
             Attention implementation to use, by default None. If None, the model will use the
             default attention implementation.
         compile : bool | str, optional
-            Compile the model, by default True. If True, the model will be compiled using
+            Compile the model, by default False. If True, the model will be compiled using
             torch.compile(mode="reduce-overhead"). If False, the model will not be compiled.
             You can specify the compilation mode using a string:
             - "reduce-overhead"
@@ -547,6 +568,8 @@ class Encoder(_EncoderBase):
         return_frame: str = "polars",
         as_numpy: bool = True,
         debug: bool = False,
+        return_text: bool = True,
+        show_progress: bool = True,
     ) -> dict[str, np.ndarray | torch.Tensor]:
         """Obtain the segments and segment embeddings from a list of documents.
 
@@ -585,6 +608,11 @@ class Encoder(_EncoderBase):
         debug : bool, optional
             Include additional columns in the output DataFrame for debugging,
             by default False.
+        return_text : bool, optional
+            Include decoded text chunks in the output DataFrame, by default True.
+            Set to False to skip detokenization for faster processing.
+        show_progress : bool, optional
+            Show progress bars during encoding, by default True.
 
         Returns
         -------
@@ -609,6 +637,7 @@ class Encoder(_EncoderBase):
             prechunk=prechunk,
             prechunk_overlap=prechunk_overlap,
             batch_size=token_batch_size,
+            show_progress=show_progress,
         )
         loader = DataLoader(
             inputs,
@@ -627,6 +656,7 @@ class Encoder(_EncoderBase):
             chunk_overlap=chunk_overlap,
             move_results_to_cpu=False,
             return_tensors="pt",
+            show_progress=show_progress,
         )
 
         results = {
@@ -654,7 +684,10 @@ class Encoder(_EncoderBase):
             results["chunk_embeds"].append(batch["chunk_embeds"])
 
         # Decode segments in existing batches
-        results["chunk"] = self._decode_segments(results.pop("chunk_token_ids"))
+        if return_text:
+            results["chunk"] = self._decode_segments(results.pop("chunk_token_ids"), show_progress)
+        else:
+            results.pop("chunk_token_ids")
         # Combine results
         for key, value in results.items():
             if len(value) and isinstance(value[0], torch.Tensor):
@@ -713,7 +746,7 @@ class LiteEncoder(_EncoderBase):
         amp: bool = False,
         amp_dtype: torch.dtype = torch.float16,
         attn_implementation: str | None = None,
-        compile: bool | str = True,
+        compile: bool | str = False,
         half_embeds: bool = False,
         truncate_dims: int | None = None,
         normalize: bool = False,
@@ -737,7 +770,7 @@ class LiteEncoder(_EncoderBase):
         attn_implementation : str | None, optional
             Attention implementation to use, by default None.
         compile : bool | str, optional
-            Compile the model, by default True.
+            Compile the model, by default False.
         half_embeds : bool, optional
             Reduce the final embedding precision to float16, by default False.
         truncate_dims : int, None, optional
@@ -892,6 +925,8 @@ class LiteEncoder(_EncoderBase):
         return_frame: str = "polars",
         as_numpy: bool = True,
         debug: bool = False,
+        return_text: bool = True,
+        show_progress: bool = True,
     ) -> dict[str, np.ndarray | torch.Tensor]:
         """Obtain the segments and segment embeddings from a list of documents.
 
@@ -924,6 +959,11 @@ class LiteEncoder(_EncoderBase):
         debug : bool, optional
             Include additional columns in the output DataFrame for debugging,
             by default False.
+        return_text : bool, optional
+            Include decoded text chunks in the output DataFrame, by default True.
+            Set to False to skip detokenization for faster processing.
+        show_progress : bool, optional
+            Show progress bars during encoding, by default True.
 
         Returns
         -------
@@ -948,6 +988,7 @@ class LiteEncoder(_EncoderBase):
             prechunk=prechunk,
             prechunk_overlap=prechunk_overlap,
             batch_size=token_batch_size,
+            show_progress=show_progress,
         )
         loader = DataLoader(
             inputs,
@@ -967,6 +1008,7 @@ class LiteEncoder(_EncoderBase):
             move_results_to_cpu=False,
             return_tensors="pt",
             truncate_dim=self.truncate_dims,
+            show_progress=show_progress,
         )
         pca_ready_at_start = self.pca_is_ready
         if self.pca_mode:
@@ -1024,7 +1066,10 @@ class LiteEncoder(_EncoderBase):
             else:
                 warnings.warn("PCA did not finish fitting and will not be applied.", stacklevel=2)
         # Decode segments in existing batches
-        results["chunk"] = self._decode_segments(results.pop("chunk_token_ids"))
+        if return_text:
+            results["chunk"] = self._decode_segments(results.pop("chunk_token_ids"), show_progress)
+        else:
+            results.pop("chunk_token_ids")
         # Combine results
         for key, value in results.items():
             if len(value) and isinstance(value[0], torch.Tensor):

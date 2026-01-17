@@ -98,3 +98,8 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["afterthoughts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-v", "--tb=short"]
+filterwarnings = ["ignore::DeprecationWarning"]
