@@ -112,4 +112,4 @@ ENV/
 .ruff_cache/
 
 # Research papers (fetch via scripts/fetch_papers.sh)
-References/
+references/
