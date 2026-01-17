@@ -906,9 +906,9 @@ class LiteEncoder(_EncoderBase):
         """Returns True if PCA has seen enough batches to be applied."""
         return (
             hasattr(self, "pca_transform_")
-            and hasattr(self, "pca_early_stop_")
+            and hasattr(self, "_n_pca_fit_batches")
             and hasattr(self.pca_transform_, "n_batches_seen_")
-            and self.pca_transform_.n_batches_seen_ >= self.pca_early_stop_
+            and self.pca_transform_.n_batches_seen_ >= self._n_pca_fit_batches
         )
 
     def update_pca(self, chunk_embeds: torch.Tensor) -> None:
@@ -922,10 +922,6 @@ class LiteEncoder(_EncoderBase):
         if not hasattr(self, "pca_transform_"):
             self.pca_transform_ = IncrementalPCA(n_components=self.pca, device=self.device)
         self.pca_transform_.partial_fit(chunk_embeds)
-        if hasattr(self.pca_transform_, "n_batches_seen_"):
-            self.pca_transform_.n_batches_seen_ += 1
-        else:
-            self.pca_transform_.n_batches_seen_ = 1
 
     def apply_pca(self, chunk_embeds: torch.Tensor) -> torch.Tensor:
         """Apply PCA transformation to embeddings.
@@ -948,7 +944,7 @@ class LiteEncoder(_EncoderBase):
 
     def clear_pca(self) -> None:
         """Clear the fitted PCA transformation."""
-        pca_attrs = ["pca_transform_", "pca_early_stop_"]
+        pca_attrs = ["pca_transform_", "_n_pca_fit_batches"]
         for attr in pca_attrs:
             if hasattr(self, attr):
                 delattr(self, attr)
@@ -1051,9 +1047,9 @@ class LiteEncoder(_EncoderBase):
                 logger.info("PCA is already fit and will be applied to all batches.")
             else:
                 if isinstance(self.pca_early_stop, float):
-                    self.pca_early_stop_ = math.ceil(len(loader) * self.pca_early_stop)
+                    self._n_pca_fit_batches = math.ceil(len(loader) * self.pca_early_stop)
                 else:
-                    self.pca_early_stop_ = self.pca_early_stop
+                    self._n_pca_fit_batches = self.pca_early_stop
 
         results = {
             "batch_idx": [],
@@ -1091,7 +1087,7 @@ class LiteEncoder(_EncoderBase):
         if self.pca_mode and not pca_ready_at_start:
             if self.pca_is_ready:
                 self.pca_transform_.to("cpu")  # Temporarily move to CPU
-                for i in range(self.pca_early_stop_):
+                for i in range(self._n_pca_fit_batches):
                     batch_embeds = results["chunk_embeds"][i]
                     if batch_embeds.size(1) != self.pca:
                         results["chunk_embeds"][i] = self.postprocess(self.apply_pca(batch_embeds))

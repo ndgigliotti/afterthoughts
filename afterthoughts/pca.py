@@ -190,6 +190,7 @@ class IncrementalPCA:
 
     _fitted_attrs: ClassVar[list[str]] = [
         "n_samples_seen_",
+        "n_batches_seen_",
         "n_components_",
         "components_",
         "mean_",
@@ -454,6 +455,7 @@ class IncrementalPCA:
         """
         self.components_ = None
         self.n_samples_seen_ = 0
+        self.n_batches_seen_ = 0
         self.mean_ = 0.0
         self.var_ = 0.0
         self.singular_values_ = None
@@ -531,6 +533,7 @@ class IncrementalPCA:
         # This is the first partial_fit
         if not hasattr(self, "n_samples_seen_"):
             self.n_samples_seen_ = 0
+            self.n_batches_seen_ = 0
             self.mean_ = torch.zeros(n_features, device=self.device)
             self.var_ = torch.zeros(n_features, device=self.device)
 
@@ -580,6 +583,7 @@ class IncrementalPCA:
             self.noise_variance_ = explained_variance[self.n_components_ :].mean()
         else:
             self.noise_variance_ = torch.tensor(0.0, device=self.device)
+        self.n_batches_seen_ += 1
         return self
 
 
