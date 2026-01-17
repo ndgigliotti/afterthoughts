@@ -36,7 +36,7 @@
 | `doc_overlap` | `prechunk_overlap` | `0.5` | Fraction of sentences to overlap when prechunking (float) |
 | `max_length` | keep | `None` | Model's max length |
 | `batch_max_tokens` | `batch_tokens` | `16384` | Approx batch size in tokens |
-| `token_batch_size` | (hide) | `10` | Internal tokenization batch size |
+| `token_batch_size` | (hide) | heuristic | Internal tokenization batch size (auto-scales based on avg doc length) |
 | `return_frame` | keep | `"pandas"` | Output format |
 | `convert_to_numpy` | `as_numpy` | `True` | Return embeddings as numpy array |
 | `debug` | keep | `False` | Include debug columns |

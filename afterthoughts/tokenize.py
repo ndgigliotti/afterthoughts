@@ -1,6 +1,7 @@
 import logging
 import math
 import os
+import random
 import warnings
 from collections.abc import Iterator
 from functools import cached_property
@@ -20,6 +21,7 @@ from afterthoughts.utils import get_overlap_count, order_by_indices, round_up_to
 
 logger = logging.getLogger(__name__)
 
+
 DEFAULT_PAD_VALUES = MappingProxyType(
     {
         "attention_mask": 0,
@@ -28,6 +30,45 @@ DEFAULT_PAD_VALUES = MappingProxyType(
         "sentence_ids": -1,
     }
 )
+
+
+def _get_tokenization_batch_size(docs: list[str], sample_size: int = 100) -> int:
+    """Determine tokenization batch size based on average document length.
+
+    Smaller batches are used for longer documents to manage memory usage
+    and improve work distribution across parallel workers.
+
+    Parameters
+    ----------
+    docs : list[str]
+        List of documents to be tokenized.
+    sample_size : int, optional
+        Maximum number of documents to sample for length estimation.
+        Uses deterministic sampling based on dataset size. Default is 100.
+
+    Returns
+    -------
+    int
+        Recommended batch size for tokenization.
+    """
+    if not docs:
+        return 10
+    # Limit sample size to available documents
+    sample_size = min(sample_size, len(docs))
+    # Sample for large datasets to avoid iterating through all docs
+    if len(docs) > sample_size:
+        rng = random.Random(len(docs))  # Deterministic based on dataset size
+        sample = rng.sample(docs, sample_size)
+    else:
+        sample = docs
+    avg_doc_chars = sum(len(d) for d in sample) / len(sample)
+    # Estimate: ~4 chars per token on average
+    if avg_doc_chars > 50_000:  # ~12k tokens, book chapters / long articles
+        return 1
+    elif avg_doc_chars > 10_000:  # ~2.5k tokens, medium articles
+        return 5
+    else:
+        return 10
 
 
 class TokenizedDataset(Dataset):
@@ -490,8 +531,8 @@ def tokenize_docs(
     tokenizer: PreTrainedTokenizerFast,
     max_length: int | None = None,
     truncation: bool = True,
-    chunk_docs: bool = True,
-    overlap: float | int = 0,
+    prechunk: bool = True,
+    prechunk_overlap: float | int = 0,
     add_special_tokens: bool = True,
     return_attention_mask: bool = False,
     return_offsets_mapping: bool = False,
@@ -515,10 +556,10 @@ def tokenize_docs(
     truncation : bool, optional
         Whether to truncate sequences that exceed the maximum length.
         Default is True.
-    chunk_docs : bool, optional
+    prechunk : bool, optional
         Whether to return overflowing tokens. Default is True.
-    overlap : float or int, optional
-        The overlap between documents. Default is 0.
+    prechunk_overlap : float or int, optional
+        The overlap between prechunked sequences. Default is 0.
     add_special_tokens : bool, optional
         Whether to add special tokens to the tokenized sequences.
         Default is True.
@@ -557,7 +598,7 @@ def tokenize_docs(
     data = pl.DataFrame({"text": docs, "sample_idx": range(len(docs))})
 
     max_length = get_max_length(max_length, tokenizer, required=truncation)
-    stride = get_overlap_count(overlap, max_length)
+    stride = get_overlap_count(prechunk_overlap, max_length)
     num_batches = math.ceil(len(data) / batch_size)
     batches = tqdm(
         data.iter_slices(batch_size),
@@ -577,7 +618,7 @@ def tokenize_docs(
             max_length=max_length,
             padding=False,
             truncation=truncation,
-            return_overflowing_tokens=chunk_docs,
+            return_overflowing_tokens=prechunk,
             stride=stride,
             return_tensors=None,
             add_special_tokens=add_special_tokens,

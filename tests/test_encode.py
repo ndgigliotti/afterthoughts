@@ -5,7 +5,8 @@ import torch
 
 from afterthoughts import Encoder, LiteEncoder
 from afterthoughts.chunk import get_chunk_idx
-from afterthoughts.utils import _build_results_dataframe, move_or_convert_tensors
+from afterthoughts.encode import _EncoderBase
+from afterthoughts.utils import move_or_convert_tensors
 
 MODEL_NAME = "sentence-transformers/paraphrase-MiniLM-L3-v2"
 
@@ -275,21 +276,21 @@ def test_encoder_normalize_if_needed():
 
 
 @pytest.mark.parametrize(
-    "return_frame, convert_to_numpy",
+    "return_frame, as_numpy",
     [
         ("polars", True),
         ("polars", False),
         ("teddies", True),
     ],
 )
-def test_build_results_dataframe(return_frame, convert_to_numpy):
+def test_build_results_dataframe(return_frame, as_numpy):
     # Determine the expected dataframe type based on the return_frame parameter
     if return_frame == "polars":
         expected_df_type = pl.DataFrame
 
-    # Determine the expected embeddings type based on the convert_to_numpy parameter
+    # Determine the expected embeddings type based on the as_numpy parameter
     expected_embeds_type = torch.Tensor
-    if convert_to_numpy:
+    if as_numpy:
         expected_embeds_type = np.ndarray
 
     # Define the results dictionary with sample data
@@ -306,11 +307,11 @@ def test_build_results_dataframe(return_frame, convert_to_numpy):
     # Test for invalid return_frame value
     if return_frame == "teddies":
         with pytest.raises(ValueError, match="Invalid value for"):
-            _build_results_dataframe(results, return_frame, convert_to_numpy)
+            _EncoderBase._build_results_dataframe(results, return_frame, as_numpy)
     else:
         # Build the results dataframe and check the types
         expected_length = len(results["sample_idx"])
-        df, embeds = _build_results_dataframe(results, return_frame, convert_to_numpy)
+        df, embeds = _EncoderBase._build_results_dataframe(results, return_frame, as_numpy)
         assert isinstance(df, expected_df_type)
         assert isinstance(embeds, expected_embeds_type)
         assert len(df) == len(embeds) == expected_length
@@ -319,7 +320,7 @@ def test_build_results_dataframe(return_frame, convert_to_numpy):
 def test_build_results_dataframe_pandas():
     pd = pytest.importorskip("pandas")
     return_frame = "pandas"
-    convert_to_numpy = True
+    as_numpy = True
 
     expected_df_type = pd.DataFrame
     expected_embeds_type = np.ndarray
@@ -335,7 +336,7 @@ def test_build_results_dataframe_pandas():
     }
 
     expected_length = len(results["sample_idx"])
-    df, embeds = _build_results_dataframe(results, return_frame, convert_to_numpy)
+    df, embeds = _EncoderBase._build_results_dataframe(results, return_frame, as_numpy)
     assert isinstance(df, expected_df_type)
     assert isinstance(embeds, expected_embeds_type)
     assert len(df) == len(embeds) == expected_length

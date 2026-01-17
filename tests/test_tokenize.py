@@ -290,7 +290,7 @@ def test_tokenize_docs_overflowing_tokens(tokenizer):
         "This is a longer example with more text to test the tokenizer's ability to handle overflow.",
         "This is another test with even more words to see how the tokenizer manages longer sequences and overflow tokens.",
     ]
-    result = tokenize_docs(docs, tokenizer, max_length=10, chunk_docs=True, overlap=2)
+    result = tokenize_docs(docs, tokenizer, max_length=10, prechunk=True, prechunk_overlap=2)
     assert "sequence_idx" in result
 
 

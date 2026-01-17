@@ -861,7 +861,7 @@ def tokenize_with_sentence_boundaries(
         add_special_tokens=not prechunk,
         return_attention_mask=False,
         return_offsets_mapping=True,
-        chunk_docs=False,
+        prechunk=False,
         batch_size=batch_size,
         n_jobs=n_jobs,
     )
@@ -955,8 +955,8 @@ def _tokenize_batch_with_sentence_boundaries(
     sample_idx: list[int],
     tokenizer: transformers.PreTrainedTokenizer,
     max_length: int | None = None,
-    chunk_docs: bool = True,
-    doc_overlap: float = 0.5,
+    prechunk: bool = True,
+    prechunk_overlap: float = 0.5,
 ) -> dict:
     """Tokenize a list of documents into input sequences for the model."""
     inputs = tokenize_with_sentence_boundaries(
@@ -964,8 +964,8 @@ def _tokenize_batch_with_sentence_boundaries(
         tokenizer,
         method="blingfire",
         max_length=max_length,
-        chunk_docs=chunk_docs,
-        overlap=doc_overlap,
+        prechunk=prechunk,
+        prechunk_overlap=prechunk_overlap,
     )
     # Globalize overflow_to_sample_mapping
     if "overflow_to_sample_mapping" in inputs:

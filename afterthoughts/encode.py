@@ -37,10 +37,10 @@ from afterthoughts.pca import IncrementalPCA
 from afterthoughts.tokenize import (
     DynamicTokenSampler,
     TokenizedDataset,
+    _get_tokenization_batch_size,
     dynamic_pad_collate,
 )
 from afterthoughts.utils import (
-    _build_results_dataframe,
     move_or_convert_tensors,
     normalize,
     normalize_num_jobs,
@@ -235,6 +235,70 @@ class _EncoderBase(ABC):
         )
         return pl.Series([y for x in segments for y in x])
 
+    @staticmethod
+    def _build_results_dataframe(
+        results: dict,
+        return_frame: str = "polars",
+        as_numpy: bool = True,
+        debug: bool = False,
+    ) -> tuple[pl.DataFrame, np.ndarray | torch.Tensor]:
+        """Consolidate results into a DataFrame and embeddings array.
+
+        Parameters
+        ----------
+        results : dict
+            Dictionary containing 'document_idx', 'sequence_idx', 'batch_idx',
+            'chunk_size', 'chunk', and 'chunk_embeds'.
+        return_frame : str, optional
+            DataFrame type: 'polars' or 'pandas'. Default is 'polars'.
+        as_numpy : bool, optional
+            Convert embeddings to NumPy arrays. Default is True.
+        debug : bool, optional
+            Include debug columns (sequence_idx, batch_idx). Default is False.
+
+        Returns
+        -------
+        tuple
+            (DataFrame of chunk metadata, embeddings array)
+        """
+        df = {}
+        base_keys = [
+            "embed_idx",
+            "sequence_idx",
+            "document_idx",
+            "chunk_idx",
+            "chunk_size",
+        ]
+        if debug:
+            keys = base_keys + ["batch_idx", "chunk"]
+        else:
+            keys = base_keys + ["chunk"]
+        for key in keys:
+            if key in results:
+                df[key] = results[key]
+        df = move_or_convert_tensors(df, return_tensors="np", move_to_cpu=True)
+        embeds = results["chunk_embeds"]
+        if not isinstance(embeds, torch.Tensor):
+            raise TypeError("Chunk embeddings must be torch.Tensor.")
+        if as_numpy:
+            embeds = embeds.cpu().numpy()
+        else:
+            embeds = embeds.cpu()
+        if return_frame == "polars":
+            df = pl.DataFrame(df)
+        elif return_frame == "pandas":
+            try:
+                import pandas as pd
+            except ImportError:
+                raise ImportError(
+                    "pandas is required for return_frame='pandas'. "
+                    "Install it with: pip install pandas"
+                ) from None
+            df = pd.DataFrame(df)
+        else:
+            raise ValueError(f"Invalid value for return_frame: {return_frame}")
+        return df, embeds
+
     @timer(readout="Finished preprocessing in {time:.4f} seconds.")
     def _tokenize(
         self,
@@ -407,9 +471,8 @@ class _EncoderBase(ABC):
         docs: list[str],
         max_length: int | None = None,
         batch_tokens: int = 16384,
-        token_batch_size: int = 10,
-        num_sents: int | list | tuple = 2,
-        chunk_overlap: int | float | list | dict = 0.5,
+        num_sents: int | list | tuple = 1,
+        chunk_overlap: int | float | list | dict = 0,
         prechunk: bool = True,
         prechunk_overlap: float | int = 0.5,
         return_frame: str = "polars",
@@ -430,7 +493,6 @@ class _EncoderBase(ABC):
         queries: list[str],
         max_length: int | None = None,
         batch_size: int = 32,
-        token_batch_size: int = 10,
         as_numpy: bool = True,
     ) -> np.ndarray:
         """Obtain the mean-tokens embeddings for a list of query strings.
@@ -447,8 +509,6 @@ class _EncoderBase(ABC):
             Maximum length of the query sequences, by default None.
         batch_size : int, optional
             Batch size for encoding, by default 32.
-        token_batch_size : int, optional
-            Batch size for tokenization, by default 10.
         as_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
 
@@ -457,6 +517,7 @@ class _EncoderBase(ABC):
         np.ndarray
             Mean-token embeddings for each query.
         """
+        token_batch_size = _get_tokenization_batch_size(queries)
         num_token_batches = math.ceil(len(queries) / token_batch_size)
         inputs = self._tokenize(
             queries,
@@ -560,9 +621,8 @@ class Encoder(_EncoderBase):
         docs: list[str],
         max_length: int | None = None,
         batch_tokens: int = 16384,
-        token_batch_size: int = 10,
-        num_sents: int | list | tuple = 2,
-        chunk_overlap: int | float | list | dict = 0.5,
+        num_sents: int | list | tuple = 1,
+        chunk_overlap: int | float | list | dict = 0,
         prechunk: bool = True,
         prechunk_overlap: float | int = 0.5,
         return_frame: str = "polars",
@@ -584,14 +644,12 @@ class Encoder(_EncoderBase):
             Maximum length of the input sequences, by default None.
         batch_tokens : int, optional
             Maximum tokens per batch for encoder, by default 16384.
-        token_batch_size : int, optional
-            Batch size for tokenization, by default 10.
         num_sents : int, list, or tuple, optional
-            Number of sentences per segment, by default 2.
+            Number of sentences per segment, by default 1.
             For example, if `num_sents` is set to `(1, 2, 3)`, segments
             of 1, 2, and 3 consecutive sentences will be extracted.
         chunk_overlap : int, float, list, or dict, optional
-            Overlap between segments (in sentences), by default 0.5.
+            Overlap between segments (in sentences), by default 0.
             If a float, it is interpreted as a fraction of the segment size.
             If an integer, it is interpreted as the number of sentences to overlap.
             If a list or tuple, it should contain the overlap for each segment size.
@@ -636,7 +694,7 @@ class Encoder(_EncoderBase):
             max_length=max_length,
             prechunk=prechunk,
             prechunk_overlap=prechunk_overlap,
-            batch_size=token_batch_size,
+            batch_size=_get_tokenization_batch_size(docs),
             show_progress=show_progress,
         )
         loader = DataLoader(
@@ -706,9 +764,9 @@ class Encoder(_EncoderBase):
         else:
             results["document_idx"] = results["sequence_idx"]
         results["embed_idx"] = torch.arange(results["chunk_embeds"].shape[0])
-        pdf, vecs = _build_results_dataframe(
+        pdf, vecs = self._build_results_dataframe(
             results,
-            convert_to_numpy=as_numpy,
+            as_numpy=as_numpy,
             return_frame="polars",
             debug=debug,
         )
@@ -743,10 +801,10 @@ class LiteEncoder(_EncoderBase):
         self,
         model_name: str,
         model_dtype: torch.dtype = torch.float32,
-        amp: bool = False,
+        amp: bool = True,
         amp_dtype: torch.dtype = torch.float16,
         attn_implementation: str | None = None,
-        half_embeds: bool = False,
+        half_embeds: bool = True,
         truncate_dims: int | None = None,
         normalize: bool = False,
         pca: int | None = None,
@@ -763,13 +821,13 @@ class LiteEncoder(_EncoderBase):
         model_dtype : torch.dtype, optional
             Data type for the model, by default torch.float32.
         amp : bool, optional
-            Enable automatic mixed precision, by default False.
+            Enable automatic mixed precision, by default True.
         amp_dtype : torch.dtype, optional
             Data type for automatic mixed precision, by default torch.float16.
         attn_implementation : str | None, optional
             Attention implementation to use, by default None.
         half_embeds : bool, optional
-            Reduce the final embedding precision to float16, by default False.
+            Reduce the final embedding precision to float16, by default True.
         truncate_dims : int, None, optional
             Truncate the dimensions of the embeddings, by default None.
         normalize : bool, optional
@@ -913,9 +971,8 @@ class LiteEncoder(_EncoderBase):
         docs: list[str],
         max_length: int | None = None,
         batch_tokens: int = 16384,
-        token_batch_size: int = 10,
-        num_sents: int | list | tuple = 2,
-        chunk_overlap: int | float | list | dict = 0.5,
+        num_sents: int | list | tuple = 1,
+        chunk_overlap: int | float | list | dict = 0,
         prechunk: bool = True,
         prechunk_overlap: float | int = 0.5,
         return_frame: str = "polars",
@@ -937,12 +994,10 @@ class LiteEncoder(_EncoderBase):
             Maximum length of the input sequences, by default None.
         batch_tokens : int, optional
             Maximum tokens per batch for encoder, by default 16384.
-        token_batch_size : int, optional
-            Batch size for tokenization, by default 10.
         num_sents : int, list, or tuple, optional
-            Number of sentences per segment, by default 2.
+            Number of sentences per segment, by default 1.
         chunk_overlap : int, float, list, or dict, optional
-            Overlap between segments (in sentences), by default 0.5.
+            Overlap between segments (in sentences), by default 0.
         prechunk : bool, optional
             Enable chunking of documents into overlapping sequences, by default True.
         prechunk_overlap : float or int, optional
@@ -983,7 +1038,7 @@ class LiteEncoder(_EncoderBase):
             max_length=max_length,
             prechunk=prechunk,
             prechunk_overlap=prechunk_overlap,
-            batch_size=token_batch_size,
+            batch_size=_get_tokenization_batch_size(docs),
             show_progress=show_progress,
         )
         loader = DataLoader(
@@ -1086,9 +1141,9 @@ class LiteEncoder(_EncoderBase):
         else:
             results["document_idx"] = results["sequence_idx"]
         results["embed_idx"] = torch.arange(results["chunk_embeds"].shape[0])
-        pdf, vecs = _build_results_dataframe(
+        pdf, vecs = self._build_results_dataframe(
             results,
-            convert_to_numpy=as_numpy,
+            as_numpy=as_numpy,
             return_frame="polars",
             debug=debug,
         )
