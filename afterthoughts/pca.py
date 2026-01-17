@@ -176,16 +176,19 @@ class IncrementalPCA:
         whiten: bool = False,
         copy: bool = True,
         batch_size: int | None = None,
-        device: str = "cuda",
+        device: str | torch.device = "cuda",
     ) -> None:
         self.n_components = n_components
         self.whiten = whiten
         self.copy = copy
         self.batch_size = batch_size
-        self.device = device
+        self.device = torch.device(device)
 
-    def to(self, device: str) -> "IncrementalPCA":
-        self.device = device
+    def __repr__(self) -> str:
+        return f"IncrementalPCA(n_components={self.n_components}, device={self.device})"
+
+    def to(self, device: str | torch.device) -> "IncrementalPCA":
+        self.device = torch.device(device)
         fitted_attrs = [
             "n_samples_seen_",
             "components_",
@@ -420,7 +423,7 @@ class IncrementalPCA:
         """
         first_pass = not hasattr(self, "components_")
         if X.device != self.device:
-            print(f"Moving X to device '{self.device}'")
+            logger.debug(f"Moving X to device '{self.device}'")
             X = X.to(self.device)
 
         n_samples, n_features = X.shape
@@ -503,7 +506,7 @@ class IncrementalPCA:
         if self.n_components_ not in (n_samples, n_features):
             self.noise_variance_ = explained_variance[self.n_components_ :].mean()
         else:
-            self.noise_variance_ = 0.0
+            self.noise_variance_ = torch.tensor(0.0, device=self.device)
         return self
 
 

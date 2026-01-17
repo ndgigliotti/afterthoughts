@@ -173,7 +173,7 @@ def test_incremental_pca_to_device():
     ipca = IncrementalPCA(n_components=5, device="cpu")
     ipca.fit(X)
     ipca.to("cuda")
-    assert ipca.device == "cuda"
+    assert ipca.device.type == "cuda"
     assert ipca.components_.device.type == "cuda"
     assert ipca.mean_.device.type == "cuda"
     assert ipca.singular_values_.device.type == "cuda"
