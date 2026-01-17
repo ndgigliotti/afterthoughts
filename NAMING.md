@@ -87,6 +87,26 @@ df, X = model.encode(docs, num_sents=[1, 2, 3])
 | **Chunk** | Group of sentences extracted *after* model forward pass (late chunking) |
 | **Prechunk** | Splitting long docs *before* model to fit context window |
 
+## Internal Naming Consistency
+
+### Public API → Internal Parameter Alignment
+
+Internal function parameters should match public API names:
+
+| Public API | Internal (current) | Internal (target) |
+|------------|-------------------|-------------------|
+| `num_sents` | `chunk_sizes` | `num_sents` |
+| `prechunk` | `chunk_docs` | `prechunk` |
+| `prechunk_overlap` | `overlap` (in tokenize) | `prechunk_overlap` |
+| `chunk_overlap` | `overlap` (in chunk) | `chunk_overlap` |
+
+### Variable/Function Renames
+
+| Current | Target | Location |
+|---------|--------|----------|
+| `sent_boundary_idx` | `sentence_ids` | chunk.py parameter |
+| `segment_*` variables | `chunk_*` | various docstrings |
+
 ## Outstanding Questions
 
 - [x] Main class name → `Encoder`
