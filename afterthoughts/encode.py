@@ -917,10 +917,10 @@ class LiteEncoder(_EncoderBase):
     def pca_is_ready(self) -> bool:
         """Returns True if PCA has seen enough batches to be applied."""
         return (
-            hasattr(self, "pca_transform_")
+            hasattr(self, "pca_transformer_")
             and hasattr(self, "_n_pca_fit_batches")
-            and hasattr(self.pca_transform_, "n_batches_seen_")
-            and self.pca_transform_.n_batches_seen_ >= self._n_pca_fit_batches
+            and hasattr(self.pca_transformer_, "n_batches_seen_")
+            and self.pca_transformer_.n_batches_seen_ >= self._n_pca_fit_batches
         )
 
     def update_pca(self, chunk_embeds: torch.Tensor) -> None:
@@ -931,9 +931,9 @@ class LiteEncoder(_EncoderBase):
         chunk_embeds : torch.Tensor
             Chunk embeddings to update the PCA model with.
         """
-        if not hasattr(self, "pca_transform_"):
-            self.pca_transform_ = IncrementalPCA(n_components=self.pca, device=self.device)
-        self.pca_transform_.partial_fit(chunk_embeds)
+        if not hasattr(self, "pca_transformer_"):
+            self.pca_transformer_ = IncrementalPCA(n_components=self.pca, device=self.device)
+        self.pca_transformer_.partial_fit(chunk_embeds)
 
     def apply_pca(self, chunk_embeds: torch.Tensor) -> torch.Tensor:
         """Apply PCA transformation to embeddings.
@@ -948,17 +948,17 @@ class LiteEncoder(_EncoderBase):
         torch.Tensor
             PCA-transformed embeddings.
         """
-        if not hasattr(self, "pca_transform_"):
+        if not hasattr(self, "pca_transformer_"):
             raise AttributeError("PCA must be fitted first.")
         if not self.pca_is_ready:
             raise RuntimeError("PCA has not seen enough batches to be applied yet.")
         # Ensure PCA is on the same device as input
-        self.pca_transform_.to(chunk_embeds.device)
-        return self.pca_transform_.transform(chunk_embeds)
+        self.pca_transformer_.to(chunk_embeds.device)
+        return self.pca_transformer_.transform(chunk_embeds)
 
     def clear_pca(self) -> None:
         """Clear the fitted PCA transformation."""
-        pca_attrs = ["pca_transform_", "_n_pca_fit_batches"]
+        pca_attrs = ["pca_transformer_", "_n_pca_fit_batches"]
         for attr in pca_attrs:
             if hasattr(self, attr):
                 delattr(self, attr)
@@ -1076,8 +1076,8 @@ class LiteEncoder(_EncoderBase):
         )
         pca_ready_at_start = self.pca_is_ready
         if self.pca_mode:
-            if hasattr(self, "pca_transform_"):
-                self.pca_transform_.to(self.device)
+            if hasattr(self, "pca_transformer_"):
+                self.pca_transformer_.to(self.device)
             if pca_ready_at_start:
                 logger.info("PCA is already fit and will be applied to all batches.")
             else:
