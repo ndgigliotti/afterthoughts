@@ -156,9 +156,10 @@ class _EncoderBase(ABC):
     def compile(self, mode: str = "reduce-overhead", dynamic: bool = True) -> "_EncoderBase":
         """Compile the model using torch.compile for potential speedups.
 
-        Note: Benchmarks show compilation provides minimal benefit for encoder
-        models with dynamic batching. It may help on high-end GPUs or with
-        fixed/bucketed batch sizes. Test on your hardware before relying on it.
+        This is an advanced feature. Compilation benefits vary significantly
+        depending on GPU hardware, batch sizes, and document workloads.
+        Benchmark on your own hardware with representative data before
+        relying on compilation for performance gains.
 
         Parameters
         ----------
