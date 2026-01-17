@@ -751,26 +751,26 @@ class Encoder(_EncoderBase):
         else:
             results["document_idx"] = results["sequence_idx"]
         results["embed_idx"] = torch.arange(results["chunk_embeds"].shape[0])
-        pdf, vecs = self._build_results_df(
+        df, vecs = self._build_results_df(
             results,
             as_numpy=as_numpy,
             return_frame="polars",
             debug=debug,
         )
         if inputs.sort_by_token_count:
-            pdf = pdf.sort("sequence_idx", "chunk_idx", descending=False)
-            vecs = vecs[pdf["embed_idx"]]
+            df = df.sort("sequence_idx", "chunk_idx", descending=False)
+            vecs = vecs[df["embed_idx"]]
         # Handle internal columns
         if debug:
-            pdf = pdf.rename({"embed_idx": "orig_embed_idx"})
+            df = df.rename({"embed_idx": "orig_embed_idx"})
         else:
-            pdf = pdf.drop(["embed_idx", "sequence_idx"])
+            df = df.drop(["embed_idx", "sequence_idx"])
         # Convert to requested DataFrame format
         if return_frame == "pandas":
-            pdf = pdf.to_pandas()
+            df = df.to_pandas()
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
-        return pdf, vecs
+        return df, vecs
 
 
 class LiteEncoder(_EncoderBase):
@@ -1164,28 +1164,28 @@ class LiteEncoder(_EncoderBase):
         else:
             results["document_idx"] = results["sequence_idx"]
         results["embed_idx"] = torch.arange(results["chunk_embeds"].shape[0])
-        pdf, vecs = self._build_results_df(
+        df, vecs = self._build_results_df(
             results,
             as_numpy=as_numpy,
             return_frame="polars",
             debug=debug,
         )
         if inputs.sort_by_token_count:
-            pdf = pdf.sort("sequence_idx", "chunk_idx", descending=False)
-            vecs = vecs[pdf["embed_idx"]]
+            df = df.sort("sequence_idx", "chunk_idx", descending=False)
+            vecs = vecs[df["embed_idx"]]
         # Handle internal columns
         if debug:
             # Rename embed_idx to orig_embed_idx for clarity
-            pdf = pdf.rename({"embed_idx": "orig_embed_idx"})
+            df = df.rename({"embed_idx": "orig_embed_idx"})
         else:
             # Drop internal columns in non-debug mode
-            pdf = pdf.drop(["embed_idx", "sequence_idx"])
+            df = df.drop(["embed_idx", "sequence_idx"])
         # Convert to requested DataFrame format
         if return_frame == "pandas":
-            pdf = pdf.to_pandas()
+            df = df.to_pandas()
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
-        return pdf, vecs
+        return df, vecs
 
     def _postprocess_query_embeds(self, mean_tokens: torch.Tensor) -> torch.Tensor:
         """Apply postprocessing (including PCA if enabled) to query embeddings."""
