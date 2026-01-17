@@ -4,7 +4,7 @@
 
 set -e
 
-OUTDIR="References"
+OUTDIR="references"
 mkdir -p "$OUTDIR"
 
 echo "Fetching research papers..."
