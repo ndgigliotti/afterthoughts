@@ -22,7 +22,6 @@ dependencies = [
     "joblib",
     "numpy",
     "polars",
-    "pyarrow",
     "torch",
     "tqdm",
     "transformers",

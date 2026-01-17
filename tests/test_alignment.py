@@ -91,7 +91,7 @@ class TestEmbeddingAlignment:
             model,
             query="machine learning artificial intelligence",
             embeddings=X,
-            doc_indices=df["document_idx"].tolist(),
+            doc_indices=df["document_idx"].to_list(),
             target_doc=0,
         )
 
@@ -119,7 +119,7 @@ class TestEmbeddingAlignment:
             model,
             query="python programming language",
             embeddings=X,
-            doc_indices=df["document_idx"].tolist(),
+            doc_indices=df["document_idx"].to_list(),
             target_doc=1,
         )
 
@@ -143,7 +143,7 @@ class TestEmbeddingAlignment:
         ]
 
         df, X = model.encode(docs, num_sents=[1, 2], chunk_overlap=0)
-        doc_indices = df["document_idx"].tolist()
+        doc_indices = df["document_idx"].to_list()
 
         # Test each document with a relevant query
         test_cases = [
@@ -181,7 +181,7 @@ class TestEmbeddingAlignment:
             model,
             query="machine learning",
             embeddings=X,
-            doc_indices=df["document_idx"].tolist(),
+            doc_indices=df["document_idx"].to_list(),
             target_doc=0,
         )
 
@@ -202,7 +202,7 @@ class TestEmbeddingAlignment:
             model,
             query="machine learning AI models",
             embeddings=X,
-            doc_indices=df["document_idx"].tolist(),
+            doc_indices=df["document_idx"].to_list(),
             target_doc=0,
         )
 
@@ -223,7 +223,7 @@ class TestEmbeddingAlignment:
             model,
             query="machine learning",
             embeddings=X,
-            doc_indices=df["document_idx"].tolist(),
+            doc_indices=df["document_idx"].to_list(),
             target_doc=0,
         )
 
@@ -280,7 +280,7 @@ class TestEmbeddingAlignment:
             model,
             query="python programming language libraries",
             embeddings=X,
-            doc_indices=df["document_idx"].tolist(),
+            doc_indices=df["document_idx"].to_list(),
             target_doc=1,
         )
 
@@ -354,7 +354,7 @@ class TestAlignmentWithChunking:
             model,
             query="machine learning neural networks deep learning",
             embeddings=X,
-            doc_indices=df["document_idx"].tolist(),
+            doc_indices=df["document_idx"].to_list(),
             target_doc=0,
         )
 
@@ -395,7 +395,7 @@ class TestAlignmentWithChunking:
             model,
             query="machine learning AI data science",
             embeddings=X,
-            doc_indices=df["document_idx"].tolist(),
+            doc_indices=df["document_idx"].to_list(),
             target_doc=0,
         )
 
@@ -493,7 +493,7 @@ class TestAlignmentEdgeCases:
 
         # Chunks should be identical
         assert (
-            df_normal["chunk"].tolist() == df_debug["chunk"].tolist()
+            df_normal["chunk"].to_list() == df_debug["chunk"].to_list()
         ), "Debug mode should not affect chunk order"
 
 
@@ -874,12 +874,12 @@ class TestMultiBatchAlignment:
 
         # Same chunks in same order
         assert (
-            df_large["chunk"].tolist() == df_small["chunk"].tolist()
+            df_large["chunk"].to_list() == df_small["chunk"].to_list()
         ), "Chunks should be identical regardless of batch size"
 
         # Same document assignments
         assert (
-            df_large["document_idx"].tolist() == df_small["document_idx"].tolist()
+            df_large["document_idx"].to_list() == df_small["document_idx"].to_list()
         ), "Document assignments should be identical regardless of batch size"
 
         # Embeddings should be nearly identical (within numerical precision)

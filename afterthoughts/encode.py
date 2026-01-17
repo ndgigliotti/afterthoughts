@@ -22,7 +22,7 @@ from abc import ABC, abstractmethod
 from functools import partial
 
 import numpy as np
-import pyarrow as pa
+import polars as pl
 import torch
 from joblib import Parallel, delayed
 from torch.utils.data import DataLoader
@@ -195,7 +195,7 @@ class _EncoderBase(ABC):
             embeds = normalize(embeds, dim=dim)
         return embeds
 
-    def _decode_segments(self, segment_token_ids: list[torch.Tensor]) -> pa.Array:
+    def _decode_segments(self, segment_token_ids: list[torch.Tensor]) -> pl.Series:
         """Decode the segment token IDs into human-readable segments.
 
         Parameters
@@ -205,8 +205,8 @@ class _EncoderBase(ABC):
 
         Returns
         -------
-        pa.Array
-            PyArrow array containing the decoded segments.
+        pl.Series
+            Polars Series containing the decoded segments.
         """
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
         _decode = delayed(
@@ -219,7 +219,7 @@ class _EncoderBase(ABC):
         segments = Parallel(n_jobs=self.__num_token_jobs, prefer="processes")(
             _decode(ids) for ids in tqdm(segment_token_ids, desc="Detokenizing")
         )
-        return pa.array([y for x in segments for y in x])
+        return pl.Series([y for x in segments for y in x])
 
     @timer(readout="Finished preprocessing in {time:.4f} seconds.")
     def _tokenize(
@@ -579,7 +579,7 @@ class Encoder(_EncoderBase):
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
         return_frame : str, optional
             The type of DataFrame of segments and indices to return, by default 'polars'.
-            Options are 'pandas', 'polars', or 'arrow'.
+            Options are 'pandas' or 'polars'.
         as_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
         debug : bool, optional
@@ -588,7 +588,7 @@ class Encoder(_EncoderBase):
 
         Returns
         -------
-        tuple[pd.DataFrame | pl.DataFrame | pa.Table, np.ndarray | torch.Tensor]
+        tuple[pd.DataFrame | pl.DataFrame, np.ndarray | torch.Tensor]
             Tuple containing the DataFrame of segments and the segment embeddings.
         """
         # Validate return_frame early to fail fast before expensive computation
@@ -600,7 +600,7 @@ class Encoder(_EncoderBase):
                     "pandas is required for return_frame='pandas'. "
                     "Install it with: pip install pandas"
                 ) from None
-        elif return_frame not in ("polars", "arrow"):
+        elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
 
         inputs = self._tokenize(
@@ -690,8 +690,6 @@ class Encoder(_EncoderBase):
         # Convert to requested DataFrame format
         if return_frame == "pandas":
             pdf = pdf.to_pandas()
-        elif return_frame == "arrow":
-            pdf = pdf.to_arrow()
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
         return pdf, vecs
@@ -920,7 +918,7 @@ class LiteEncoder(_EncoderBase):
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
         return_frame : str, optional
             The type of DataFrame of segments and indices to return, by default 'polars'.
-            Options are 'pandas', 'polars', or 'arrow'.
+            Options are 'pandas' or 'polars'.
         as_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
         debug : bool, optional
@@ -929,7 +927,7 @@ class LiteEncoder(_EncoderBase):
 
         Returns
         -------
-        tuple[pd.DataFrame | pl.DataFrame | pa.Table, np.ndarray | torch.Tensor]
+        tuple[pd.DataFrame | pl.DataFrame, np.ndarray | torch.Tensor]
             Tuple containing the DataFrame of segments and the segment embeddings.
         """
         # Validate return_frame early to fail fast before expensive computation
@@ -941,7 +939,7 @@ class LiteEncoder(_EncoderBase):
                     "pandas is required for return_frame='pandas'. "
                     "Install it with: pip install pandas"
                 ) from None
-        elif return_frame not in ("polars", "arrow"):
+        elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
 
         inputs = self._tokenize(
@@ -1066,8 +1064,6 @@ class LiteEncoder(_EncoderBase):
         # Convert to requested DataFrame format
         if return_frame == "pandas":
             pdf = pdf.to_pandas()
-        elif return_frame == "arrow":
-            pdf = pdf.to_arrow()
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
         return pdf, vecs

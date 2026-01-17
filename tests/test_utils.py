@@ -3,7 +3,6 @@ import time
 
 import numpy as np
 import polars as pl
-import pyarrow as pa
 import pytest
 import torch
 
@@ -32,15 +31,11 @@ def test_timer_decorator():
 
 def test_get_memory_size():
     # Test with supported types
-    pa_array = pa.array([1, 2, 3])
     np_array = np.array([1, 2, 3])
     torch_tensor = torch.tensor([1, 2, 3])
     pl_series = pl.Series("a", [1, 2, 3])
     pl_dataframe = pl.DataFrame({"a": [1, 2, 3]})
 
-    assert get_memory_size(pa_array) == sum(
-        buf.size for buf in pa_array.buffers() if buf is not None
-    )
     assert get_memory_size(np_array) == np_array.nbytes
     assert get_memory_size(torch_tensor) == torch_tensor.element_size() * torch_tensor.numel()
     assert get_memory_size(pl_series) == pl_series.estimated_size()
@@ -63,14 +58,12 @@ def test_format_memory_size():
 
 def test_get_memory_report():
     results = {
-        "pa_array": pa.array([1, 2, 3]),
         "np_array": np.array([1, 2, 3]),
         "torch_tensor": torch.tensor([1, 2, 3]),
         "pl_series": pl.Series("a", [1, 2, 3]),
         "pl_dataframe": pl.DataFrame({"a": [1, 2, 3]}),
     }
     report = get_memory_report(results)
-    assert "pa_array" in report
     assert "np_array" in report
     assert "torch_tensor" in report
     assert "pl_series" in report

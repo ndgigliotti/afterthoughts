@@ -1,6 +1,5 @@
 import numpy as np
 import polars as pl
-import pyarrow as pa
 import pytest
 import torch
 
@@ -283,7 +282,6 @@ def test_encoder_normalize_if_needed():
     "return_frame, convert_to_numpy",
     [
         ("polars", True),
-        ("arrow", True),
         ("polars", False),
         ("teddies", True),
     ],
@@ -292,8 +290,6 @@ def test_build_results_dataframe(return_frame, convert_to_numpy):
     # Determine the expected dataframe type based on the return_frame parameter
     if return_frame == "polars":
         expected_df_type = pl.DataFrame
-    elif return_frame == "arrow":
-        expected_df_type = pa.Table
 
     # Determine the expected embeddings type based on the convert_to_numpy parameter
     expected_embeds_type = torch.Tensor

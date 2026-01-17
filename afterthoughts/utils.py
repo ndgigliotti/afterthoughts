@@ -24,7 +24,6 @@ from operator import itemgetter
 
 import numpy as np
 import polars as pl
-import pyarrow as pa
 import torch
 import torch.nn.functional as F
 
@@ -188,13 +187,13 @@ def timer(readout: str = "Execution time: {time:.4f} seconds") -> Callable:
 
 
 def get_memory_size(
-    a: pa.Array | torch.Tensor | np.ndarray | pl.Series | pl.DataFrame,
+    a: torch.Tensor | np.ndarray | pl.Series | pl.DataFrame,
 ) -> int:
     """Get the size of the array in bytes.
 
     Parameters
     ----------
-    a : pa.Array, torch.Tensor, np.ndarray, pl.Series, pl.DataFrame, pd.Series, pd.DataFrame
+    a : torch.Tensor, np.ndarray, pl.Series, pl.DataFrame, pd.Series, pd.DataFrame
         Array.
 
     Returns
@@ -207,9 +206,7 @@ def get_memory_size(
     TypeError
         If the input is not a supported type.
     """
-    if isinstance(a, pa.Array):
-        return sum(buf.size for buf in a.buffers() if buf is not None)
-    elif isinstance(a, np.ndarray):
+    if isinstance(a, np.ndarray):
         return a.nbytes
     elif isinstance(a, torch.Tensor):
         return a.element_size() * a.numel()
@@ -250,14 +247,14 @@ def format_memory_size(n_bytes: int) -> str:
 
 
 def get_memory_report(
-    data: dict[str, pa.Array | torch.Tensor | np.ndarray | pl.Series | pl.DataFrame],
+    data: dict[str, torch.Tensor | np.ndarray | pl.Series | pl.DataFrame],
     readable: bool = True,
 ) -> dict[str, str]:
     """Get the size of the arrays in data.
 
     Parameters
     ----------
-    data : dict[str, pa.Array or torch.Tensor or np.ndarray or pl.Series or pl.DataFrame or pd.Series or pd.DataFrame]
+    data : dict[str, torch.Tensor or np.ndarray or pl.Series or pl.DataFrame or pd.Series or pd.DataFrame]
         Dictionary of arrays.
     readable : bool
         Whether to format the sizes in human-readable format, by default True.
@@ -273,7 +270,6 @@ def get_memory_report(
     report = {}
     for name, arr in data.items():
         valid_types: tuple[type, ...] = (
-            pa.Array,
             torch.Tensor,
             np.ndarray,
             pl.Series,
@@ -518,7 +514,7 @@ def _build_results_dataframe(
     return_frame: str = "polars",
     convert_to_numpy: bool = True,
     debug: bool = False,
-) -> tuple[pl.DataFrame | pa.Table, np.ndarray | torch.Tensor]:
+) -> tuple[pl.DataFrame, np.ndarray | torch.Tensor]:
     """
     Consolidates the results by combining the segment indices and segments into a DataFrame
     and returning it alongside the embeddings.
@@ -529,7 +525,7 @@ def _build_results_dataframe(
         A dictionary containing the results with keys such as 'document_idx',
         'sequence_idx', 'batch_idx', 'segment_size', 'segment', and 'segment_embeds'.
     return_frame : str, optional
-        The type of DataFrame to return. Options are 'polars', 'pandas', or 'arrow'.
+        The type of DataFrame to return. Options are 'polars' or 'pandas'.
         Defaults to 'polars'.
     convert_to_numpy : bool, optional
         Whether to convert the embeddings to NumPy arrays. Defaults to True.
@@ -590,8 +586,6 @@ def _build_results_dataframe(
                 "pandas is required for return_frame='pandas'. Install it with: pip install pandas"
             ) from None
         df = pd.DataFrame(df)
-    elif return_frame == "arrow":
-        df = pa.Table.from_pydict(df)
     else:
         raise ValueError(f"Invalid value for return_frame: {return_frame}")
     return df, embeds
