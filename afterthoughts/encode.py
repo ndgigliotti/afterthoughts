@@ -272,8 +272,8 @@ class _EncoderBase(ABC):
             docs,
             self.tokenizer,
             max_length=max_length,
-            chunk_docs=prechunk,
-            overlap=prechunk_overlap,
+            prechunk=prechunk,
+            prechunk_overlap=prechunk_overlap,
             batch_size=batch_size,
             n_jobs=num_jobs,
             return_tokenized_dataset=True,
@@ -363,8 +363,8 @@ class _EncoderBase(ABC):
                 sentence_ids=batch["sentence_ids"],
                 sequence_idx=batch["sequence_idx"].to(self.device),
                 tokenizer=self.tokenizer,
-                chunk_sizes=num_sents,
-                overlap=chunk_overlap,
+                num_sents=num_sents,
+                chunk_overlap=chunk_overlap,
             )
             results["batch_idx"] = torch.full(results["sequence_idx"].shape, batch["batch_idx"][0])
             yield move_or_convert_tensors(

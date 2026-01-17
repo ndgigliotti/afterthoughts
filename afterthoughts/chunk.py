@@ -439,12 +439,12 @@ def check_tensors(tensors: dict[str, torch.Tensor], tokenizer) -> dict[str, torc
 def get_chunk_idx(
     input_ids: torch.Tensor,
     sentence_ids: torch.Tensor,
-    chunk_sizes: list | tuple | int,
-    overlap: int | float | list | dict = 0.5,
+    num_sents: list | tuple | int,
+    chunk_overlap: int | float | list | dict = 0.5,
     sequence_idx: torch.Tensor | None = None,
     pad_token_id: int = 0,
 ) -> dict:
-    """Get segment indices while preserving sentence structure.
+    """Get chunk indices while preserving sentence structure.
 
     Parameters
     ----------
@@ -452,26 +452,26 @@ def get_chunk_idx(
         Tensor containing input token IDs.
     sentence_ids : torch.Tensor
         Tensor containing sentence IDs, padded with -1.
-    chunk_sizes : list, tuple, or int
-        Sizes of the segments to extract (in number of sentences).
-    overlap : int, float, list, or dict, optional
-        Overlap between segments (number or fraction of sentences).
+    num_sents : list, tuple, or int
+        Number of sentences per chunk.
+    chunk_overlap : int, float, list, or dict, optional
+        Overlap between chunks (number or fraction of sentences).
         Default is 0.5.
     sequence_idx : torch.Tensor or None, optional
         Tensor containing sequence indices. If None, a default sequence index is generated.
         Default is None.
     pad_token_id : int, optional
-        Token ID used for padding segment token IDs. Default is 0.
+        Token ID used for padding chunk token IDs. Default is 0.
 
     Returns
     -------
     dict
         Dictionary containing the following keys:
-        - "chunk_token_idx": 0-padded matrix of token indices within segments.
-        - "chunk_token_ids": Padded matrix of segment token IDs.
+        - "chunk_token_idx": 0-padded matrix of token indices within chunks.
+        - "chunk_token_ids": Padded matrix of chunk token IDs.
         - "sentence_ids": Padded matrix of sentence IDs.
-        - "attention_mask": Attention mask for the segment indices.
-        - "chunk_size": Sizes of the segments (in sentences).
+        - "attention_mask": Attention mask for the chunk indices.
+        - "chunk_size": Number of sentences in each chunk.
         - "sequence_idx": Sequence indices.
 
     Raises
@@ -482,9 +482,9 @@ def get_chunk_idx(
 
     Notes
     -----
-    This function processes each sentence boundary index and extracts segments of specified sizes,
-    ensuring that the sentence structure is preserved. The overlap between segments can be controlled
-    using the `overlap` parameter.
+    This function processes each sentence boundary index and extracts chunks of specified sizes,
+    ensuring that the sentence structure is preserved. The overlap between chunks can be controlled
+    using the `chunk_overlap` parameter.
     """
     if sequence_idx is None:
         sequence_idx = torch.arange(input_ids.size(0), device=input_ids.device)
@@ -509,35 +509,33 @@ def get_chunk_idx(
         "sequence_idx": [],
         "chunk_idx": [],
     }
-    if isinstance(chunk_sizes, int):
-        chunk_sizes = [chunk_sizes]
-    # Process sequences first, then segment sizes within each sequence
-    # segment_idx resets for each sequence (per-document indexing)
+    if isinstance(num_sents, int):
+        num_sents = [num_sents]
+    # Process sequences first, then chunk sizes within each sequence
+    # chunk_idx resets for each sequence (per-document indexing)
     for seq_input_ids, seq_sentence_ids, seq_idx in zip(
         input_ids, sentence_ids, sequence_idx, strict=False
     ):
         unique_sent_ids = torch.unique(seq_sentence_ids[seq_sentence_ids != -1])
-        segment_counter = 0  # Reset for each sequence
-        for i, size in enumerate(chunk_sizes):
-            overlap_sents = get_overlap_count(overlap, size, i)
+        chunk_counter = 0  # Reset for each sequence
+        for i, size in enumerate(num_sents):
+            overlap_sents = get_overlap_count(chunk_overlap, size, i)
             step = size - overlap_sents
             eff_size = min(size, len(unique_sent_ids))
-            segment_sent_ids = unique_sent_ids.unfold(0, eff_size, step)
-            segment_masks = [torch.isin(seq_sentence_ids, segment) for segment in segment_sent_ids]
-            segment_token_ids = [seq_input_ids[mask] for mask in segment_masks]
-            segment_token_idx = [
-                torch.nonzero(mask, as_tuple=False).squeeze() for mask in segment_masks
+            chunk_sent_ids = unique_sent_ids.unfold(0, eff_size, step)
+            chunk_masks = [torch.isin(seq_sentence_ids, chunk) for chunk in chunk_sent_ids]
+            chunk_token_ids = [seq_input_ids[mask] for mask in chunk_masks]
+            chunk_token_idx = [
+                torch.nonzero(mask, as_tuple=False).squeeze() for mask in chunk_masks
             ]
-            num_segments = len(segment_token_ids)
-            results["chunk_token_ids"].extend(segment_token_ids)
-            results["sentence_ids"].extend([seq_sentence_ids[mask] for mask in segment_masks])
-            results["chunk_token_idx"].extend(segment_token_idx)
-            results["chunk_size"].append(torch.full((num_segments,), size))
-            results["sequence_idx"].append(seq_idx.repeat_interleave(num_segments))
-            results["chunk_idx"].append(
-                torch.arange(segment_counter, segment_counter + num_segments)
-            )
-            segment_counter += num_segments
+            n_chunks = len(chunk_token_ids)
+            results["chunk_token_ids"].extend(chunk_token_ids)
+            results["sentence_ids"].extend([seq_sentence_ids[mask] for mask in chunk_masks])
+            results["chunk_token_idx"].extend(chunk_token_idx)
+            results["chunk_size"].append(torch.full((n_chunks,), size))
+            results["sequence_idx"].append(seq_idx.repeat_interleave(n_chunks))
+            results["chunk_idx"].append(torch.arange(chunk_counter, chunk_counter + n_chunks))
+            chunk_counter += n_chunks
     results["chunk_size"] = torch.cat(results["chunk_size"])
     results["sequence_idx"] = torch.cat(results["sequence_idx"])
     results["chunk_idx"] = torch.cat(results["chunk_idx"])
@@ -569,14 +567,14 @@ def get_chunk_idx(
 def _compute_chunk_embeds_slow(
     input_ids: torch.Tensor,
     token_embeds: torch.Tensor,
-    sent_boundary_idx: list[torch.Tensor] | torch.Tensor,
+    sentence_ids: list[torch.Tensor] | torch.Tensor,
     sequence_idx: torch.Tensor,
     tokenizer,
-    chunk_sizes: int | list | tuple = 2,
-    overlap: int | float | list | dict = 0.5,
+    num_sents: int | list | tuple = 2,
+    chunk_overlap: int | float | list | dict = 0.5,
 ) -> dict[str, torch.Tensor]:
     """
-    Compute segment embeddings (slow version).
+    Compute chunk embeddings (slow version).
 
     Parameters
     ----------
@@ -584,33 +582,31 @@ def _compute_chunk_embeds_slow(
         Tensor containing input token IDs.
     token_embeds : torch.Tensor
         Tensor containing token embeddings.
-    sent_boundary_idx : list[torch.Tensor] or torch.Tensor
-        List of tensors indicating sentence boundary indices.
-        Alternatively, a padded tensor of shape [batch, max_num_sentences, 2]
-        can be provided, with the pad value being -1.
+    sentence_ids : list[torch.Tensor] or torch.Tensor
+        Tensor containing sentence IDs, padded with -1.
     sequence_idx : torch.Tensor
         Tensor containing sequence indices.
     tokenizer : object
         Tokenizer object used to identify special tokens.
-    chunk_sizes : int or list or tuple, optional
-        Size(s) of the segments to be considered (in sentences). Default is 2.
-    overlap : int or float or list or dict, optional
-        Overlap between segments. Default is 0.5.
+    num_sents : int or list or tuple, optional
+        Number of sentences per chunk. Default is 2.
+    chunk_overlap : int or float or list or dict, optional
+        Overlap between chunks. Default is 0.5.
 
     Returns
     -------
     dict[str, torch.Tensor]
         Dictionary containing the following keys:
         - "sequence_idx": Tensor of sequence indices.
-        - "chunk_token_ids": Tensor of segment token IDs.
-        - "chunk_size": Tensor of segment sizes.
-        - "chunk_embeds": Tensor of segment embeddings.
+        - "chunk_token_ids": Tensor of chunk token IDs.
+        - "chunk_size": Tensor of chunk sizes.
+        - "chunk_embeds": Tensor of chunk embeddings.
     """
     chunk_data = get_chunk_idx(
         input_ids,
-        sent_boundary_idx,
-        chunk_sizes=chunk_sizes,
-        overlap=overlap,
+        sentence_ids,
+        num_sents=num_sents,
+        chunk_overlap=chunk_overlap,
         sequence_idx=sequence_idx,
     )
     # Mask all special tokens
@@ -650,11 +646,11 @@ def _compute_chunk_embeds(
     sentence_ids: torch.Tensor,
     sequence_idx: torch.Tensor,
     tokenizer,
-    chunk_sizes: int | list | tuple = 2,
-    overlap: int | float | list | dict = 0.5,
+    num_sents: int | list | tuple = 2,
+    chunk_overlap: int | float | list | dict = 0.5,
 ) -> dict[str, torch.Tensor]:
     """
-    Compute embeddings for segments (sentence groups) using token embeddings.
+    Compute embeddings for chunks (sentence groups) using token embeddings.
 
     Parameters
     ----------
@@ -668,26 +664,26 @@ def _compute_chunk_embeds(
         Tensor containing sequence indices.
     tokenizer : PreTrainedTokenizer
         Tokenizer used to process the input text.
-    chunk_sizes : int or list or tuple, optional
-        Number of sentences per segment, by default 2.
-    overlap : int or float or list or dict, optional
-        Overlap between segments (number or fraction of sentences),
+    num_sents : int or list or tuple, optional
+        Number of sentences per chunk, by default 2.
+    chunk_overlap : int or float or list or dict, optional
+        Overlap between chunks (number or fraction of sentences),
         by default 0.5.
     Returns
     -------
     dict[str, torch.Tensor]
         Dictionary containing the following keys:
-        - "sequence_idx": Tensor of sequence indices for each segment.
-        - "chunk_token_ids": Tensor of segment token IDs.
-        - "chunk_size": Tensor of segment sizes.
-        - "chunk_embeds": Tensor of computed segment embeddings.
+        - "sequence_idx": Tensor of sequence indices for each chunk.
+        - "chunk_token_ids": Tensor of chunk token IDs.
+        - "chunk_size": Tensor of chunk sizes.
+        - "chunk_embeds": Tensor of computed chunk embeddings.
     """
-    # Get the segment grouping information
+    # Get the chunk grouping information
     chunk_data = get_chunk_idx(
         input_ids,
         sentence_ids,
-        chunk_sizes=chunk_sizes,
-        overlap=overlap,
+        num_sents=num_sents,
+        chunk_overlap=chunk_overlap,
         sequence_idx=sequence_idx,
         pad_token_id=tokenizer.pad_token_id,
     )
@@ -800,8 +796,8 @@ def tokenize_with_sentence_boundaries(
     tokenizer: transformers.PreTrainedTokenizer,
     method: str = "blingfire",
     max_length: int = 512,
-    chunk_docs: bool = True,
-    overlap: float = 0.5,
+    prechunk: bool = True,
+    prechunk_overlap: float = 0.5,
     return_tokenized_dataset: bool = False,
     batch_size: int = 10,
     n_jobs: int | None = None,
@@ -822,10 +818,10 @@ def tokenize_with_sentence_boundaries(
         The method used for sentence boundary detection, by default "blingfire".
     max_length : int, optional
         The maximum length of each chunk, by default 512.
-    chunk_docs : bool, optional
-        Whether to chunk the documents into smaller pieces, by default True.
-    overlap : float, optional
-        The amount of overlap between adjacent chunks, by default 0.5.
+    prechunk : bool, optional
+        Whether to split documents exceeding max_length before model, by default True.
+    prechunk_overlap : float, optional
+        The fraction of overlap between prechunked sequences, by default 0.5.
         Must be in the range [0, 1).
     return_tokenized_dataset : bool, optional
         Whether to return a TokenizedDataset instead of a dictionary, by default False.
@@ -848,9 +844,8 @@ def tokenize_with_sentence_boundaries(
             A tensor containing the attention masks.
         *   `overflow_to_sample_mapping`: torch.Tensor
             A tensor mapping overflowing tokens to their original sample index.
-        *   `sent_boundary_idx`: list of torch.Tensor
-            A list of tensors, where each tensor contains the start and end
-            indices of sentences within the chunks.
+        *   `sentence_ids`: list of torch.Tensor
+            A list of tensors containing sentence IDs for each token.
     """
     # Tokenize the documents using the provided tokenizer.
     # We disable truncation and padding at this stage to retain full document context.
@@ -858,9 +853,9 @@ def tokenize_with_sentence_boundaries(
     inputs = tokenize_docs(
         docs,
         tokenizer,
-        max_length=max_length if not chunk_docs else torch.inf,
-        truncation=not chunk_docs,
-        add_special_tokens=not chunk_docs,
+        max_length=max_length if not prechunk else torch.inf,
+        truncation=not prechunk,
+        add_special_tokens=not prechunk,
         return_attention_mask=False,
         return_offsets_mapping=True,
         chunk_docs=False,
@@ -916,8 +911,8 @@ def tokenize_with_sentence_boundaries(
             )
         sentence_ids = _as_sentence_ids(sent_boundary_idx)
 
-        # Chunk the input IDs while preserving sentence structure.
-        if chunk_docs:
+        # Split long docs before model if needed.
+        if prechunk:
             chunked_inputs = chunk_preserving_sentence_structure(
                 input_ids,
                 sentence_ids,
@@ -925,7 +920,7 @@ def tokenize_with_sentence_boundaries(
                 sample_idx=i,
                 max_length=max_length,
                 padding=None,
-                overlap=overlap,
+                overlap=prechunk_overlap,
                 add_special_tokens=True,
                 reset_sentence_ids_on_overflow=False,
             )
