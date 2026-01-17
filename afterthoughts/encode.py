@@ -985,6 +985,58 @@ class LiteEncoder(_EncoderBase):
             if batch_embeds.size(1) != self.pca:
                 results["chunk_embeds"][i] = self.postprocess(batch_embeds)
 
+    def _new_results_dict(self) -> dict:
+        """Create a new results dictionary for batch accumulation."""
+        return {
+            "batch_idx": [],
+            "sequence_idx": [],
+            "chunk_idx": [],
+            "chunk_token_ids": [],
+            "chunk_size": [],
+            "chunk_embeds": [],
+        }
+
+    def _accumulate_batch(self, results: dict, batch: dict) -> None:
+        """Accumulate a processed batch into the results dictionary."""
+        batch = move_or_convert_tensors(batch, return_tensors="pt", move_to_cpu=True)
+        results["batch_idx"].append(batch["batch_idx"])
+        results["sequence_idx"].append(batch["sequence_idx"])
+        results["chunk_idx"].append(batch["chunk_idx"])
+        if isinstance(batch["chunk_token_ids"], list):
+            results["chunk_token_ids"].extend(batch["chunk_token_ids"])
+        else:
+            results["chunk_token_ids"].append(batch["chunk_token_ids"])
+        results["chunk_size"].append(batch["chunk_size"])
+        results["chunk_embeds"].append(batch["chunk_embeds"])
+
+    def _process_batches_simple(self, batches) -> dict:
+        """Process batches with immediate postprocessing (non-PCA or PCA-ready mode)."""
+        results = self._new_results_dict()
+        for batch in batches:
+            batch["chunk_embeds"] = self.postprocess(batch["chunk_embeds"])
+            self._accumulate_batch(results, batch)
+        return results
+
+    def _process_batches_pca_fitting(self, batches, n_fit_batches: int) -> dict:
+        """Process batches while fitting PCA on early batches.
+
+        Early batches are used to fit PCA, then PCA is applied to later batches.
+        After the loop, early batches are retroactively postprocessed.
+        """
+        self._n_pca_fit_batches = n_fit_batches
+        results = self._new_results_dict()
+        for batch in batches:
+            if not self.pca_is_ready:
+                # Fitting PCA - don't postprocess yet
+                self.update_pca(batch["chunk_embeds"])
+            else:
+                # PCA is ready - postprocess (includes PCA)
+                batch["chunk_embeds"] = self.postprocess(batch["chunk_embeds"])
+            self._accumulate_batch(results, batch)
+        # Retroactively postprocess early batches
+        self._postprocess_early_batches(results)
+        return results
+
     def encode(
         self,
         docs: list[str],
@@ -1074,48 +1126,19 @@ class LiteEncoder(_EncoderBase):
             truncate_dim=self.truncate_dims,
             show_progress=show_progress,
         )
-        pca_ready_at_start = self.pca_is_ready
-        if self.pca_mode:
-            if hasattr(self, "pca_transformer_"):
-                self.pca_transformer_.to(self.device)
-            if pca_ready_at_start:
+        # Process batches based on PCA mode
+        if self.pca_mode and not self.pca_is_ready:
+            # PCA needs fitting - use fitting mode
+            if isinstance(self.pca_early_stop, float):
+                n_fit_batches = math.ceil(len(loader) * self.pca_early_stop)
+            else:
+                n_fit_batches = self.pca_early_stop
+            results = self._process_batches_pca_fitting(batches, n_fit_batches)
+        else:
+            # No PCA or PCA already ready - use simple mode
+            if self.pca_mode:
                 logger.info("PCA is already fit and will be applied to all batches.")
-            else:
-                if isinstance(self.pca_early_stop, float):
-                    self._n_pca_fit_batches = math.ceil(len(loader) * self.pca_early_stop)
-                else:
-                    self._n_pca_fit_batches = self.pca_early_stop
-
-        results = {
-            "batch_idx": [],
-            "sequence_idx": [],
-            "chunk_idx": [],
-            "chunk_token_ids": [],
-            "chunk_size": [],
-            "chunk_embeds": [],
-        }
-        for batch in batches:
-            if self.pca_mode and not self.pca_is_ready:
-                # Fitting PCA - don't postprocess yet
-                self.update_pca(batch["chunk_embeds"])
-            else:
-                # Postprocess (includes PCA if enabled and ready)
-                batch["chunk_embeds"] = self.postprocess(batch["chunk_embeds"])
-            # Offload batch to CPU
-            batch = move_or_convert_tensors(batch, return_tensors="pt", move_to_cpu=True)
-            results["batch_idx"].append(batch["batch_idx"])
-            results["sequence_idx"].append(batch["sequence_idx"])
-            # chunk_idx is per-document (resets for each document)
-            results["chunk_idx"].append(batch["chunk_idx"])
-            if isinstance(batch["chunk_token_ids"], list):
-                results["chunk_token_ids"].extend(batch["chunk_token_ids"])
-            else:  # If chunk_token_ids is a tensor, convert to list
-                results["chunk_token_ids"].append(batch["chunk_token_ids"])
-            results["chunk_size"].append(batch["chunk_size"])
-            results["chunk_embeds"].append(batch["chunk_embeds"])
-        # Postprocess early batches that were used for PCA fitting
-        if self.pca_mode and not pca_ready_at_start:
-            self._postprocess_early_batches(results)
+            results = self._process_batches_simple(batches)
         # Decode chunks in existing batches
         if return_text:
             results["chunk"] = self._decode_chunks(results.pop("chunk_token_ids"), show_progress)
