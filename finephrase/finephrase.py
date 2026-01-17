@@ -51,6 +51,10 @@ from finephrase.utils import (
 
 logger = logging.getLogger(__name__)
 
+# Minimum number of tokenization batches before enabling parallel processing.
+# For small batch counts, the overhead of multiprocessing exceeds the benefit.
+_MIN_BATCHES_FOR_PARALLEL = 5
+
 
 class _FinePhraseBase(ABC):
     """Abstract base class for FinePhrase models.
@@ -423,14 +427,13 @@ class _FinePhraseBase(ABC):
         np.ndarray
             Mean-token embeddings for each query.
         """
-        small_thresh = 5
         num_token_batches = math.ceil(len(queries) / token_batch_size)
         inputs = self._tokenize(
             queries,
             max_length=max_length,
             chunk_docs=False,
             batch_size=token_batch_size,
-            num_jobs=1 if num_token_batches <= small_thresh else self._num_token_jobs,
+            num_jobs=1 if num_token_batches <= _MIN_BATCHES_FOR_PARALLEL else self._num_token_jobs,
         )
         loader = DataLoader(
             inputs,

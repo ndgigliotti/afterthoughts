@@ -11,7 +11,10 @@ from finephrase.utils import _build_results_dataframe, move_or_convert_tensors
 
 MODEL_NAME = "sentence-transformers/paraphrase-MiniLM-L3-v2"
 
+requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 
+
+@requires_cuda
 def test_finephrase_init():
     """Test basic FinePhrase initialization."""
     model_name = MODEL_NAME
@@ -39,6 +42,7 @@ def test_finephrase_init():
     assert finephrase.num_token_jobs == num_token_jobs
 
 
+@requires_cuda
 def test_finephrase_lite_init():
     """Test FinePhraseLite initialization with lossy params."""
     model_name = MODEL_NAME
@@ -118,14 +122,14 @@ def test_get_segment_idx_multiple_sizes():
 
 def test_move_or_convert_results_to_cpu():
     results = {
-        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]], device="cuda"),
-        "sequence_idx": torch.tensor([0, 1], device="cuda"),
-        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]], device="cuda"),
+        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
+        "sequence_idx": torch.tensor([0, 1]),
+        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]]),
     }
     expected_results = {
-        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]], device="cpu"),
-        "sequence_idx": torch.tensor([0, 1], device="cpu"),
-        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]], device="cpu"),
+        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
+        "sequence_idx": torch.tensor([0, 1]),
+        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]]),
     }
     converted_results = move_or_convert_tensors(results, move_to_cpu=True)
     for key in results:
@@ -134,9 +138,9 @@ def test_move_or_convert_results_to_cpu():
 
 def test_move_or_convert_results_to_numpy():
     results = {
-        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]], device="cuda"),
-        "sequence_idx": torch.tensor([0, 1], device="cuda"),
-        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]], device="cuda"),
+        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
+        "sequence_idx": torch.tensor([0, 1]),
+        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]]),
     }
     expected_results = {
         "segment_token_ids": np.array([[1, 2, 3], [4, 5, 6]]),
@@ -150,9 +154,9 @@ def test_move_or_convert_results_to_numpy():
 
 def test_move_or_convert_results_invalid_return_tensors():
     results = {
-        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]], device="cuda"),
-        "sequence_idx": torch.tensor([0, 1], device="cuda"),
-        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]], device="cuda"),
+        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
+        "sequence_idx": torch.tensor([0, 1]),
+        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]]),
     }
     with pytest.raises(ValueError):
         move_or_convert_tensors(results, return_tensors="invalid")
@@ -168,6 +172,7 @@ def model():
     )
 
 
+@requires_cuda
 def test_finephrase_to_cpu():
     model_name = MODEL_NAME
     device = "cuda"
@@ -181,18 +186,16 @@ def test_finephrase_to_cpu():
     assert finephrase.device.type == "cpu"
 
 
+@requires_cuda
 def test_finephrase_to_cuda(model):
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA is not available")
     assert model.device.type == "cpu"
 
     model.to("cuda")
     assert model.device.type == "cuda"
 
 
+@requires_cuda
 def test_finephrase_to_device(model):
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA is not available")
     assert model.device.type == "cpu"
 
     model.to(torch.device("cuda"))

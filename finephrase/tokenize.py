@@ -128,15 +128,6 @@ class TokenizedDataset(Dataset):
             result[orig_idx] = new_pos
         return result
 
-    # @cached_property
-    # def index_map(self) -> List[int]:
-    #     """Return the indices of the dataset."""
-    #     if self.sort_by_token_count:
-    #         idx = self.sort_idx
-    #     else:
-    #         idx = list(range(len(self.data["input_ids"])))
-    #     return idx
-
     def __len__(self) -> int:
         """Return the length of the dataset."""
         return len(self.data["input_ids"])
@@ -363,29 +354,6 @@ def _tokenize_batch(
             [tuple(offset) for offset in offsets] for offsets in inputs["offset_mapping"]
         ]
     return inputs
-
-
-# def _pad_and_concat(
-#     batches: list[dict], key: str, tokenizer: PreTrainedTokenizerFast
-# ) -> np.ndarray:
-#     """Pad and concatenate the arrays at a certain key in a list of dictionaries."""
-#     # Find the widths of the arrays in this batch
-#     widths = np.array(batch[key].shape[1] for batch in batches)
-#     pad_width = widths.max()
-#     # Pad all arrays to the maximum width
-#     pad_diff = pad_width - widths
-#     for i, (batch, pad_diff) in enumerate(zip(batches, pad_diff)):
-#         # Determine the padding value based on the key
-#         pad_values = {"input_ids": tokenizer.pad_token_id} | DEFAULT_PAD_VALUES
-#         # Pad the array with the appropriate value
-#         batches[i][key] = np.pad(
-#             batch[key],
-#             ((0, 0), (0, pad_diff)),
-#             constant_values=pad_values.get(key, 0),
-#             mode="constant",
-#         )
-#     # Concatenate the arrays along the first axis
-#     return np.concatenate([batch[key] for batch in batches], axis=0)
 
 
 @torch.no_grad()

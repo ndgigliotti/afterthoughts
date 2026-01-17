@@ -946,14 +946,6 @@ def tokenize_with_sentence_boundaries(
             results["sentence_ids"].append(sentence_ids)
             results["overflow_to_sample_mapping"].append(i)
 
-    # Concatenate the lists of tensors in the results dictionary to create single tensors.
-    # results["input_ids"] = torch.cat(results["input_ids"])
-    # results["attention_mask"] = torch.cat(results["attention_mask"])
-    # results["sentence_ids"] = torch.cat(results["sentence_ids"])
-    # if "overflow_to_sample_mapping" in results:
-    #     results["overflow_to_sample_mapping"] = torch.cat(
-    #         results["overflow_to_sample_mapping"]
-    #     )
     results["sequence_idx"] = list(range(len(results["input_ids"])))
     # Return the results dictionary.
     return TokenizedDataset(results) if return_tokenized_dataset else results
@@ -976,7 +968,6 @@ def _tokenize_batch_with_sentence_boundaries(
         max_length=max_length,
         chunk_docs=chunk_docs,
         overlap=doc_overlap,
-        return_tensors="np",
     )
     # Globalize overflow_to_sample_mapping
     if "overflow_to_sample_mapping" in inputs:
