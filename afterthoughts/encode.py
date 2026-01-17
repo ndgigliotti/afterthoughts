@@ -153,6 +153,30 @@ class _EncoderBase(ABC):
         self.model_dtype = self.model.dtype
         return self
 
+    def compile(self, mode: str = "reduce-overhead", dynamic: bool = True) -> "_EncoderBase":
+        """Compile the model using torch.compile for potential speedups.
+
+        Note: Benchmarks show compilation provides minimal benefit for encoder
+        models with dynamic batching. It may help on high-end GPUs or with
+        fixed/bucketed batch sizes. Test on your hardware before relying on it.
+
+        Parameters
+        ----------
+        mode : str, optional
+            Compilation mode, by default "reduce-overhead".
+            Options: "default", "reduce-overhead", "max-autotune".
+        dynamic : bool, optional
+            Enable dynamic shape support, by default True.
+            Should be True when using dynamic batching (varying batch sizes).
+
+        Returns
+        -------
+        _EncoderBase
+            Returns the model instance for method chaining.
+        """
+        self.model = torch.compile(self.model, mode=mode, dynamic=dynamic)
+        return self
+
     @property
     def __num_token_jobs(self) -> int:
         """Returns the number of jobs to use for tokenization."""
