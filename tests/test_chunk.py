@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from finephrase.sentence_utils import (
+from afterthoughts.chunk import (
     _add_special_tokens,
     _split_long_sentences,
     get_sentence_offsets,

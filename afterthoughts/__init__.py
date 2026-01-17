@@ -1,4 +1,4 @@
-"""Top-level package for FinePhrase."""
+"""Top-level package for Afterthoughts."""
 
 __author__ = """Nicholas Gigliotti"""
 __email__ = "ndgigliotti@gmail.com"
@@ -18,5 +18,5 @@ __version__ = "0.1.0"
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from finephrase.finephrase import FinePhrase, FinePhraseLite  # noqa
-from finephrase.utils import configure_logging  # noqa
+from afterthoughts.encode import Encoder, LiteEncoder  # noqa
+from afterthoughts.utils import configure_logging  # noqa

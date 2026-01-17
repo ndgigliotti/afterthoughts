@@ -16,7 +16,7 @@ from torch.utils.data import Dataset, Sampler
 from tqdm.auto import tqdm
 from transformers import PreTrainedTokenizerFast
 
-from finephrase.utils import get_overlap_count, order_by_indices, round_up_to_power_of_2
+from afterthoughts.utils import get_overlap_count, order_by_indices, round_up_to_power_of_2
 
 logger = logging.getLogger(__name__)
 

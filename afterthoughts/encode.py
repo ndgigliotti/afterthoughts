@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""FinePhrase is a library for extracting sentence-segment embeddings using transformer models."""
+"""Encoder is a library for extracting sentence-segment embeddings using transformer models."""
 
 import logging
 import math
@@ -29,17 +29,17 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import AutoModel, AutoTokenizer
 
-from finephrase.pca import IncrementalPCA
-from finephrase.sentence_utils import (
-    _compute_segment_embeds,
+from afterthoughts.chunk import (
+    _compute_chunk_embeds,
     tokenize_with_sentence_boundaries,
 )
-from finephrase.tokenize import (
+from afterthoughts.pca import IncrementalPCA
+from afterthoughts.tokenize import (
     DynamicTokenSampler,
     TokenizedDataset,
     dynamic_pad_collate,
 )
-from finephrase.utils import (
+from afterthoughts.utils import (
     _build_results_dataframe,
     move_or_convert_tensors,
     normalize,
@@ -56,8 +56,8 @@ logger = logging.getLogger(__name__)
 _MIN_BATCHES_FOR_PARALLEL = 5
 
 
-class _FinePhraseBase(ABC):
-    """Abstract base class for FinePhrase models.
+class _EncoderBase(ABC):
+    """Abstract base class for Encoder models.
 
     This class provides shared functionality for model loading, tokenization,
     and embedding generation. Subclasses implement specific encode methods.
@@ -71,11 +71,11 @@ class _FinePhraseBase(ABC):
         amp_dtype: torch.dtype = torch.float16,
         attn_implementation: str | None = None,
         compile: bool | str = True,
-        normalize_embeds: bool = False,
+        normalize: bool = False,
         device: torch.device | str | int = "cuda",
-        num_token_jobs: int | None = -1,
+        _num_token_jobs: int | None = -1,
     ) -> None:
-        """Initialize a FinePhrase model.
+        """Initialize a Encoder model.
 
         Parameters
         ----------
@@ -97,7 +97,7 @@ class _FinePhraseBase(ABC):
             - "reduce-overhead"
             - "default"
             - "max-autotune"
-        normalize_embeds : bool, optional
+        normalize : bool, optional
             Normalize the embeddings to unit length, by default False.
             This is useful for quick cosine similarity calculations downstream, since
             the dot product of two unit vectors is equal to the cosine similarity.
@@ -105,7 +105,7 @@ class _FinePhraseBase(ABC):
             to consider only the direction of the vectors, not their magnitude.
         device : torch.device, str, int, optional
             Device to use for inference, by default "cuda".
-        num_token_jobs : int, None, optional
+        _num_token_jobs : int, None, optional
             Number of jobs to use for multiprocessing on tokenization and
             detokenization, by default -1. If None, the number of jobs is
             set to the number of CPU cores. If less than 0, the number
@@ -118,7 +118,7 @@ class _FinePhraseBase(ABC):
             clean_up_tokenization_spaces=True,
         )
         self.attn_implementation = attn_implementation
-        model_kws = {"dtype": self.model_dtype, "device_map": {"": device}}
+        model_kws = {"torch_dtype": self.model_dtype, "device_map": {"": device}}
         if self.attn_implementation is not None:
             model_kws["attn_implementation"] = self.attn_implementation
         logger.info("Loading model '%s' on device '%s'", model_name, device)
@@ -133,15 +133,15 @@ class _FinePhraseBase(ABC):
                 self.model = torch.compile(self.model, mode=compile, dynamic=False)
         self.amp = amp
         self.amp_dtype = amp_dtype
-        self.normalize_embeds = normalize_embeds
-        self.num_token_jobs = num_token_jobs
+        self.normalize = normalize
+        self._num_token_jobs = _num_token_jobs
 
     @property
     def device(self) -> torch.device:
         """Returns the device the model is on."""
         return self.model.device
 
-    def to(self, device: torch.device | str | int) -> "_FinePhraseBase":
+    def to(self, device: torch.device | str | int) -> "_EncoderBase":
         """Move the model to a new device.
 
         Parameters
@@ -151,18 +151,18 @@ class _FinePhraseBase(ABC):
 
         Returns
         -------
-        _FinePhraseBase
+        _EncoderBase
             Returns the model instance.
         """
         self.model.to(device)
         return self
 
-    def half(self) -> "_FinePhraseBase":
+    def half(self) -> "_EncoderBase":
         """Convert the model to half precision.
 
         Returns
         -------
-        _FinePhraseBase
+        _EncoderBase
             Returns the model instance.
         """
         self.model.half()
@@ -170,9 +170,9 @@ class _FinePhraseBase(ABC):
         return self
 
     @property
-    def _num_token_jobs(self) -> int:
+    def __num_token_jobs(self) -> int:
         """Returns the number of jobs to use for tokenization."""
-        return normalize_num_jobs(self.num_token_jobs)
+        return normalize_num_jobs(self._num_token_jobs)
 
     def normalize_if_needed(
         self, embeds: torch.Tensor | np.ndarray, dim: int = 1
@@ -191,7 +191,7 @@ class _FinePhraseBase(ABC):
         torch.Tensor or np.ndarray
             Normalized embeddings.
         """
-        if self.normalize_embeds:
+        if self.normalize:
             embeds = normalize(embeds, dim=dim)
         return embeds
 
@@ -216,7 +216,7 @@ class _FinePhraseBase(ABC):
                 clean_up_tokenization_spaces=True,
             )
         )
-        segments = Parallel(n_jobs=self._num_token_jobs, prefer="processes")(
+        segments = Parallel(n_jobs=self.__num_token_jobs, prefer="processes")(
             _decode(ids) for ids in tqdm(segment_token_ids, desc="Detokenizing")
         )
         return pa.array([y for x in segments for y in x])
@@ -226,8 +226,8 @@ class _FinePhraseBase(ABC):
         self,
         docs: list[str],
         max_length: int | None = None,
-        chunk_docs: bool = True,
-        doc_overlap: float | int = 0.5,
+        prechunk: bool = True,
+        prechunk_overlap: float | int = 0.5,
         batch_size: int = 10,
         num_jobs: int | None = None,
     ) -> TokenizedDataset:
@@ -241,19 +241,19 @@ class _FinePhraseBase(ABC):
             List of documents to tokenize.
         max_length : int, optional
             Maximum length of the input sequences, by default None.
-        chunk_docs : bool, optional
+        prechunk : bool, optional
             Enable chunking of documents into overlapping sequences, by default True.
-        doc_overlap : float, int, optional
+        prechunk_overlap : float, int, optional
             Overlap for splitting long documents into overlapping sequences due to the
             model's max sequence length limit, by default 0.5. Tokenized documents which fit
             within `max_length` will not be chunked. If a float, it is interpreted as a
             fraction of the maximum sequence length. If an integer, it is interpreted
-            as the number of tokens to overlap. Does nothing if `chunk_docs` is False.
+            as the number of tokens to overlap. Does nothing if `prechunk` is False.
         batch_size : int, optional
             Batch size for tokenization, by default 10.
         num_jobs : int, optional
             Number of jobs to use for parallel processing on tokenization.
-            If None, will default to `self.num_token_jobs`.
+            If None, will default to `self._num_token_jobs`.
 
         Returns
         -------
@@ -267,13 +267,13 @@ class _FinePhraseBase(ABC):
         """
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
         if num_jobs is None:
-            num_jobs = self._num_token_jobs
+            num_jobs = self.__num_token_jobs
         inputs = tokenize_with_sentence_boundaries(
             docs,
             self.tokenizer,
             max_length=max_length,
-            chunk_docs=chunk_docs,
-            overlap=doc_overlap,
+            chunk_docs=prechunk,
+            overlap=prechunk_overlap,
             batch_size=batch_size,
             n_jobs=num_jobs,
             return_tokenized_dataset=True,
@@ -330,8 +330,8 @@ class _FinePhraseBase(ABC):
     def _generate_segment_embeds(
         self,
         loader: DataLoader,
-        segment_sizes: int | list | tuple,
-        segment_overlap: int | float | list | dict,
+        num_sents: int | list | tuple,
+        chunk_overlap: int | float | list | dict,
         move_results_to_cpu: bool = False,
         return_tensors: str = "pt",
         truncate_dim: int | None = None,
@@ -342,9 +342,9 @@ class _FinePhraseBase(ABC):
         ----------
         loader : DataLoader
             DataLoader containing the tokenized input sequences.
-        segment_sizes : int, list, or tuple
+        num_sents : int, list, or tuple
             Number of sentences per segment.
-        segment_overlap : int, float, list, or dict
+        chunk_overlap : int, float, list, or dict
             Overlap between segments (in sentences).
         move_results_to_cpu : bool, optional
             Move results to CPU after processing, by default False.
@@ -357,14 +357,14 @@ class _FinePhraseBase(ABC):
             loader, move_results_to_cpu=False, return_tensors="pt", truncate_dim=truncate_dim
         )
         for batch in batches:
-            results = _compute_segment_embeds(
+            results = _compute_chunk_embeds(
                 batch["input_ids"],
                 token_embeds=batch["token_embeds"],
                 sentence_ids=batch["sentence_ids"],
                 sequence_idx=batch["sequence_idx"].to(self.device),
                 tokenizer=self.tokenizer,
-                segment_sizes=segment_sizes,
-                overlap=segment_overlap,
+                chunk_sizes=num_sents,
+                overlap=chunk_overlap,
             )
             results["batch_idx"] = torch.full(results["sequence_idx"].shape, batch["batch_idx"][0])
             yield move_or_convert_tensors(
@@ -378,14 +378,14 @@ class _FinePhraseBase(ABC):
         self,
         docs: list[str],
         max_length: int | None = None,
-        batch_max_tokens: int = 16384,
+        batch_tokens: int = 16384,
         token_batch_size: int = 10,
-        segment_sizes: int | list | tuple = 2,
-        segment_overlap: int | float | list | dict = 0.5,
-        chunk_docs: bool = True,
-        doc_overlap: float | int = 0.5,
+        num_sents: int | list | tuple = 2,
+        chunk_overlap: int | float | list | dict = 0.5,
+        prechunk: bool = True,
+        prechunk_overlap: float | int = 0.5,
         return_frame: str = "pandas",
-        convert_to_numpy: bool = True,
+        as_numpy: bool = True,
         debug: bool = False,
     ):
         """Obtain the segments and segment embeddings from a list of documents."""
@@ -401,7 +401,7 @@ class _FinePhraseBase(ABC):
         max_length: int | None = None,
         batch_size: int = 32,
         token_batch_size: int = 10,
-        convert_to_numpy: bool = True,
+        as_numpy: bool = True,
     ) -> np.ndarray:
         """Obtain the mean-tokens embeddings for a list of query strings.
 
@@ -419,7 +419,7 @@ class _FinePhraseBase(ABC):
             Batch size for encoding, by default 32.
         token_batch_size : int, optional
             Batch size for tokenization, by default 10.
-        convert_to_numpy : bool, optional
+        as_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
 
         Returns
@@ -431,9 +431,9 @@ class _FinePhraseBase(ABC):
         inputs = self._tokenize(
             queries,
             max_length=max_length,
-            chunk_docs=False,
+            prechunk=False,
             batch_size=token_batch_size,
-            num_jobs=1 if num_token_batches <= _MIN_BATCHES_FOR_PARALLEL else self._num_token_jobs,
+            num_jobs=1 if num_token_batches <= _MIN_BATCHES_FOR_PARALLEL else self.__num_token_jobs,
         )
         loader = DataLoader(
             inputs,
@@ -465,17 +465,17 @@ class _FinePhraseBase(ABC):
             mean_tokens = self._postprocess_query_embeds(mean_tokens)
             query_embeds.append(mean_tokens.cpu())
         query_embeds = torch.vstack(query_embeds)
-        if convert_to_numpy:
+        if as_numpy:
             query_embeds = query_embeds.numpy()
         return query_embeds
 
 
-class FinePhrase(_FinePhraseBase):
-    """Simple FinePhrase model for generating sentence-segment embeddings.
+class Encoder(_EncoderBase):
+    """Simple Encoder model for generating sentence-segment embeddings.
 
     This class provides a straightforward API for extracting segment embeddings
     from documents. For memory-efficient operations with PCA, precision reduction,
-    and dimension truncation, use FinePhraseLite instead.
+    and dimension truncation, use LiteEncoder instead.
     """
 
     def __init__(
@@ -486,11 +486,11 @@ class FinePhrase(_FinePhraseBase):
         amp_dtype: torch.dtype = torch.float16,
         attn_implementation: str | None = None,
         compile: bool | str = True,
-        normalize_embeds: bool = False,
+        normalize: bool = False,
         device: torch.device | str | int = "cuda",
-        num_token_jobs: int | None = -1,
+        _num_token_jobs: int | None = -1,
     ) -> None:
-        """Initialize a FinePhrase model.
+        """Initialize a Encoder model.
 
         Parameters
         ----------
@@ -512,13 +512,13 @@ class FinePhrase(_FinePhraseBase):
             - "reduce-overhead"
             - "default"
             - "max-autotune"
-        normalize_embeds : bool, optional
+        normalize : bool, optional
             Normalize the embeddings to unit length, by default False.
             This is useful for quick cosine similarity calculations downstream, since
             the dot product of two unit vectors is equal to the cosine similarity.
         device : torch.device, str, int, optional
             Device to use for inference, by default "cuda".
-        num_token_jobs : int, None, optional
+        _num_token_jobs : int, None, optional
             Number of jobs to use for multiprocessing on tokenization and
             detokenization, by default -1.
         """
@@ -529,23 +529,23 @@ class FinePhrase(_FinePhraseBase):
             amp_dtype=amp_dtype,
             attn_implementation=attn_implementation,
             compile=compile,
-            normalize_embeds=normalize_embeds,
+            normalize=normalize,
             device=device,
-            num_token_jobs=num_token_jobs,
+            _num_token_jobs=_num_token_jobs,
         )
 
     def encode(
         self,
         docs: list[str],
         max_length: int | None = None,
-        batch_max_tokens: int = 16384,
+        batch_tokens: int = 16384,
         token_batch_size: int = 10,
-        segment_sizes: int | list | tuple = 2,
-        segment_overlap: int | float | list | dict = 0.5,
-        chunk_docs: bool = True,
-        doc_overlap: float | int = 0.5,
+        num_sents: int | list | tuple = 2,
+        chunk_overlap: int | float | list | dict = 0.5,
+        prechunk: bool = True,
+        prechunk_overlap: float | int = 0.5,
         return_frame: str = "pandas",
-        convert_to_numpy: bool = True,
+        as_numpy: bool = True,
         debug: bool = False,
     ) -> dict[str, np.ndarray | torch.Tensor]:
         """Obtain the segments and segment embeddings from a list of documents.
@@ -559,28 +559,28 @@ class FinePhrase(_FinePhraseBase):
             List of documents to encode.
         max_length : int, optional
             Maximum length of the input sequences, by default None.
-        batch_max_tokens : int, optional
+        batch_tokens : int, optional
             Maximum tokens per batch for encoder, by default 16384.
         token_batch_size : int, optional
             Batch size for tokenization, by default 10.
-        segment_sizes : int, list, or tuple, optional
+        num_sents : int, list, or tuple, optional
             Number of sentences per segment, by default 2.
-            For example, if `segment_sizes` is set to `(1, 2, 3)`, segments
+            For example, if `num_sents` is set to `(1, 2, 3)`, segments
             of 1, 2, and 3 consecutive sentences will be extracted.
-        segment_overlap : int, float, list, or dict, optional
+        chunk_overlap : int, float, list, or dict, optional
             Overlap between segments (in sentences), by default 0.5.
             If a float, it is interpreted as a fraction of the segment size.
             If an integer, it is interpreted as the number of sentences to overlap.
             If a list or tuple, it should contain the overlap for each segment size.
             If a dictionary, it should map segment sizes to overlaps.
-        chunk_docs : bool, optional
+        prechunk : bool, optional
             Enable chunking of documents into overlapping sequences, by default True.
-        doc_overlap : float or int, optional
+        prechunk_overlap : float or int, optional
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
         return_frame : str, optional
             The type of DataFrame of segments and indices to return, by default 'pandas'.
             Options are 'pandas', 'polars', or 'arrow'.
-        convert_to_numpy : bool, optional
+        as_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
         debug : bool, optional
             Include additional columns in the output DataFrame for debugging,
@@ -594,8 +594,8 @@ class FinePhrase(_FinePhraseBase):
         inputs = self._tokenize(
             docs,
             max_length=max_length,
-            chunk_docs=chunk_docs,
-            doc_overlap=doc_overlap,
+            prechunk=prechunk,
+            prechunk_overlap=prechunk_overlap,
             batch_size=token_batch_size,
         )
         loader = DataLoader(
@@ -605,14 +605,14 @@ class FinePhrase(_FinePhraseBase):
             pin_memory_device="",
             batch_sampler=DynamicTokenSampler(
                 inputs,
-                max_tokens=batch_max_tokens,
+                max_tokens=batch_tokens,
             ),
             collate_fn=partial(dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id),
         )
         batches = self._generate_segment_embeds(
             loader,
-            segment_sizes=segment_sizes,
-            segment_overlap=segment_overlap,
+            num_sents=num_sents,
+            chunk_overlap=chunk_overlap,
             move_results_to_cpu=False,
             return_tensors="pt",
         )
@@ -620,34 +620,34 @@ class FinePhrase(_FinePhraseBase):
         results = {
             "batch_idx": [],
             "sequence_idx": [],
-            "segment_idx": [],
-            "segment_token_ids": [],
-            "segment_size": [],
-            "segment_embeds": [],
+            "chunk_idx": [],
+            "chunk_token_ids": [],
+            "chunk_size": [],
+            "chunk_embeds": [],
             "sentence_ids": [],
         }
         for batch in batches:
             # Apply normalization if needed
-            batch["segment_embeds"] = self.normalize_if_needed(batch["segment_embeds"])
+            batch["chunk_embeds"] = self.normalize_if_needed(batch["chunk_embeds"])
             # Offload batch to CPU
             batch = move_or_convert_tensors(batch, return_tensors="pt", move_to_cpu=True)
             results["batch_idx"].append(batch["batch_idx"])
             results["sequence_idx"].append(batch["sequence_idx"])
-            results["segment_idx"].append(batch["segment_idx"])
-            if isinstance(batch["segment_token_ids"], list):
-                results["segment_token_ids"].extend(batch["segment_token_ids"])
+            results["chunk_idx"].append(batch["chunk_idx"])
+            if isinstance(batch["chunk_token_ids"], list):
+                results["chunk_token_ids"].extend(batch["chunk_token_ids"])
             else:
-                results["segment_token_ids"].append(batch["segment_token_ids"])
-            results["segment_size"].append(batch["segment_size"])
-            results["segment_embeds"].append(batch["segment_embeds"])
+                results["chunk_token_ids"].append(batch["chunk_token_ids"])
+            results["chunk_size"].append(batch["chunk_size"])
+            results["chunk_embeds"].append(batch["chunk_embeds"])
 
         # Decode segments in existing batches
-        results["segment"] = self._decode_segments(results.pop("segment_token_ids"))
+        results["chunk"] = self._decode_segments(results.pop("chunk_token_ids"))
         # Combine results
         for key, value in results.items():
             if len(value) and isinstance(value[0], torch.Tensor):
                 results[key] = torch.cat(value, dim=0)
-        if chunk_docs:
+        if prechunk:
             seq_to_sample = dict(
                 zip(
                     inputs.data["sequence_idx"],
@@ -660,15 +660,15 @@ class FinePhrase(_FinePhraseBase):
             )
         else:
             results["document_idx"] = results["sequence_idx"]
-        results["embed_idx"] = torch.arange(results["segment_embeds"].shape[0])
+        results["embed_idx"] = torch.arange(results["chunk_embeds"].shape[0])
         pdf, vecs = _build_results_dataframe(
             results,
-            convert_to_numpy=convert_to_numpy,
+            convert_to_numpy=as_numpy,
             return_frame="polars",
             debug=debug,
         )
         if inputs.sort_by_token_count:
-            pdf = pdf.sort("sequence_idx", "segment_idx", descending=False)
+            pdf = pdf.sort("sequence_idx", "chunk_idx", descending=False)
             vecs = vecs[pdf["embed_idx"]]
         # Handle internal columns
         if debug:
@@ -685,15 +685,15 @@ class FinePhrase(_FinePhraseBase):
         return pdf, vecs
 
 
-class FinePhraseLite(_FinePhraseBase):
-    """Memory-efficient FinePhrase variant for advanced users.
+class LiteEncoder(_EncoderBase):
+    """Memory-efficient Encoder variant for advanced users.
 
     This class includes lossy memory optimizations:
     - PCA dimensionality reduction (GPU-accelerated, incremental fitting)
     - Precision reduction (float32/64 to float16)
     - Dimension truncation
 
-    For simple use cases without these optimizations, use FinePhrase instead.
+    For simple use cases without these optimizations, use Encoder instead.
     """
 
     def __init__(
@@ -704,15 +704,15 @@ class FinePhraseLite(_FinePhraseBase):
         amp_dtype: torch.dtype = torch.float16,
         attn_implementation: str | None = None,
         compile: bool | str = True,
-        reduce_precision: bool = False,
+        half_embeds: bool = False,
         truncate_dims: int | None = None,
-        normalize_embeds: bool = False,
+        normalize: bool = False,
         pca: int | None = None,
-        pca_fit_batch_count: int | float = 1.0,
+        pca_early_stop: int | float = 1.0,
         device: torch.device | str | int = "cuda",
-        num_token_jobs: int | None = -1,
+        _num_token_jobs: int | None = -1,
     ) -> None:
-        """Initialize a FinePhraseLite model.
+        """Initialize a LiteEncoder model.
 
         Parameters
         ----------
@@ -728,20 +728,20 @@ class FinePhraseLite(_FinePhraseBase):
             Attention implementation to use, by default None.
         compile : bool | str, optional
             Compile the model, by default True.
-        reduce_precision : bool, optional
+        half_embeds : bool, optional
             Reduce the final embedding precision to float16, by default False.
         truncate_dims : int, None, optional
             Truncate the dimensions of the embeddings, by default None.
-        normalize_embeds : bool, optional
+        normalize : bool, optional
             Normalize the embeddings to unit length, by default False.
         pca : int, None, optional
             Number of principal components to keep after PCA, by default None.
-        pca_fit_batch_count : int, float, optional
+        pca_early_stop : int, float, optional
             Number of batches to use for fitting the PCA model, by default 1.0.
             If a float, it is the fraction of the dataset to use.
         device : torch.device, str, int, optional
             Device to use for inference, by default "cuda".
-        num_token_jobs : int, None, optional
+        _num_token_jobs : int, None, optional
             Number of jobs for tokenization/detokenization, by default -1.
         """
         super().__init__(
@@ -751,23 +751,21 @@ class FinePhraseLite(_FinePhraseBase):
             amp_dtype=amp_dtype,
             attn_implementation=attn_implementation,
             compile=compile,
-            normalize_embeds=normalize_embeds,
+            normalize=normalize,
             device=device,
-            num_token_jobs=num_token_jobs,
+            _num_token_jobs=_num_token_jobs,
         )
-        self.reduce_precision = reduce_precision
+        self.half_embeds = half_embeds
         self.truncate_dims = truncate_dims
         self.pca = pca
-        self.pca_fit_batch_count = pca_fit_batch_count
+        self.pca_early_stop = pca_early_stop
 
         if truncate_dims is not None and pca is not None and truncate_dims < pca:
             raise ValueError("`truncate_dims` must be greater than `pca`.")
 
-    def reduce_precision_if_needed(
-        self, embeds: torch.Tensor | np.ndarray
-    ) -> torch.Tensor | np.ndarray:
+    def half_embeds_if_needed(self, embeds: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
         """Quantize the embeddings if needed."""
-        if self.reduce_precision:
+        if self.half_embeds:
             embeds = reduce_precision(embeds)
         return embeds
 
@@ -806,7 +804,7 @@ class FinePhraseLite(_FinePhraseBase):
             Postprocessed embeddings.
         """
         steps = [
-            self.reduce_precision_if_needed,
+            self.half_embeds_if_needed,
             self.normalize_if_needed,
         ]
         for step in steps:
@@ -823,9 +821,9 @@ class FinePhraseLite(_FinePhraseBase):
         """Returns True if PCA has seen enough batches to be applied."""
         return (
             hasattr(self, "pca_transform_")
-            and hasattr(self, "pca_fit_batch_count_")
+            and hasattr(self, "pca_early_stop_")
             and hasattr(self.pca_transform_, "n_batches_seen_")
-            and self.pca_transform_.n_batches_seen_ >= self.pca_fit_batch_count_
+            and self.pca_transform_.n_batches_seen_ >= self.pca_early_stop_
         )
 
     def update_pca(self, segment_embeds: torch.Tensor) -> None:
@@ -865,7 +863,7 @@ class FinePhraseLite(_FinePhraseBase):
 
     def clear_pca(self) -> None:
         """Clear the fitted PCA transformation."""
-        pca_attrs = ["pca_transform_", "pca_fit_batch_count_"]
+        pca_attrs = ["pca_transform_", "pca_early_stop_"]
         for attr in pca_attrs:
             if hasattr(self, attr):
                 delattr(self, attr)
@@ -875,14 +873,14 @@ class FinePhraseLite(_FinePhraseBase):
         self,
         docs: list[str],
         max_length: int | None = None,
-        batch_max_tokens: int = 16384,
+        batch_tokens: int = 16384,
         token_batch_size: int = 10,
-        segment_sizes: int | list | tuple = 2,
-        segment_overlap: int | float | list | dict = 0.5,
-        chunk_docs: bool = True,
-        doc_overlap: float | int = 0.5,
+        num_sents: int | list | tuple = 2,
+        chunk_overlap: int | float | list | dict = 0.5,
+        prechunk: bool = True,
+        prechunk_overlap: float | int = 0.5,
         return_frame: str = "pandas",
-        convert_to_numpy: bool = True,
+        as_numpy: bool = True,
         debug: bool = False,
     ) -> dict[str, np.ndarray | torch.Tensor]:
         """Obtain the segments and segment embeddings from a list of documents.
@@ -896,22 +894,22 @@ class FinePhraseLite(_FinePhraseBase):
             List of documents to encode.
         max_length : int, optional
             Maximum length of the input sequences, by default None.
-        batch_max_tokens : int, optional
+        batch_tokens : int, optional
             Maximum tokens per batch for encoder, by default 16384.
         token_batch_size : int, optional
             Batch size for tokenization, by default 10.
-        segment_sizes : int, list, or tuple, optional
+        num_sents : int, list, or tuple, optional
             Number of sentences per segment, by default 2.
-        segment_overlap : int, float, list, or dict, optional
+        chunk_overlap : int, float, list, or dict, optional
             Overlap between segments (in sentences), by default 0.5.
-        chunk_docs : bool, optional
+        prechunk : bool, optional
             Enable chunking of documents into overlapping sequences, by default True.
-        doc_overlap : float or int, optional
+        prechunk_overlap : float or int, optional
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
         return_frame : str, optional
             The type of DataFrame of segments and indices to return, by default 'pandas'.
             Options are 'pandas', 'polars', or 'arrow'.
-        convert_to_numpy : bool, optional
+        as_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
         debug : bool, optional
             Include additional columns in the output DataFrame for debugging,
@@ -925,8 +923,8 @@ class FinePhraseLite(_FinePhraseBase):
         inputs = self._tokenize(
             docs,
             max_length=max_length,
-            chunk_docs=chunk_docs,
-            doc_overlap=doc_overlap,
+            prechunk=prechunk,
+            prechunk_overlap=prechunk_overlap,
             batch_size=token_batch_size,
         )
         loader = DataLoader(
@@ -936,14 +934,14 @@ class FinePhraseLite(_FinePhraseBase):
             pin_memory_device="",
             batch_sampler=DynamicTokenSampler(
                 inputs,
-                max_tokens=batch_max_tokens,
+                max_tokens=batch_tokens,
             ),
             collate_fn=partial(dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id),
         )
         batches = self._generate_segment_embeds(
             loader,
-            segment_sizes=segment_sizes,
-            segment_overlap=segment_overlap,
+            num_sents=num_sents,
+            chunk_overlap=chunk_overlap,
             move_results_to_cpu=False,
             return_tensors="pt",
             truncate_dim=self.truncate_dims,
@@ -955,65 +953,61 @@ class FinePhraseLite(_FinePhraseBase):
             if pca_ready_at_start:
                 logger.info("PCA is already fit and will be applied to all batches.")
             else:
-                if isinstance(self.pca_fit_batch_count, float):
-                    self.pca_fit_batch_count_ = math.ceil(len(loader) * self.pca_fit_batch_count)
+                if isinstance(self.pca_early_stop, float):
+                    self.pca_early_stop_ = math.ceil(len(loader) * self.pca_early_stop)
                 else:
-                    self.pca_fit_batch_count_ = self.pca_fit_batch_count
+                    self.pca_early_stop_ = self.pca_early_stop
 
         results = {
             "batch_idx": [],
             "sequence_idx": [],
-            "segment_idx": [],
-            "segment_token_ids": [],
-            "segment_size": [],
-            "segment_embeds": [],
+            "chunk_idx": [],
+            "chunk_token_ids": [],
+            "chunk_size": [],
+            "chunk_embeds": [],
             "sentence_ids": [],
         }
         for batch in batches:
             if not self.pca_mode:
                 # Postprocess on the fly to potentially conserve memory
-                batch["segment_embeds"] = self.postprocess(batch["segment_embeds"])
+                batch["chunk_embeds"] = self.postprocess(batch["chunk_embeds"])
             else:
                 if self.pca_is_ready:
                     # Apply PCA and postprocess to potentially conserve memory
-                    batch["segment_embeds"] = self.postprocess(
-                        self.apply_pca(batch["segment_embeds"])
-                    )
+                    batch["chunk_embeds"] = self.postprocess(self.apply_pca(batch["chunk_embeds"]))
                 else:
                     # Update PCA if not ready yet
-                    self.update_pca(batch["segment_embeds"])
+                    self.update_pca(batch["chunk_embeds"])
             # Offload batch to CPU
             batch = move_or_convert_tensors(batch, return_tensors="pt", move_to_cpu=True)
             results["batch_idx"].append(batch["batch_idx"])
             results["sequence_idx"].append(batch["sequence_idx"])
             # segment_idx is per-document (resets for each document)
-            results["segment_idx"].append(batch["segment_idx"])
-            if isinstance(batch["segment_token_ids"], list):
-                results["segment_token_ids"].extend(batch["segment_token_ids"])
+            results["chunk_idx"].append(batch["chunk_idx"])
+            if isinstance(batch["chunk_token_ids"], list):
+                results["chunk_token_ids"].extend(batch["chunk_token_ids"])
             else:  # If segment_token_ids is a tensor, convert to list
-                results["segment_token_ids"].append(batch["segment_token_ids"])
-            results["segment_size"].append(batch["segment_size"])
-            results["segment_embeds"].append(batch["segment_embeds"])
+                results["chunk_token_ids"].append(batch["chunk_token_ids"])
+            results["chunk_size"].append(batch["chunk_size"])
+            results["chunk_embeds"].append(batch["chunk_embeds"])
         # Process early batches with PCA if necessary
         if self.pca_mode and not pca_ready_at_start:
             if self.pca_is_ready:
                 self.pca_transform_.to("cpu")  # Temporarily move to CPU
-                for i in range(self.pca_fit_batch_count_):
-                    batch_embeds = results["segment_embeds"][i]
+                for i in range(self.pca_early_stop_):
+                    batch_embeds = results["chunk_embeds"][i]
                     if batch_embeds.size(1) != self.pca:
-                        results["segment_embeds"][i] = self.postprocess(
-                            self.apply_pca(batch_embeds)
-                        )
+                        results["chunk_embeds"][i] = self.postprocess(self.apply_pca(batch_embeds))
                 self.pca_transform_.to(self.device)  # Move back to device
             else:
                 warnings.warn("PCA did not finish fitting and will not be applied.", stacklevel=2)
         # Decode segments in existing batches
-        results["segment"] = self._decode_segments(results.pop("segment_token_ids"))
+        results["chunk"] = self._decode_segments(results.pop("chunk_token_ids"))
         # Combine results
         for key, value in results.items():
             if len(value) and isinstance(value[0], torch.Tensor):
                 results[key] = torch.cat(value, dim=0)
-        if chunk_docs:
+        if prechunk:
             # Both sequence_idx and overflow_to_sample_mapping are sorted together,
             # so create a mapping from original sequence index to sample index
             seq_to_sample = dict(
@@ -1028,15 +1022,15 @@ class FinePhraseLite(_FinePhraseBase):
             )
         else:
             results["document_idx"] = results["sequence_idx"]
-        results["embed_idx"] = torch.arange(results["segment_embeds"].shape[0])
+        results["embed_idx"] = torch.arange(results["chunk_embeds"].shape[0])
         pdf, vecs = _build_results_dataframe(
             results,
-            convert_to_numpy=convert_to_numpy,
+            convert_to_numpy=as_numpy,
             return_frame="polars",
             debug=debug,
         )
         if inputs.sort_by_token_count:
-            pdf = pdf.sort("sequence_idx", "segment_idx", descending=False)
+            pdf = pdf.sort("sequence_idx", "chunk_idx", descending=False)
             vecs = vecs[pdf["embed_idx"]]
         # Handle internal columns
         if debug:

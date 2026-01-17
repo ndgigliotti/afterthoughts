@@ -46,7 +46,7 @@ def configure_logging(
     logging module::
 
         import logging
-        logging.getLogger("finephrase").setLevel(logging.DEBUG)
+        logging.getLogger("afterthoughts").setLevel(logging.DEBUG)
         logging.basicConfig()
 
     Parameters
@@ -558,21 +558,21 @@ def _build_results_dataframe(
         "embed_idx",
         "sequence_idx",
         "document_idx",
-        "segment_idx",
-        "segment_size",
+        "chunk_idx",
+        "chunk_size",
     ]
     # Build key list with proper ordering (batch_idx before segment when debug=True)
     if debug:
-        keys = base_keys + ["batch_idx", "segment"]
+        keys = base_keys + ["batch_idx", "chunk"]
     else:
-        keys = base_keys + ["segment"]
+        keys = base_keys + ["chunk"]
     for key in keys:
         if key in results:
             df[key] = results[key]
     # Convert 1d arrays to NumPy and move to CPU
     df = move_or_convert_tensors(df, return_tensors="np", move_to_cpu=True)
     # Convert embeddings if needed
-    embeds = results["segment_embeds"]
+    embeds = results["chunk_embeds"]
     if not isinstance(embeds, torch.Tensor):
         raise TypeError("Segment embeddings must be torch.Tensor.")
     if convert_to_numpy:

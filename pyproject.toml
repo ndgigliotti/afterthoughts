@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "FinePhrase"
+name = "afterthoughts"
 version = "0.1.0"
 description = "Generate fine-grained contextualized phrase embeddings with transformers."
 readme = "README.md"
@@ -47,7 +47,7 @@ changelog = "https://github.com/ndgigliotti/finephrase/blob/master/changelog.md"
 homepage = "https://github.com/ndgigliotti/finephrase"
 
 [tool.setuptools]
-packages = ["finephrase"]
+packages = ["afterthoughts"]
 
 [tool.setuptools.package-data]
 "*" = ["*.*"]
@@ -98,4 +98,4 @@ ignore = [
 "tests/*" = ["F811"]  # allow test function redefinition for parametrize patterns
 
 [tool.ruff.lint.isort]
-known-first-party = ["finephrase"]
+known-first-party = ["afterthoughts"]

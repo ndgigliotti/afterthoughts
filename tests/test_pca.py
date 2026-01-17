@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import torch
 
-from finephrase.pca import IncrementalPCA, _add_to_diagonal, gen_batches
+from afterthoughts.pca import IncrementalPCA, _add_to_diagonal, gen_batches
 
 
 @pytest.mark.parametrize(

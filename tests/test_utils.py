@@ -8,7 +8,7 @@ import pyarrow as pa
 import pytest
 import torch
 
-from finephrase.utils import (
+from afterthoughts.utils import (
     format_memory_size,
     get_memory_report,
     get_memory_size,

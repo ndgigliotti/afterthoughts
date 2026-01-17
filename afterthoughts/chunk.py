@@ -22,8 +22,8 @@ from joblib import Parallel, delayed
 from torch.nn.utils.rnn import pad_sequence
 from tqdm.auto import tqdm
 
-from finephrase.tokenize import TokenizedDataset, get_max_length, pad, tokenize_docs
-from finephrase.utils import get_overlap_count
+from afterthoughts.tokenize import TokenizedDataset, get_max_length, pad, tokenize_docs
+from afterthoughts.utils import get_overlap_count
 
 logger = logging.getLogger(__name__)
 
@@ -436,10 +436,10 @@ def check_tensors(tensors: dict[str, torch.Tensor], tokenizer) -> dict[str, torc
     return tensors
 
 
-def get_segment_idx(
+def get_chunk_idx(
     input_ids: torch.Tensor,
     sentence_ids: torch.Tensor,
-    segment_sizes: list | tuple | int,
+    chunk_sizes: list | tuple | int,
     overlap: int | float | list | dict = 0.5,
     sequence_idx: torch.Tensor | None = None,
     pad_token_id: int = 0,
@@ -452,7 +452,7 @@ def get_segment_idx(
         Tensor containing input token IDs.
     sentence_ids : torch.Tensor
         Tensor containing sentence IDs, padded with -1.
-    segment_sizes : list, tuple, or int
+    chunk_sizes : list, tuple, or int
         Sizes of the segments to extract (in number of sentences).
     overlap : int, float, list, or dict, optional
         Overlap between segments (number or fraction of sentences).
@@ -467,11 +467,11 @@ def get_segment_idx(
     -------
     dict
         Dictionary containing the following keys:
-        - "segment_token_idx": 0-padded matrix of token indices within segments.
-        - "segment_token_ids": Padded matrix of segment token IDs.
+        - "chunk_token_idx": 0-padded matrix of token indices within segments.
+        - "chunk_token_ids": Padded matrix of segment token IDs.
         - "sentence_ids": Padded matrix of sentence IDs.
         - "attention_mask": Attention mask for the segment indices.
-        - "segment_size": Sizes of the segments (in sentences).
+        - "chunk_size": Sizes of the segments (in sentences).
         - "sequence_idx": Sequence indices.
 
     Raises
@@ -502,15 +502,15 @@ def get_segment_idx(
             f"must match size of `input_ids` ({input_ids.size(0)})."
         )
     results = {
-        "segment_token_idx": [],
-        "segment_token_ids": [],
+        "chunk_token_idx": [],
+        "chunk_token_ids": [],
         "sentence_ids": [],
-        "segment_size": [],
+        "chunk_size": [],
         "sequence_idx": [],
-        "segment_idx": [],
+        "chunk_idx": [],
     }
-    if isinstance(segment_sizes, int):
-        segment_sizes = [segment_sizes]
+    if isinstance(chunk_sizes, int):
+        chunk_sizes = [chunk_sizes]
     # Process sequences first, then segment sizes within each sequence
     # segment_idx resets for each sequence (per-document indexing)
     for seq_input_ids, seq_sentence_ids, seq_idx in zip(
@@ -518,7 +518,7 @@ def get_segment_idx(
     ):
         unique_sent_ids = torch.unique(seq_sentence_ids[seq_sentence_ids != -1])
         segment_counter = 0  # Reset for each sequence
-        for i, size in enumerate(segment_sizes):
+        for i, size in enumerate(chunk_sizes):
             overlap_sents = get_overlap_count(overlap, size, i)
             step = size - overlap_sents
             eff_size = min(size, len(unique_sent_ids))
@@ -529,50 +529,50 @@ def get_segment_idx(
                 torch.nonzero(mask, as_tuple=False).squeeze() for mask in segment_masks
             ]
             num_segments = len(segment_token_ids)
-            results["segment_token_ids"].extend(segment_token_ids)
+            results["chunk_token_ids"].extend(segment_token_ids)
             results["sentence_ids"].extend([seq_sentence_ids[mask] for mask in segment_masks])
-            results["segment_token_idx"].extend(segment_token_idx)
-            results["segment_size"].append(torch.full((num_segments,), size))
+            results["chunk_token_idx"].extend(segment_token_idx)
+            results["chunk_size"].append(torch.full((num_segments,), size))
             results["sequence_idx"].append(seq_idx.repeat_interleave(num_segments))
-            results["segment_idx"].append(
+            results["chunk_idx"].append(
                 torch.arange(segment_counter, segment_counter + num_segments)
             )
             segment_counter += num_segments
-    results["segment_size"] = torch.cat(results["segment_size"])
+    results["chunk_size"] = torch.cat(results["chunk_size"])
     results["sequence_idx"] = torch.cat(results["sequence_idx"])
-    results["segment_idx"] = torch.cat(results["segment_idx"])
+    results["chunk_idx"] = torch.cat(results["chunk_idx"])
     results["attention_mask"] = pad_sequence(
-        [torch.ones_like(p) for p in results["segment_token_idx"]],
+        [torch.ones_like(p) for p in results["chunk_token_idx"]],
         batch_first=True,
         padding_value=0,
     ).to(input_ids.device)
-    results["segment_token_idx"] = pad_sequence(
-        results["segment_token_idx"], batch_first=True, padding_value=0
+    results["chunk_token_idx"] = pad_sequence(
+        results["chunk_token_idx"], batch_first=True, padding_value=0
     ).to(input_ids.device)
-    results["segment_token_ids"] = pad_sequence(
-        results["segment_token_ids"], batch_first=True, padding_value=pad_token_id
+    results["chunk_token_ids"] = pad_sequence(
+        results["chunk_token_ids"], batch_first=True, padding_value=pad_token_id
     ).to(input_ids.device)
     results["sentence_ids"] = pad_sequence(
         results["sentence_ids"], batch_first=True, padding_value=-1
     ).to(input_ids.device)
     assert (
-        results["segment_token_idx"].size(0)
-        == results["segment_token_ids"].size(0)
+        results["chunk_token_idx"].size(0)
+        == results["chunk_token_ids"].size(0)
         == results["sentence_ids"].size(0)
-        == results["segment_size"].size(0)
+        == results["chunk_size"].size(0)
         == results["sequence_idx"].size(0)
-        == results["segment_idx"].size(0)
+        == results["chunk_idx"].size(0)
     )
     return results
 
 
-def _compute_segment_embeds_slow(
+def _compute_chunk_embeds_slow(
     input_ids: torch.Tensor,
     token_embeds: torch.Tensor,
     sent_boundary_idx: list[torch.Tensor] | torch.Tensor,
     sequence_idx: torch.Tensor,
     tokenizer,
-    segment_sizes: int | list | tuple = 2,
+    chunk_sizes: int | list | tuple = 2,
     overlap: int | float | list | dict = 0.5,
 ) -> dict[str, torch.Tensor]:
     """
@@ -592,7 +592,7 @@ def _compute_segment_embeds_slow(
         Tensor containing sequence indices.
     tokenizer : object
         Tokenizer object used to identify special tokens.
-    segment_sizes : int or list or tuple, optional
+    chunk_sizes : int or list or tuple, optional
         Size(s) of the segments to be considered (in sentences). Default is 2.
     overlap : int or float or list or dict, optional
         Overlap between segments. Default is 0.5.
@@ -602,14 +602,14 @@ def _compute_segment_embeds_slow(
     dict[str, torch.Tensor]
         Dictionary containing the following keys:
         - "sequence_idx": Tensor of sequence indices.
-        - "segment_token_ids": Tensor of segment token IDs.
-        - "segment_size": Tensor of segment sizes.
-        - "segment_embeds": Tensor of segment embeddings.
+        - "chunk_token_ids": Tensor of segment token IDs.
+        - "chunk_size": Tensor of segment sizes.
+        - "chunk_embeds": Tensor of segment embeddings.
     """
-    segment_data = get_segment_idx(
+    chunk_data = get_chunk_idx(
         input_ids,
         sent_boundary_idx,
-        segment_sizes=segment_sizes,
+        chunk_sizes=chunk_sizes,
         overlap=overlap,
         sequence_idx=sequence_idx,
     )
@@ -620,37 +620,37 @@ def _compute_segment_embeds_slow(
         invert=True,
     ).to(torch.uint8)
     results = {
-        "sequence_idx": segment_data["sequence_idx"],
-        "segment_token_ids": segment_data["segment_token_ids"],
-        "segment_size": segment_data["segment_size"],
-        "segment_embeds": [],
+        "sequence_idx": chunk_data["sequence_idx"],
+        "chunk_token_ids": chunk_data["chunk_token_ids"],
+        "chunk_size": chunk_data["chunk_size"],
+        "chunk_embeds": [],
     }
     masked_token_embeds = token_embeds * special_tokens_mask.unsqueeze(-1)
     for seq_idx, segment_token_idx in zip(
-        segment_data["sequence_idx"], segment_data["segment_token_idx"], strict=False
+        chunk_data["sequence_idx"], chunk_data["chunk_token_idx"], strict=False
     ):
         divisor = special_tokens_mask[seq_idx, segment_token_idx].sum().clamp(min=1)
         embed = masked_token_embeds[seq_idx, segment_token_idx].sum(dim=0) / divisor
-        results["segment_embeds"].append(embed)
+        results["chunk_embeds"].append(embed)
 
-    results["segment_embeds"] = torch.vstack(results["segment_embeds"])
+    results["chunk_embeds"] = torch.vstack(results["chunk_embeds"])
     assert (
-        len(results["segment_token_ids"])
-        == results["segment_embeds"].size(0)
+        len(results["chunk_token_ids"])
+        == results["chunk_embeds"].size(0)
         == results["sequence_idx"].numel()
-        == results["segment_size"].numel()
+        == results["chunk_size"].numel()
     )
     return results
 
 
 @torch.no_grad()
-def _compute_segment_embeds(
+def _compute_chunk_embeds(
     input_ids: torch.Tensor,
     token_embeds: torch.Tensor,
     sentence_ids: torch.Tensor,
     sequence_idx: torch.Tensor,
     tokenizer,
-    segment_sizes: int | list | tuple = 2,
+    chunk_sizes: int | list | tuple = 2,
     overlap: int | float | list | dict = 0.5,
 ) -> dict[str, torch.Tensor]:
     """
@@ -668,7 +668,7 @@ def _compute_segment_embeds(
         Tensor containing sequence indices.
     tokenizer : PreTrainedTokenizer
         Tokenizer used to process the input text.
-    segment_sizes : int or list or tuple, optional
+    chunk_sizes : int or list or tuple, optional
         Number of sentences per segment, by default 2.
     overlap : int or float or list or dict, optional
         Overlap between segments (number or fraction of sentences),
@@ -678,15 +678,15 @@ def _compute_segment_embeds(
     dict[str, torch.Tensor]
         Dictionary containing the following keys:
         - "sequence_idx": Tensor of sequence indices for each segment.
-        - "segment_token_ids": Tensor of segment token IDs.
-        - "segment_size": Tensor of segment sizes.
-        - "segment_embeds": Tensor of computed segment embeddings.
+        - "chunk_token_ids": Tensor of segment token IDs.
+        - "chunk_size": Tensor of segment sizes.
+        - "chunk_embeds": Tensor of computed segment embeddings.
     """
     # Get the segment grouping information
-    segment_data = get_segment_idx(
+    chunk_data = get_chunk_idx(
         input_ids,
         sentence_ids,
-        segment_sizes=segment_sizes,
+        chunk_sizes=chunk_sizes,
         overlap=overlap,
         sequence_idx=sequence_idx,
         pad_token_id=tokenizer.pad_token_id,
@@ -694,7 +694,7 @@ def _compute_segment_embeds(
 
     # Compute the mask for non-special tokens
     valid_token_mask = torch.isin(
-        segment_data["segment_token_ids"],
+        chunk_data["chunk_token_ids"],
         torch.tensor(tokenizer.all_special_ids, device=input_ids.device),
         invert=True,
     ).float()
@@ -715,15 +715,15 @@ def _compute_segment_embeds(
     # NOT sorted order. token_embeds[i] contains embeddings for sequence_idx[i].
     sequence_to_batch_pos = {seq.item(): idx for idx, seq in enumerate(sequence_idx)}
     batch_sequence_idx = torch.tensor(
-        [sequence_to_batch_pos[seq.item()] for seq in segment_data["sequence_idx"]],
-        device=segment_data["sequence_idx"].device,
+        [sequence_to_batch_pos[seq.item()] for seq in chunk_data["sequence_idx"]],
+        device=chunk_data["sequence_idx"].device,
     ).unsqueeze(1)
 
-    segment_token_embeds = token_embeds[batch_sequence_idx, segment_data["segment_token_idx"]]
+    chunk_token_embeds = token_embeds[batch_sequence_idx, chunk_data["chunk_token_idx"]]
 
     # Sum the embeddings over the token dimension
     # (taking into account only valid positions)
-    summed_embeds = torch.sum(segment_token_embeds * valid_token_mask.unsqueeze(-1), dim=1)
+    summed_embeds = torch.sum(chunk_token_embeds * valid_token_mask.unsqueeze(-1), dim=1)
 
     # Compute the divisor: sum of mask values, clamp to at least one.
     valid_token_count = valid_token_mask.sum(dim=1).clamp(min=1).unsqueeze(-1)
@@ -731,20 +731,20 @@ def _compute_segment_embeds(
     segment_embeds = summed_embeds / valid_token_count
 
     results = {
-        "sequence_idx": segment_data["sequence_idx"],
-        "segment_idx": segment_data["segment_idx"],
-        "segment_token_ids": segment_data["segment_token_ids"],
-        "sentence_ids": segment_data["sentence_ids"],
-        "segment_size": segment_data["segment_size"],
-        "segment_embeds": segment_embeds,
+        "sequence_idx": chunk_data["sequence_idx"],
+        "chunk_idx": chunk_data["chunk_idx"],
+        "chunk_token_ids": chunk_data["chunk_token_ids"],
+        "sentence_ids": chunk_data["sentence_ids"],
+        "chunk_size": chunk_data["chunk_size"],
+        "chunk_embeds": segment_embeds,
     }
     assert (
-        results["segment_token_ids"].size(0)
+        results["chunk_token_ids"].size(0)
         == results["sentence_ids"].size(0)
-        == results["segment_embeds"].size(0)
+        == results["chunk_embeds"].size(0)
         == results["sequence_idx"].numel()
-        == results["segment_size"].numel()
-        == results["segment_idx"].numel()
+        == results["chunk_size"].numel()
+        == results["chunk_idx"].numel()
     )
     return results
 

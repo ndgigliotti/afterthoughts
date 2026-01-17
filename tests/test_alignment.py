@@ -19,19 +19,19 @@ import numpy as np
 import pytest
 from numpy.linalg import norm
 
-from finephrase import FinePhrase
+from afterthoughts import Encoder
 
 
 @pytest.fixture(scope="module")
 def model():
     """Load model once per test module to avoid repeated downloads."""
-    return FinePhrase(
+    return Encoder(
         "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
         compile=False,
     )
 
 
-def encode_text_as_query(model: FinePhrase, text: str) -> np.ndarray:
+def encode_text_as_query(model: Encoder, text: str) -> np.ndarray:
     """Encode text using the query encoder for comparison."""
     return model.encode_queries([text])[0]
 
@@ -42,7 +42,7 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def get_avg_similarity(
-    model: FinePhrase,
+    model: Encoder,
     query: str,
     embeddings: np.ndarray,
     doc_indices: list[int],
@@ -84,7 +84,7 @@ class TestEmbeddingAlignment:
             "Python is a programming language. It is popular.",
         ]
 
-        df, X = model.encode(docs, segment_sizes=[1, 2], segment_overlap=0)
+        df, X = model.encode(docs, num_sents=[1, 2], chunk_overlap=0)
 
         # ML segments should have higher similarity to "machine learning" than Python segments
         ml_avg, py_avg = get_avg_similarity(
@@ -112,7 +112,7 @@ class TestEmbeddingAlignment:
             "Python is a programming language. It is popular.",
         ]
 
-        df, X = model.encode(docs, segment_sizes=[1, 2], segment_overlap=0)
+        df, X = model.encode(docs, num_sents=[1, 2], chunk_overlap=0)
 
         # Python segments should have higher similarity to "python programming"
         py_avg, ml_avg = get_avg_similarity(
@@ -142,7 +142,7 @@ class TestEmbeddingAlignment:
             "Deep learning uses neural networks. They learn representations.",
         ]
 
-        df, X = model.encode(docs, segment_sizes=[1, 2], segment_overlap=0)
+        df, X = model.encode(docs, num_sents=[1, 2], chunk_overlap=0)
         doc_indices = df["document_idx"].tolist()
 
         # Test each document with a relevant query
@@ -175,7 +175,7 @@ class TestEmbeddingAlignment:
             "Python is a programming language. It is popular.",
         ]
 
-        df, X = model.encode(docs, segment_sizes=[1], segment_overlap=0)
+        df, X = model.encode(docs, num_sents=[1], chunk_overlap=0)
 
         ml_avg, py_avg = get_avg_similarity(
             model,
@@ -189,14 +189,14 @@ class TestEmbeddingAlignment:
             ml_avg > py_avg
         ), f"Single segment size: ML avg={ml_avg:.3f} should be > Python avg={py_avg:.3f}"
 
-    def test_alignment_with_larger_segment_sizes(self, model):
+    def test_alignment_with_larger_num_sents(self, model):
         """Test alignment with larger segment sizes."""
         docs = [
             "Machine learning is AI. It enables automatic learning. Models improve over time. Data is key.",
             "Python is a programming language. It is popular for scripting. Easy to learn. Great community.",
         ]
 
-        df, X = model.encode(docs, segment_sizes=[2, 3], segment_overlap=0)
+        df, X = model.encode(docs, num_sents=[2, 3], chunk_overlap=0)
 
         ml_avg, py_avg = get_avg_similarity(
             model,
@@ -217,7 +217,7 @@ class TestEmbeddingAlignment:
             "Python is a programming language. It is popular. Easy to use.",
         ]
 
-        df, X = model.encode(docs, segment_sizes=[2], segment_overlap=1)
+        df, X = model.encode(docs, num_sents=[2], chunk_overlap=1)
 
         ml_avg, py_avg = get_avg_similarity(
             model,
@@ -239,7 +239,7 @@ class TestEmbeddingAlignment:
             "Birds can fly. They have feathers and wings.",
         ]
 
-        df, X = model.encode(docs, segment_sizes=[1, 2], segment_overlap=0)
+        df, X = model.encode(docs, num_sents=[1, 2], chunk_overlap=0)
 
         # Query for cats should match doc 0
         q_cats = model.encode_queries(["cats furry pets purr"])[0]
@@ -273,7 +273,7 @@ class TestEmbeddingAlignment:
             "Medium length about cats. Cats are pets.",  # Medium
         ]
 
-        df, X = model.encode(docs, segment_sizes=[1, 2], segment_overlap=0)
+        df, X = model.encode(docs, num_sents=[1, 2], chunk_overlap=0)
 
         # Python query should match doc 1
         py_avg, other_avg = get_avg_similarity(
@@ -295,11 +295,11 @@ class TestEmbeddingAlignment:
             "Python is for programming.",
         ]
 
-        df, X = model.encode(docs, segment_sizes=[1], segment_overlap=0)
+        df, X = model.encode(docs, num_sents=[1], chunk_overlap=0)
 
         # For each segment, verify its embedding matches its text better than other segments
         for i in range(len(df)):
-            segment_text = df["segment"][i]
+            segment_text = df["chunk"][i]
             segment_embed = X[i]
 
             # Encode the segment text as a query
@@ -343,10 +343,10 @@ class TestAlignmentWithChunking:
 
         df, X = model.encode(
             docs,
-            segment_sizes=[1, 2],
-            segment_overlap=0,
+            num_sents=[1, 2],
+            chunk_overlap=0,
             max_length=128,  # Force chunking
-            chunk_docs=True,
+            prechunk=True,
         )
 
         # All ML segments (doc 0) should have higher similarity to ML query
@@ -375,10 +375,10 @@ class TestAlignmentWithChunking:
 
         df, X = model.encode(
             docs,
-            segment_sizes=[1],
-            segment_overlap=0,
+            num_sents=[1],
+            chunk_overlap=0,
             max_length=64,  # Force aggressive chunking
-            chunk_docs=True,
+            prechunk=True,
         )
 
         # Count segments per document
@@ -411,7 +411,7 @@ class TestAlignmentEdgeCases:
         """Test alignment with a single document."""
         docs = ["Machine learning is AI. It enables learning."]
 
-        df, X = model.encode(docs, segment_sizes=[1, 2], segment_overlap=0)
+        df, X = model.encode(docs, num_sents=[1, 2], chunk_overlap=0)
 
         # All segments should come from doc 0
         assert all(d == 0 for d in df["document_idx"]), "All segments should be from doc 0"
@@ -428,7 +428,7 @@ class TestAlignmentEdgeCases:
         doc_text = "Machine learning is AI. It enables learning."
         docs = [doc_text, doc_text]
 
-        df, X = model.encode(docs, segment_sizes=[1], segment_overlap=0)
+        df, X = model.encode(docs, num_sents=[1], chunk_overlap=0)
 
         # Get segments from each document, grouped by segment_idx
         doc_0_indices = [i for i, d in enumerate(df["document_idx"]) if d == 0]
@@ -460,7 +460,7 @@ class TestAlignmentEdgeCases:
         ]
 
         docs = [text for _, text in topics]
-        df, X = model.encode(docs, segment_sizes=[1], segment_overlap=0)
+        df, X = model.encode(docs, num_sents=[1], chunk_overlap=0)
 
         # Each topic query should match its corresponding document
         for doc_idx, (topic, _) in enumerate(topics):
@@ -480,10 +480,8 @@ class TestAlignmentEdgeCases:
         ]
 
         # Encode with and without debug mode
-        df_normal, X_normal = model.encode(
-            docs, segment_sizes=[1, 2], segment_overlap=0, debug=False
-        )
-        df_debug, X_debug = model.encode(docs, segment_sizes=[1, 2], segment_overlap=0, debug=True)
+        df_normal, X_normal = model.encode(docs, num_sents=[1, 2], chunk_overlap=0, debug=False)
+        df_debug, X_debug = model.encode(docs, num_sents=[1, 2], chunk_overlap=0, debug=True)
 
         # Embeddings should be identical
         np.testing.assert_array_almost_equal(
@@ -493,10 +491,10 @@ class TestAlignmentEdgeCases:
             err_msg="Debug mode should not affect embeddings",
         )
 
-        # Segments should be identical
+        # Chunks should be identical
         assert (
-            df_normal["segment"].tolist() == df_debug["segment"].tolist()
-        ), "Debug mode should not affect segment order"
+            df_normal["chunk"].tolist() == df_debug["chunk"].tolist()
+        ), "Debug mode should not affect chunk order"
 
 
 class TestBatchReorderingAlignment:
@@ -528,7 +526,7 @@ class TestBatchReorderingAlignment:
         long_doc = "Dogs bark and play. Dogs are loyal companions. Dogs love to fetch balls."
 
         docs = [short_doc, long_doc]
-        df, X = model.encode(docs, segment_sizes=[1], segment_overlap=0)
+        df, X = model.encode(docs, num_sents=[1], chunk_overlap=0)
 
         # Get average embedding per document
         doc_0_embeds = np.array([X[i] for i in range(len(df)) if df["document_idx"][i] == 0])
@@ -567,7 +565,7 @@ class TestBatchReorderingAlignment:
         short_doc = "Cats meow loudly."
 
         docs = [long_doc, short_doc]
-        df, X = model.encode(docs, segment_sizes=[1], segment_overlap=0)
+        df, X = model.encode(docs, num_sents=[1], chunk_overlap=0)
 
         # Get average embedding per document
         doc_0_embeds = np.array([X[i] for i in range(len(df)) if df["document_idx"][i] == 0])
@@ -607,7 +605,7 @@ class TestBatchReorderingAlignment:
             "Birds fly high in the sky. They have colorful feathers and sing songs.",  # Longest - index 3
         ]
 
-        df, _X = model.encode(docs, segment_sizes=[1], segment_overlap=0)
+        df, _X = model.encode(docs, num_sents=[1], chunk_overlap=0)
 
         # Create mapping of expected content per document
         expected_content = {
@@ -620,7 +618,7 @@ class TestBatchReorderingAlignment:
         # Verify each document's segments contain expected content
         for i in range(len(df)):
             doc_idx = df["document_idx"][i]
-            segment = df["segment"][i].lower()
+            segment = df["chunk"][i].lower()
 
             # At least one expected keyword should be in segment
             keywords = expected_content[doc_idx]
@@ -639,11 +637,11 @@ class TestBatchReorderingAlignment:
             "Medieval castles had moats.",  # Very distinct topic
         ]
 
-        df, X = model.encode(docs, segment_sizes=[1], segment_overlap=0)
+        df, X = model.encode(docs, num_sents=[1], chunk_overlap=0)
 
         # For each segment, its text encoded as query should match its embedding best
         for i in range(len(df)):
-            segment_text = df["segment"][i]
+            segment_text = df["chunk"][i]
 
             # Encode this segment's text as a query
             query_embed = encode_text_as_query(model, segment_text)
@@ -690,7 +688,7 @@ class TestBatchReorderingAlignment:
             docs = [topics[i][1] for i in order]
             topic_names = [topics[i][0] for i in order]
 
-            df, X = model.encode(docs, segment_sizes=[1], segment_overlap=0)
+            df, X = model.encode(docs, num_sents=[1], chunk_overlap=0)
 
             # Verify alignment for each document
             for doc_idx, topic_name in enumerate(topic_names):
@@ -773,7 +771,7 @@ class TestBatchReorderingAlignment:
         docs = [d[1] for d in shuffled]
         queries = [d[0] for d in shuffled]  # Use as queries
 
-        df, X = model.encode(docs, segment_sizes=[1], segment_overlap=0)
+        df, X = model.encode(docs, num_sents=[1], chunk_overlap=0)
 
         # For each document, its corresponding query should match it best
         for doc_idx, query in enumerate(queries):
@@ -802,7 +800,7 @@ class TestMultiBatchAlignment:
         """
         Test alignment when documents are split across multiple batches.
 
-        Using a small batch_max_tokens forces multiple batches.
+        Using a small batch_tokens forces multiple batches.
         """
         docs = [
             "Cats are fluffy pets. They purr when happy.",
@@ -813,9 +811,9 @@ class TestMultiBatchAlignment:
 
         df, X = model.encode(
             docs,
-            segment_sizes=[1, 2],
-            segment_overlap=0,
-            batch_max_tokens=64,  # Force small batches
+            num_sents=[1, 2],
+            chunk_overlap=0,
+            batch_tokens=64,  # Force small batches
         )
 
         # Verify alignment for each document
@@ -861,23 +859,23 @@ class TestMultiBatchAlignment:
         # Large batch (likely single batch)
         df_large, X_large = model.encode(
             docs,
-            segment_sizes=[1],
-            segment_overlap=0,
-            batch_max_tokens=4096,
+            num_sents=[1],
+            chunk_overlap=0,
+            batch_tokens=4096,
         )
 
         # Small batch (likely multiple batches)
         df_small, X_small = model.encode(
             docs,
-            segment_sizes=[1],
-            segment_overlap=0,
-            batch_max_tokens=64,
+            num_sents=[1],
+            chunk_overlap=0,
+            batch_tokens=64,
         )
 
-        # Same segments in same order
+        # Same chunks in same order
         assert (
-            df_large["segment"].tolist() == df_small["segment"].tolist()
-        ), "Segments should be identical regardless of batch size"
+            df_large["chunk"].tolist() == df_small["chunk"].tolist()
+        ), "Chunks should be identical regardless of batch size"
 
         # Same document assignments
         assert (

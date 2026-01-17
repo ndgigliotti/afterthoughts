@@ -5,9 +5,9 @@ import pyarrow as pa
 import pytest
 import torch
 
-from finephrase import FinePhrase, FinePhraseLite
-from finephrase.sentence_utils import get_segment_idx
-from finephrase.utils import _build_results_dataframe, move_or_convert_tensors
+from afterthoughts import Encoder, LiteEncoder
+from afterthoughts.chunk import get_chunk_idx
+from afterthoughts.utils import _build_results_dataframe, move_or_convert_tensors
 
 MODEL_NAME = "sentence-transformers/paraphrase-MiniLM-L3-v2"
 
@@ -15,121 +15,121 @@ requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA n
 
 
 @requires_cuda
-def test_finephrase_init():
-    """Test basic FinePhrase initialization."""
+def test_encoder_init():
+    """Test basic Encoder initialization."""
     model_name = MODEL_NAME
     amp = False
     amp_dtype = torch.float16
-    normalize_embeds = True
+    normalize = True
     device = "cuda"
-    num_token_jobs = 8
+    _num_token_jobs = 8
 
-    finephrase = FinePhrase(
+    encoder = Encoder(
         model_name=model_name,
         amp=amp,
         amp_dtype=amp_dtype,
-        normalize_embeds=normalize_embeds,
+        normalize=normalize,
         device=device,
-        num_token_jobs=num_token_jobs,
+        _num_token_jobs=_num_token_jobs,
     )
 
-    assert finephrase.tokenizer is not None
-    assert finephrase.model is not None
-    assert finephrase.amp == amp
-    assert finephrase.amp_dtype == amp_dtype
-    assert finephrase.normalize_embeds == normalize_embeds
-    assert finephrase.device.type == device
-    assert finephrase.num_token_jobs == num_token_jobs
+    assert encoder.tokenizer is not None
+    assert encoder.model is not None
+    assert encoder.amp == amp
+    assert encoder.amp_dtype == amp_dtype
+    assert encoder.normalize == normalize
+    assert encoder.device.type == device
+    assert encoder._num_token_jobs == _num_token_jobs
 
 
 @requires_cuda
-def test_finephrase_lite_init():
-    """Test FinePhraseLite initialization with lossy params."""
+def test_encoder_lite_init():
+    """Test LiteEncoder initialization with lossy params."""
     model_name = MODEL_NAME
     amp = False
     amp_dtype = torch.float16
-    reduce_precision = True
+    half_embeds = True
     truncate_dims = 128
-    normalize_embeds = True
+    normalize = True
     pca = 50
-    pca_fit_batch_count = 1.0
+    pca_early_stop = 1.0
     device = "cuda"
-    num_token_jobs = 8
+    _num_token_jobs = 8
 
-    finephrase = FinePhraseLite(
+    encoder = LiteEncoder(
         model_name=model_name,
         amp=amp,
         amp_dtype=amp_dtype,
-        reduce_precision=reduce_precision,
+        half_embeds=half_embeds,
         truncate_dims=truncate_dims,
-        normalize_embeds=normalize_embeds,
+        normalize=normalize,
         pca=pca,
-        pca_fit_batch_count=pca_fit_batch_count,
+        pca_early_stop=pca_early_stop,
         device=device,
-        num_token_jobs=num_token_jobs,
+        _num_token_jobs=_num_token_jobs,
     )
 
-    assert finephrase.tokenizer is not None
-    assert finephrase.model is not None
-    assert finephrase.amp == amp
-    assert finephrase.amp_dtype == amp_dtype
-    assert finephrase.reduce_precision == reduce_precision
-    assert finephrase.truncate_dims == truncate_dims
-    assert finephrase.normalize_embeds == normalize_embeds
-    assert finephrase.pca == pca
-    assert finephrase.pca_fit_batch_count == pca_fit_batch_count
-    assert finephrase.device.type == device
-    assert finephrase.num_token_jobs == num_token_jobs
+    assert encoder.tokenizer is not None
+    assert encoder.model is not None
+    assert encoder.amp == amp
+    assert encoder.amp_dtype == amp_dtype
+    assert encoder.half_embeds == half_embeds
+    assert encoder.truncate_dims == truncate_dims
+    assert encoder.normalize == normalize
+    assert encoder.pca == pca
+    assert encoder.pca_early_stop == pca_early_stop
+    assert encoder.device.type == device
+    assert encoder._num_token_jobs == _num_token_jobs
 
     # Test invalid truncate_dims and pca combination
     with pytest.raises(ValueError):
-        FinePhraseLite(
+        LiteEncoder(
             model_name=model_name,
             truncate_dims=10,
             pca=50,
         )
 
 
-def test_get_segment_idx_single_size():
+def test_get_chunk_idx_single_size():
     input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
     sentence_ids = torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2, -1]])
-    segment_sizes = 2
+    num_sents = 2
     overlap = 0.5
 
-    result = get_segment_idx(input_ids, sentence_ids, segment_sizes, overlap)
+    result = get_chunk_idx(input_ids, sentence_ids, num_sents, overlap)
 
-    assert "segment_token_idx" in result
-    assert "segment_token_ids" in result
+    assert "chunk_token_idx" in result
+    assert "chunk_token_ids" in result
     assert "sentence_ids" in result
     assert "sequence_idx" in result
-    assert "segment_size" in result
+    assert "chunk_size" in result
 
 
-def test_get_segment_idx_multiple_sizes():
+def test_get_chunk_idx_multiple_sizes():
     input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
     sentence_ids = torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2, -1]])
-    segment_sizes = [1, 2]
+    num_sents = [1, 2]
     overlap = 0.5
 
-    result = get_segment_idx(input_ids, sentence_ids, segment_sizes, overlap)
+    result = get_chunk_idx(input_ids, sentence_ids, num_sents, overlap)
 
-    assert "segment_token_idx" in result
-    assert "segment_token_ids" in result
+    assert "chunk_token_idx" in result
+    assert "chunk_token_ids" in result
     assert "sentence_ids" in result
     assert "sequence_idx" in result
-    assert "segment_size" in result
+    assert "chunk_size" in result
 
 
 def test_move_or_convert_results_to_cpu():
     results = {
-        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
+        "chunk_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
         "sequence_idx": torch.tensor([0, 1]),
-        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]]),
+        "chunk_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]]),
     }
     expected_results = {
-        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
+        "chunk_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
         "sequence_idx": torch.tensor([0, 1]),
-        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]]),
+        "chunk_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]]),
     }
     converted_results = move_or_convert_tensors(results, move_to_cpu=True)
     for key in results:
@@ -138,14 +138,14 @@ def test_move_or_convert_results_to_cpu():
 
 def test_move_or_convert_results_to_numpy():
     results = {
-        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
+        "chunk_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
         "sequence_idx": torch.tensor([0, 1]),
-        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]]),
+        "chunk_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]]),
     }
     expected_results = {
-        "segment_token_ids": np.array([[1, 2, 3], [4, 5, 6]]),
+        "chunk_token_ids": np.array([[1, 2, 3], [4, 5, 6]]),
         "sequence_idx": np.array([0, 1]),
-        "segment_embeds": np.array([[0.1, 0.2], [0.3, 0.4]]),
+        "chunk_embeds": np.array([[0.1, 0.2], [0.3, 0.4]]),
     }
     converted_results = move_or_convert_tensors(results, return_tensors="np", move_to_cpu=True)
     for key in results:
@@ -154,9 +154,9 @@ def test_move_or_convert_results_to_numpy():
 
 def test_move_or_convert_results_invalid_return_tensors():
     results = {
-        "segment_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
+        "chunk_token_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
         "sequence_idx": torch.tensor([0, 1]),
-        "segment_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]]),
+        "chunk_embeds": torch.tensor([[0.1, 0.2], [0.3, 0.4]]),
     }
     with pytest.raises(ValueError):
         move_or_convert_tensors(results, return_tensors="invalid")
@@ -164,30 +164,30 @@ def test_move_or_convert_results_invalid_return_tensors():
 
 @pytest.fixture
 def model():
-    return FinePhrase(
+    return Encoder(
         model_name=MODEL_NAME,
         device="cpu",
         amp=False,
-        num_token_jobs=1,
+        _num_token_jobs=1,
     )
 
 
 @requires_cuda
-def test_finephrase_to_cpu():
+def test_encoder_to_cpu():
     model_name = MODEL_NAME
     device = "cuda"
-    finephrase = FinePhrase(
+    encoder = Encoder(
         model_name=model_name,
         device=device,
     )
-    assert finephrase.device.type == "cuda"
+    assert encoder.device.type == "cuda"
 
-    finephrase.to("cpu")
-    assert finephrase.device.type == "cpu"
+    encoder.to("cpu")
+    assert encoder.device.type == "cpu"
 
 
 @requires_cuda
-def test_finephrase_to_cuda(model):
+def test_encoder_to_cuda(model):
     assert model.device.type == "cpu"
 
     model.to("cuda")
@@ -195,7 +195,7 @@ def test_finephrase_to_cuda(model):
 
 
 @requires_cuda
-def test_finephrase_to_device(model):
+def test_encoder_to_device(model):
     assert model.device.type == "cpu"
 
     model.to(torch.device("cuda"))
@@ -205,41 +205,39 @@ def test_finephrase_to_device(model):
     assert model.device.type == "cpu"
 
 
-def test_finephrase_encode(model):
+def test_encoder_encode(model):
     docs = [
         "This is a test document. Another sentence here.",
         "Another test document. With more sentences.",
     ]
-    df, X = model.encode(docs, segment_sizes=1, max_length=64, batch_max_tokens=256)
+    df, X = model.encode(docs, num_sents=1, max_length=64, batch_tokens=256)
     assert isinstance(df, pd.DataFrame)
     assert isinstance(X, np.ndarray)
     assert len(df) == len(X)
-    assert "segment" in df.columns
-    assert "segment_size" in df.columns
+    assert "chunk" in df.columns
+    assert "chunk_size" in df.columns
 
 
-def test_finephrase_encode_multiple_segment_sizes():
+def test_encoder_encode_multiple_num_sents():
     docs = [
         "This is a test document. Another sentence here.",
         "Another test document. With more sentences.",
     ]
-    finephrase = FinePhrase(
+    encoder = Encoder(
         model_name=MODEL_NAME,
         device="cpu",
         amp=False,
-        num_token_jobs=1,
+        _num_token_jobs=1,
     )
-    segment_sizes = [1, 2]
-    df, X = finephrase.encode(
-        docs, segment_sizes=segment_sizes, max_length=64, batch_max_tokens=256
-    )
+    num_sents = [1, 2]
+    df, X = encoder.encode(docs, num_sents=num_sents, max_length=64, batch_tokens=256)
     assert isinstance(df, pd.DataFrame)
     assert isinstance(X, np.ndarray)
     assert len(df) == len(X)
-    assert all(size in df["segment_size"].unique() for size in segment_sizes)
+    assert all(size in df["chunk_size"].unique() for size in num_sents)
 
 
-def test_finephrase_encode_queries(model):
+def test_encoder_encode_queries(model):
     queries = ["What is the capital of France?", "How to bake a cake?"]
     query_embeds = model.encode_queries(queries, max_length=10, batch_size=1)
 
@@ -247,37 +245,37 @@ def test_finephrase_encode_queries(model):
     assert len(query_embeds) == len(queries)
 
 
-def test_finephrase_lite_reduce_precision_if_needed():
-    model = FinePhraseLite(model_name=MODEL_NAME, device="cpu", reduce_precision=True)
+def test_encoder_lite_half_embeds_if_needed():
+    model = LiteEncoder(model_name=MODEL_NAME, device="cpu", half_embeds=True)
     embeds = torch.randn(10, 10, dtype=torch.float32)
-    reduced_embeds = model.reduce_precision_if_needed(embeds)
+    reduced_embeds = model.half_embeds_if_needed(embeds)
     assert reduced_embeds.dtype == torch.float16
 
-    model.reduce_precision = False
-    non_reduced_embeds = model.reduce_precision_if_needed(embeds)
+    model.half_embeds = False
+    non_reduced_embeds = model.half_embeds_if_needed(embeds)
     assert non_reduced_embeds.dtype == torch.float32
 
 
-def test_finephrase_lite_truncate_dims_if_needed():
-    finephrase = FinePhraseLite(model_name=MODEL_NAME, device="cpu", truncate_dims=5)
+def test_encoder_lite_truncate_dims_if_needed():
+    encoder = LiteEncoder(model_name=MODEL_NAME, device="cpu", truncate_dims=5)
     embeds = torch.randn(10, 10)
-    truncated_embeds = finephrase.truncate_dims_if_needed(embeds)
+    truncated_embeds = encoder.truncate_dims_if_needed(embeds)
     assert truncated_embeds.shape[1] == 5
 
-    finephrase.truncate_dims = None
-    non_truncated_embeds = finephrase.truncate_dims_if_needed(embeds)
+    encoder.truncate_dims = None
+    non_truncated_embeds = encoder.truncate_dims_if_needed(embeds)
     assert non_truncated_embeds.shape[1] == 10
 
 
-def test_finephrase_normalize_if_needed():
-    finephrase = FinePhrase(model_name=MODEL_NAME, device="cpu", normalize_embeds=True)
+def test_encoder_normalize_if_needed():
+    encoder = Encoder(model_name=MODEL_NAME, device="cpu", normalize=True)
     embeds = torch.randn(10, 10)
-    normalized_embeds = finephrase.normalize_if_needed(embeds)
+    normalized_embeds = encoder.normalize_if_needed(embeds)
     norms = torch.norm(normalized_embeds, dim=1)
     assert torch.allclose(norms, torch.ones_like(norms), atol=1e-6)
 
-    finephrase.normalize_embeds = False
-    non_normalized_embeds = finephrase.normalize_if_needed(embeds)
+    encoder.normalize = False
+    non_normalized_embeds = encoder.normalize_if_needed(embeds)
     norms = torch.norm(non_normalized_embeds, dim=1)
     assert not torch.allclose(norms, torch.ones_like(norms), atol=1e-6)
 
@@ -312,9 +310,9 @@ def test_build_results_dataframe(return_frame, convert_to_numpy):
         "sample_idx": torch.tensor([0, 1]),
         "sequence_idx": torch.tensor([0, 1]),
         "batch_idx": torch.tensor([0, 1]),
-        "segment_size": torch.tensor([2, 2]),
-        "segment": ["segment1", "segment2"],
-        "segment_embeds": torch.randn(2, 10),
+        "chunk_size": torch.tensor([2, 2]),
+        "chunk": ["segment1", "segment2"],
+        "chunk_embeds": torch.randn(2, 10),
     }
 
     # Test for invalid return_frame value
@@ -343,9 +341,9 @@ def test_build_results_dataframe_pandas():
         "sample_idx": torch.tensor([0, 1]),
         "sequence_idx": torch.tensor([0, 1]),
         "batch_idx": torch.tensor([0, 1]),
-        "segment_size": torch.tensor([2, 2]),
-        "segment": ["segment1", "segment2"],
-        "segment_embeds": torch.randn(2, 10),
+        "chunk_size": torch.tensor([2, 2]),
+        "chunk": ["segment1", "segment2"],
+        "chunk_embeds": torch.randn(2, 10),
     }
 
     expected_length = len(results["sample_idx"])

@@ -2,7 +2,7 @@ import pytest
 import torch
 from transformers import AutoTokenizer
 
-from finephrase.tokenize import (
+from afterthoughts.tokenize import (
     TokenizedDataset,
     _tokenize_batch,
     dynamic_pad_collate,
