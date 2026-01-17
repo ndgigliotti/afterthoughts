@@ -384,7 +384,7 @@ class _EncoderBase(ABC):
         chunk_overlap: int | float | list | dict = 0.5,
         prechunk: bool = True,
         prechunk_overlap: float | int = 0.5,
-        return_frame: str = "pandas",
+        return_frame: str = "polars",
         as_numpy: bool = True,
         debug: bool = False,
     ):
@@ -544,7 +544,7 @@ class Encoder(_EncoderBase):
         chunk_overlap: int | float | list | dict = 0.5,
         prechunk: bool = True,
         prechunk_overlap: float | int = 0.5,
-        return_frame: str = "pandas",
+        return_frame: str = "polars",
         as_numpy: bool = True,
         debug: bool = False,
     ) -> dict[str, np.ndarray | torch.Tensor]:
@@ -578,7 +578,7 @@ class Encoder(_EncoderBase):
         prechunk_overlap : float or int, optional
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
         return_frame : str, optional
-            The type of DataFrame of segments and indices to return, by default 'pandas'.
+            The type of DataFrame of segments and indices to return, by default 'polars'.
             Options are 'pandas', 'polars', or 'arrow'.
         as_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
@@ -591,6 +591,18 @@ class Encoder(_EncoderBase):
         tuple[pd.DataFrame | pl.DataFrame | pa.Table, np.ndarray | torch.Tensor]
             Tuple containing the DataFrame of segments and the segment embeddings.
         """
+        # Validate return_frame early to fail fast before expensive computation
+        if return_frame == "pandas":
+            try:
+                import pandas  # noqa: F401
+            except ImportError:
+                raise ImportError(
+                    "pandas is required for return_frame='pandas'. "
+                    "Install it with: pip install pandas"
+                ) from None
+        elif return_frame not in ("polars", "arrow"):
+            raise ValueError(f"Invalid value for return_frame: {return_frame}")
+
         inputs = self._tokenize(
             docs,
             max_length=max_length,
@@ -879,7 +891,7 @@ class LiteEncoder(_EncoderBase):
         chunk_overlap: int | float | list | dict = 0.5,
         prechunk: bool = True,
         prechunk_overlap: float | int = 0.5,
-        return_frame: str = "pandas",
+        return_frame: str = "polars",
         as_numpy: bool = True,
         debug: bool = False,
     ) -> dict[str, np.ndarray | torch.Tensor]:
@@ -907,7 +919,7 @@ class LiteEncoder(_EncoderBase):
         prechunk_overlap : float or int, optional
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
         return_frame : str, optional
-            The type of DataFrame of segments and indices to return, by default 'pandas'.
+            The type of DataFrame of segments and indices to return, by default 'polars'.
             Options are 'pandas', 'polars', or 'arrow'.
         as_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
@@ -920,6 +932,18 @@ class LiteEncoder(_EncoderBase):
         tuple[pd.DataFrame | pl.DataFrame | pa.Table, np.ndarray | torch.Tensor]
             Tuple containing the DataFrame of segments and the segment embeddings.
         """
+        # Validate return_frame early to fail fast before expensive computation
+        if return_frame == "pandas":
+            try:
+                import pandas  # noqa: F401
+            except ImportError:
+                raise ImportError(
+                    "pandas is required for return_frame='pandas'. "
+                    "Install it with: pip install pandas"
+                ) from None
+        elif return_frame not in ("polars", "arrow"):
+            raise ValueError(f"Invalid value for return_frame: {return_frame}")
+
         inputs = self._tokenize(
             docs,
             max_length=max_length,

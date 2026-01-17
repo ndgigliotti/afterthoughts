@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pytest
@@ -211,7 +210,7 @@ def test_encoder_encode(model):
         "Another test document. With more sentences.",
     ]
     df, X = model.encode(docs, num_sents=1, max_length=64, batch_tokens=256)
-    assert isinstance(df, pd.DataFrame)
+    assert isinstance(df, pl.DataFrame)
     assert isinstance(X, np.ndarray)
     assert len(df) == len(X)
     assert "chunk" in df.columns
@@ -231,10 +230,10 @@ def test_encoder_encode_multiple_num_sents():
     )
     num_sents = [1, 2]
     df, X = encoder.encode(docs, num_sents=num_sents, max_length=64, batch_tokens=256)
-    assert isinstance(df, pd.DataFrame)
+    assert isinstance(df, pl.DataFrame)
     assert isinstance(X, np.ndarray)
     assert len(df) == len(X)
-    assert all(size in df["chunk_size"].unique() for size in num_sents)
+    assert all(size in df["chunk_size"].unique().to_list() for size in num_sents)
 
 
 def test_encoder_encode_queries(model):
@@ -283,7 +282,6 @@ def test_encoder_normalize_if_needed():
 @pytest.mark.parametrize(
     "return_frame, convert_to_numpy",
     [
-        ("pandas", True),
         ("polars", True),
         ("arrow", True),
         ("polars", False),
@@ -292,9 +290,7 @@ def test_encoder_normalize_if_needed():
 )
 def test_build_results_dataframe(return_frame, convert_to_numpy):
     # Determine the expected dataframe type based on the return_frame parameter
-    if return_frame == "pandas":
-        expected_df_type = pd.DataFrame
-    elif return_frame == "polars":
+    if return_frame == "polars":
         expected_df_type = pl.DataFrame
     elif return_frame == "arrow":
         expected_df_type = pa.Table

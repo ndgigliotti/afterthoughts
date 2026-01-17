@@ -2,7 +2,6 @@ import os
 import time
 
 import numpy as np
-import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pytest
@@ -47,7 +46,9 @@ def test_get_memory_size():
     assert get_memory_size(pl_series) == pl_series.estimated_size()
     assert get_memory_size(pl_dataframe) == pl_dataframe.estimated_size()
 
-    # Test with Pandas
+
+def test_get_memory_size_pandas():
+    pd = pytest.importorskip("pandas")
     pd_series = pd.Series([1, 2, 3])
     pd_dataframe = pd.DataFrame({"a": [1, 2, 3]})
     assert get_memory_size(pd_series) == pd_series.memory_usage(index=True, deep=True)
@@ -68,12 +69,6 @@ def test_get_memory_report():
         "pl_series": pl.Series("a", [1, 2, 3]),
         "pl_dataframe": pl.DataFrame({"a": [1, 2, 3]}),
     }
-    results.update(
-        {
-            "pd_series": pd.Series([1, 2, 3]),
-            "pd_dataframe": pd.DataFrame({"a": [1, 2, 3]}),
-        }
-    )
     report = get_memory_report(results)
     assert "pa_array" in report
     assert "np_array" in report
@@ -81,8 +76,18 @@ def test_get_memory_report():
     assert "pl_series" in report
     assert "pl_dataframe" in report
     assert "_total_" in report
+
+
+def test_get_memory_report_pandas():
+    pd = pytest.importorskip("pandas")
+    results = {
+        "pd_series": pd.Series([1, 2, 3]),
+        "pd_dataframe": pd.DataFrame({"a": [1, 2, 3]}),
+    }
+    report = get_memory_report(results)
     assert "pd_series" in report
     assert "pd_dataframe" in report
+    assert "_total_" in report
 
 
 def test_normalize_numpy():
