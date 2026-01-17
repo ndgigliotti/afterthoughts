@@ -27,6 +27,7 @@ import numpy as np
 import polars as pl
 import torch
 import torch.nn.functional as F
+from joblib import cpu_count
 
 from afterthoughts.avail import get_pandas
 
@@ -153,7 +154,7 @@ def normalize_num_jobs(num_jobs: int | None) -> int:
     ----------
     num_jobs : int or None
         Number of jobs. If None, 1 is returned. If 0, 1 is returned. If negative,
-        the number of jobs is set to `os.cpu_count() + 1 + num_jobs`. If greater than
+        the number of jobs is set to `cpu_count() + 1 + num_jobs`. If greater than
         the number of CPU cores, a warning is issued and the number of jobs is clipped to
         the number of CPU cores.
 
@@ -163,19 +164,19 @@ def normalize_num_jobs(num_jobs: int | None) -> int:
         Absolute number of jobs.
     """
     true_num_jobs = num_jobs
-    cpu_count = os.cpu_count()
+    num_cpus = cpu_count()
     if num_jobs is None:
         true_num_jobs = 1
     elif num_jobs == 0:
         warnings.warn("`num_jobs` cannot be 0. Setting `num_jobs` to 1.", stacklevel=2)
         true_num_jobs = 1
     elif num_jobs < 0:
-        true_num_jobs = cpu_count + 1 + num_jobs
-    if true_num_jobs > cpu_count:
+        true_num_jobs = num_cpus + 1 + num_jobs
+    if true_num_jobs > num_cpus:
         warnings.warn(
-            f"`num_jobs` ({num_jobs}) exceeds the number of CPU cores ({cpu_count}).", stacklevel=2
+            f"`num_jobs` ({num_jobs}) exceeds the number of CPU cores ({num_cpus}).", stacklevel=2
         )
-        true_num_jobs = min(num_jobs, cpu_count)
+        true_num_jobs = min(num_jobs, num_cpus)
     return true_num_jobs
 
 
