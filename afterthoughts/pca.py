@@ -20,6 +20,7 @@
 # licensed under the Apache 2.0 License.
 
 import logging
+from typing import ClassVar
 
 import torch
 
@@ -187,22 +188,94 @@ class IncrementalPCA:
     def __repr__(self) -> str:
         return f"IncrementalPCA(n_components={self.n_components}, device={self.device})"
 
+    _fitted_attrs: ClassVar[list[str]] = [
+        "n_samples_seen_",
+        "n_components_",
+        "components_",
+        "mean_",
+        "singular_values_",
+        "explained_variance_",
+        "explained_variance_ratio_",
+        "var_",
+        "noise_variance_",
+    ]
+
     def to(self, device: str | torch.device) -> "IncrementalPCA":
         self.device = torch.device(device)
-        fitted_attrs = [
-            "n_samples_seen_",
-            "components_",
-            "mean_",
-            "singular_values_",
-            "explained_variance_",
-            "explained_variance_ratio_",
-            "var_",
-            "noise_variance_",
-        ]
-        for attr in fitted_attrs:
-            if hasattr(self, attr):
-                setattr(self, attr, getattr(self, attr).to(device))
+        for attr in self._fitted_attrs:
+            val = getattr(self, attr, None)
+            if val is not None and isinstance(val, torch.Tensor):
+                setattr(self, attr, val.to(device))
         return self
+
+    def save(self, path: str) -> None:
+        """Save the fitted PCA estimator to a file.
+
+        Parameters
+        ----------
+        path : str
+            Path to save the estimator.
+
+        Raises
+        ------
+        ValueError
+            If the estimator has not been fitted.
+        """
+        if not hasattr(self, "components_"):
+            raise ValueError("Cannot save unfitted estimator. Call fit() first.")
+
+        state = {
+            "config": {
+                "n_components": self.n_components,
+                "whiten": self.whiten,
+                "copy": self.copy,
+                "batch_size": self.batch_size,
+            },
+            "fitted": {
+                attr: getattr(self, attr) for attr in self._fitted_attrs if hasattr(self, attr)
+            },
+        }
+        torch.save(state, path)
+        logger.info(f"Saved IncrementalPCA to {path}")
+
+    @classmethod
+    def load(cls, path: str, device: str | torch.device | None = None) -> "IncrementalPCA":
+        """Load a fitted PCA estimator from a file.
+
+        Parameters
+        ----------
+        path : str
+            Path to the saved estimator.
+        device : str or torch.device, optional
+            Device to load the tensors to. If None, uses the device from the saved state.
+
+        Returns
+        -------
+        IncrementalPCA
+            Loaded estimator.
+        """
+        state = torch.load(path, weights_only=False)
+        config = state["config"]
+
+        # Use provided device or default to CPU (saved tensors are on CPU after torch.save)
+        if device is None:
+            device = "cpu"
+
+        instance = cls(
+            n_components=config["n_components"],
+            whiten=config["whiten"],
+            copy=config["copy"],
+            batch_size=config["batch_size"],
+            device=device,
+        )
+
+        for attr, val in state["fitted"].items():
+            if isinstance(val, torch.Tensor):
+                val = val.to(device)
+            setattr(instance, attr, val)
+
+        logger.info(f"Loaded IncrementalPCA from {path}")
+        return instance
 
     @torch.no_grad()
     def get_covariance(self) -> torch.Tensor:
