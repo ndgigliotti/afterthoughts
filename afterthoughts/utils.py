@@ -19,6 +19,7 @@ import os
 import time
 import warnings
 from collections.abc import Callable
+from contextlib import contextmanager
 from functools import singledispatch
 from operator import itemgetter
 
@@ -26,6 +27,8 @@ import numpy as np
 import polars as pl
 import torch
 import torch.nn.functional as F
+
+from afterthoughts.avail import get_pandas
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +73,24 @@ def configure_logging(
         handlers.append(logging.FileHandler(log_file, mode=file_mode))
 
     logging.basicConfig(level=level, format=format, datefmt=datefmt, handlers=handlers)
+
+
+@contextmanager
+def disable_tokenizer_parallelism():
+    """Context manager to temporarily disable HuggingFace tokenizer parallelism.
+
+    This is necessary when using external parallelization (joblib, multiprocessing)
+    to avoid nested parallelism issues with the Rust-based tokenizers.
+    """
+    old_value = os.environ.get("TOKENIZERS_PARALLELISM")
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    try:
+        yield
+    finally:
+        if old_value is None:
+            os.environ.pop("TOKENIZERS_PARALLELISM", None)
+        else:
+            os.environ["TOKENIZERS_PARALLELISM"] = old_value
 
 
 def get_overlap_count(
@@ -212,18 +233,13 @@ def get_memory_size(
         return a.element_size() * a.numel()
     elif isinstance(a, (pl.Series, pl.DataFrame)):
         return a.estimated_size()
-    else:
-        # Check for pandas types (optional dependency)
-        try:
-            import pandas as pd
-
-            if isinstance(a, pd.Series):
-                return a.memory_usage(index=True, deep=True)
-            elif isinstance(a, pd.DataFrame):
-                return a.memory_usage(index=True, deep=True).sum()
-        except ImportError:
-            pass
-        raise TypeError(f"Invalid input type {type(a).__name__}.")
+    pd = get_pandas()
+    if pd is not None:
+        if isinstance(a, pd.Series):
+            return a.memory_usage(index=True, deep=True)
+        elif isinstance(a, pd.DataFrame):
+            return a.memory_usage(index=True, deep=True).sum()
+    raise TypeError(f"Invalid input type {type(a).__name__}.")
 
 
 def format_memory_size(n_bytes: int) -> str:
@@ -276,12 +292,9 @@ def get_memory_report(
             pl.DataFrame,
         )
         # Add pandas types if available (optional dependency)
-        try:
-            import pandas as pd
-
+        pd = get_pandas()
+        if pd is not None:
             valid_types = valid_types + (pd.Series, pd.DataFrame)
-        except ImportError:
-            pass
         if not isinstance(arr, valid_types):
             warnings.warn(f"Encountered invalid input type {type(arr).__name__}.", stacklevel=2)
         else:

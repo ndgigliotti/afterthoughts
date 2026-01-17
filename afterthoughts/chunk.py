@@ -22,6 +22,7 @@ from joblib import Parallel, delayed
 from torch.nn.utils.rnn import pad_sequence
 from tqdm.auto import tqdm
 
+from afterthoughts.avail import require_nltk, require_syntok
 from afterthoughts.tokenize import TokenizedDataset, get_max_length, pad, tokenize_docs
 from afterthoughts.utils import get_overlap_count
 
@@ -41,9 +42,13 @@ def get_sentence_offsets_syntok(text: str) -> torch.Tensor:
     -------
     torch.Tensor
         A tensor containing tuples of start and end offsets for each sentence in the text.
-    """
-    from syntok.segmenter import analyze
 
+    Raises
+    ------
+    ImportError
+        If syntok is not installed.
+    """
+    analyze = require_syntok()
     if len(text) == 0:
         offsets = torch.tensor([]).reshape(0, 2)
     else:
@@ -67,16 +72,10 @@ def get_sentence_offsets_nltk(text: str) -> torch.Tensor:
 
     Raises
     ------
-    LookupError
-        If the NLTK 'punkt' tokenizer models are not found and cannot be downloaded.
+    ImportError
+        If NLTK is not installed.
     """
-    import nltk
-
-    # Check if punkt is installed
-    try:
-        nltk.data.find("tokenizers/punkt")
-    except LookupError:
-        nltk.download("punkt")
+    nltk = require_nltk()
     if len(text) == 0:
         offsets = torch.tensor([]).reshape(0, 2)
     else:
@@ -622,11 +621,11 @@ def _compute_chunk_embeds_slow(
         "chunk_embeds": [],
     }
     masked_token_embeds = token_embeds * special_tokens_mask.unsqueeze(-1)
-    for seq_idx, segment_token_idx in zip(
+    for seq_idx, chunk_token_idx in zip(
         chunk_data["sequence_idx"], chunk_data["chunk_token_idx"], strict=False
     ):
-        divisor = special_tokens_mask[seq_idx, segment_token_idx].sum().clamp(min=1)
-        embed = masked_token_embeds[seq_idx, segment_token_idx].sum(dim=0) / divisor
+        divisor = special_tokens_mask[seq_idx, chunk_token_idx].sum().clamp(min=1)
+        embed = masked_token_embeds[seq_idx, chunk_token_idx].sum(dim=0) / divisor
         results["chunk_embeds"].append(embed)
 
     results["chunk_embeds"] = torch.vstack(results["chunk_embeds"])
@@ -697,14 +696,14 @@ def _compute_chunk_embeds(
 
     # -----------------------------------------------------------
     # Use advanced, vectorized indexing to select tokens
-    # corresponding to each segment.
+    # corresponding to each chunk.
     #
     # token_embeds:         [batch, tokens, embed_dim]
-    # batch_sequence_idx:  [num_segments, 1]
-    # segment_token_idx:    [num_segments, max_segment_len]
+    # batch_sequence_idx:  [num_chunks, 1]
+    # chunk_token_idx:    [num_chunks, max_chunk_len]
     #
     # The resulting tensor will have shape:
-    # [num_segments, max_segment_len, embed_dim]
+    # [num_chunks, max_chunk_len, embed_dim]
     # -----------------------------------------------------------
     # Create a mapping from original sequence indices to their batch positions.
     # IMPORTANT: We must use the order that sequences appear in the input batch,
@@ -724,7 +723,7 @@ def _compute_chunk_embeds(
     # Compute the divisor: sum of mask values, clamp to at least one.
     valid_token_count = valid_token_mask.sum(dim=1).clamp(min=1).unsqueeze(-1)
 
-    segment_embeds = summed_embeds / valid_token_count
+    chunk_embeds = summed_embeds / valid_token_count
 
     results = {
         "sequence_idx": chunk_data["sequence_idx"],
@@ -732,7 +731,7 @@ def _compute_chunk_embeds(
         "chunk_token_ids": chunk_data["chunk_token_ids"],
         "sentence_ids": chunk_data["sentence_ids"],
         "chunk_size": chunk_data["chunk_size"],
-        "chunk_embeds": segment_embeds,
+        "chunk_embeds": chunk_embeds,
     }
     assert (
         results["chunk_token_ids"].size(0)

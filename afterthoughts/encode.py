@@ -12,11 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Encoder is a library for extracting sentence-segment embeddings using transformer models."""
+"""Encoder is a library for extracting sentence-chunk embeddings using transformer models."""
 
 import logging
 import math
-import os
 import warnings
 from abc import ABC, abstractmethod
 from functools import partial
@@ -29,6 +28,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import AutoModel, AutoTokenizer
 
+from afterthoughts.avail import require_pandas
 from afterthoughts.chunk import (
     _compute_chunk_embeds,
     tokenize_with_sentence_boundaries,
@@ -41,6 +41,7 @@ from afterthoughts.tokenize import (
     dynamic_pad_collate,
 )
 from afterthoughts.utils import (
+    disable_tokenizer_parallelism,
     move_or_convert_tensors,
     normalize,
     normalize_num_jobs,
@@ -204,24 +205,23 @@ class _EncoderBase(ABC):
             embeds = normalize(embeds, dim=dim)
         return embeds
 
-    def _decode_segments(
-        self, segment_token_ids: list[torch.Tensor], show_progress: bool = True
+    def _decode_chunks(
+        self, chunk_token_ids: list[torch.Tensor], show_progress: bool = True
     ) -> pl.Series:
-        """Decode the segment token IDs into human-readable segments.
+        """Decode the chunk token IDs into human-readable chunks.
 
         Parameters
         ----------
-        segment_token_ids : list[torch.Tensor]
-            List of segment token IDs to decode.
+        chunk_token_ids : list[torch.Tensor]
+            List of chunk token IDs to decode.
         show_progress : bool, optional
             Show progress bar during decoding, by default True.
 
         Returns
         -------
         pl.Series
-            Polars Series containing the decoded segments.
+            Polars Series containing the decoded chunks.
         """
-        os.environ["TOKENIZERS_PARALLELISM"] = "false"
         _decode = delayed(
             partial(
                 self.tokenizer.batch_decode,
@@ -229,14 +229,15 @@ class _EncoderBase(ABC):
                 clean_up_tokenization_spaces=True,
             )
         )
-        segments = Parallel(n_jobs=self.__num_token_jobs, prefer="processes")(
-            _decode(ids)
-            for ids in tqdm(segment_token_ids, desc="Detokenizing", disable=not show_progress)
-        )
-        return pl.Series([y for x in segments for y in x])
+        with disable_tokenizer_parallelism():
+            chunks = Parallel(n_jobs=self.__num_token_jobs, prefer="processes")(
+                _decode(ids)
+                for ids in tqdm(chunk_token_ids, desc="Detokenizing", disable=not show_progress)
+            )
+        return pl.Series([y for x in chunks for y in x])
 
     @staticmethod
-    def _build_results_dataframe(
+    def _build_results_df(
         results: dict,
         return_frame: str = "polars",
         as_numpy: bool = True,
@@ -287,13 +288,7 @@ class _EncoderBase(ABC):
         if return_frame == "polars":
             df = pl.DataFrame(df)
         elif return_frame == "pandas":
-            try:
-                import pandas as pd
-            except ImportError:
-                raise ImportError(
-                    "pandas is required for return_frame='pandas'. "
-                    "Install it with: pip install pandas"
-                ) from None
+            pd = require_pandas()
             df = pd.DataFrame(df)
         else:
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
@@ -346,7 +341,6 @@ class _EncoderBase(ABC):
         ValueError
             If `max_length` is not specified and `tokenizer.model_max_length` is None.
         """
-        os.environ["TOKENIZERS_PARALLELISM"] = "false"
         if num_jobs is None:
             num_jobs = self.__num_token_jobs
         inputs = tokenize_with_sentence_boundaries(
@@ -412,7 +406,7 @@ class _EncoderBase(ABC):
                     move_to_cpu=move_results_to_cpu,
                 )
 
-    def _generate_segment_embeds(
+    def _generate_chunk_embeds(
         self,
         loader: DataLoader,
         num_sents: int | list | tuple,
@@ -422,16 +416,16 @@ class _EncoderBase(ABC):
         truncate_dim: int | None = None,
         show_progress: bool = True,
     ):
-        """Obtain the segment embeddings for a list of documents, one batch at at time.
+        """Obtain the chunk embeddings for a list of documents, one batch at at time.
 
         Parameters
         ----------
         loader : DataLoader
             DataLoader containing the tokenized input sequences.
         num_sents : int, list, or tuple
-            Number of sentences per segment.
+            Number of sentences per chunk.
         chunk_overlap : int, float, list, or dict
-            Overlap between segments (in sentences).
+            Overlap between chunks (in sentences).
         move_results_to_cpu : bool, optional
             Move results to CPU after processing, by default False.
         return_tensors : str, optional
@@ -481,7 +475,7 @@ class _EncoderBase(ABC):
         return_text: bool = True,
         show_progress: bool = True,
     ):
-        """Obtain the segments and segment embeddings from a list of documents."""
+        """Obtain the chunks and chunk embeddings from a list of documents."""
         pass
 
     def _postprocess_query_embeds(self, mean_tokens: torch.Tensor) -> torch.Tensor:
@@ -498,7 +492,7 @@ class _EncoderBase(ABC):
         """Obtain the mean-tokens embeddings for a list of query strings.
 
         This is a convenient method for embedding query strings into the same space
-        as the segments extracted from documents. It is mainly useful for doing semantic
+        as the chunks extracted from documents. It is mainly useful for doing semantic
         search.
 
         Parameters
@@ -562,9 +556,9 @@ class _EncoderBase(ABC):
 
 
 class Encoder(_EncoderBase):
-    """Simple Encoder model for generating sentence-segment embeddings.
+    """Simple Encoder model for generating sentence-chunk embeddings.
 
-    This class provides a straightforward API for extracting segment embeddings
+    This class provides a straightforward API for extracting chunk embeddings
     from documents. For memory-efficient operations with PCA, precision reduction,
     and dimension truncation, use LiteEncoder instead.
     """
@@ -631,10 +625,10 @@ class Encoder(_EncoderBase):
         return_text: bool = True,
         show_progress: bool = True,
     ) -> dict[str, np.ndarray | torch.Tensor]:
-        """Obtain the segments and segment embeddings from a list of documents.
+        """Obtain the chunks and chunk embeddings from a list of documents.
 
-        This first encodes the input documents, then extracts segment embeddings
-        from the token embeddings. Segments are groups of consecutive sentences.
+        This first encodes the input documents, then extracts chunk embeddings
+        from the token embeddings. Chunks are groups of consecutive sentences.
 
         Parameters
         ----------
@@ -645,21 +639,21 @@ class Encoder(_EncoderBase):
         batch_tokens : int, optional
             Maximum tokens per batch for encoder, by default 16384.
         num_sents : int, list, or tuple, optional
-            Number of sentences per segment, by default 1.
-            For example, if `num_sents` is set to `(1, 2, 3)`, segments
+            Number of sentences per chunk, by default 1.
+            For example, if `num_sents` is set to `(1, 2, 3)`, chunks
             of 1, 2, and 3 consecutive sentences will be extracted.
         chunk_overlap : int, float, list, or dict, optional
-            Overlap between segments (in sentences), by default 0.
-            If a float, it is interpreted as a fraction of the segment size.
+            Overlap between chunks (in sentences), by default 0.
+            If a float, it is interpreted as a fraction of the chunk size.
             If an integer, it is interpreted as the number of sentences to overlap.
-            If a list or tuple, it should contain the overlap for each segment size.
-            If a dictionary, it should map segment sizes to overlaps.
+            If a list or tuple, it should contain the overlap for each chunk size.
+            If a dictionary, it should map chunk sizes to overlaps.
         prechunk : bool, optional
             Enable chunking of documents into overlapping sequences, by default True.
         prechunk_overlap : float or int, optional
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
         return_frame : str, optional
-            The type of DataFrame of segments and indices to return, by default 'polars'.
+            The type of DataFrame of chunks and indices to return, by default 'polars'.
             Options are 'pandas' or 'polars'.
         as_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
@@ -675,17 +669,11 @@ class Encoder(_EncoderBase):
         Returns
         -------
         tuple[pd.DataFrame | pl.DataFrame, np.ndarray | torch.Tensor]
-            Tuple containing the DataFrame of segments and the segment embeddings.
+            Tuple containing the DataFrame of chunks and the chunk embeddings.
         """
         # Validate return_frame early to fail fast before expensive computation
         if return_frame == "pandas":
-            try:
-                import pandas  # noqa: F401
-            except ImportError:
-                raise ImportError(
-                    "pandas is required for return_frame='pandas'. "
-                    "Install it with: pip install pandas"
-                ) from None
+            require_pandas()
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
 
@@ -708,7 +696,7 @@ class Encoder(_EncoderBase):
             ),
             collate_fn=partial(dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id),
         )
-        batches = self._generate_segment_embeds(
+        batches = self._generate_chunk_embeds(
             loader,
             num_sents=num_sents,
             chunk_overlap=chunk_overlap,
@@ -741,9 +729,9 @@ class Encoder(_EncoderBase):
             results["chunk_size"].append(batch["chunk_size"])
             results["chunk_embeds"].append(batch["chunk_embeds"])
 
-        # Decode segments in existing batches
+        # Decode chunks in existing batches
         if return_text:
-            results["chunk"] = self._decode_segments(results.pop("chunk_token_ids"), show_progress)
+            results["chunk"] = self._decode_chunks(results.pop("chunk_token_ids"), show_progress)
         else:
             results.pop("chunk_token_ids")
         # Combine results
@@ -764,7 +752,7 @@ class Encoder(_EncoderBase):
         else:
             results["document_idx"] = results["sequence_idx"]
         results["embed_idx"] = torch.arange(results["chunk_embeds"].shape[0])
-        pdf, vecs = self._build_results_dataframe(
+        pdf, vecs = self._build_results_df(
             results,
             as_numpy=as_numpy,
             return_frame="polars",
@@ -923,29 +911,29 @@ class LiteEncoder(_EncoderBase):
             and self.pca_transform_.n_batches_seen_ >= self.pca_early_stop_
         )
 
-    def update_pca(self, segment_embeds: torch.Tensor) -> None:
-        """Update the PCA transformation with a batch of segment embeddings.
+    def update_pca(self, chunk_embeds: torch.Tensor) -> None:
+        """Update the PCA transformation with a batch of chunk embeddings.
 
         Parameters
         ----------
-        segment_embeds : torch.Tensor
-            Segment embeddings to update the PCA model with.
+        chunk_embeds : torch.Tensor
+            Chunk embeddings to update the PCA model with.
         """
         if not hasattr(self, "pca_transform_"):
             self.pca_transform_ = IncrementalPCA(n_components=self.pca, device=self.device)
-        self.pca_transform_.partial_fit(segment_embeds)
+        self.pca_transform_.partial_fit(chunk_embeds)
         if hasattr(self.pca_transform_, "n_batches_seen_"):
             self.pca_transform_.n_batches_seen_ += 1
         else:
             self.pca_transform_.n_batches_seen_ = 1
 
-    def apply_pca(self, segment_embeds: torch.Tensor) -> torch.Tensor:
+    def apply_pca(self, chunk_embeds: torch.Tensor) -> torch.Tensor:
         """Apply PCA transformation to embeddings.
 
         Parameters
         ----------
-        segment_embeds : torch.Tensor
-            Segment embeddings to apply PCA to.
+        chunk_embeds : torch.Tensor
+            Chunk embeddings to apply PCA to.
 
         Returns
         -------
@@ -956,7 +944,7 @@ class LiteEncoder(_EncoderBase):
             raise AttributeError("PCA must be fitted first.")
         if not self.pca_is_ready:
             raise RuntimeError("PCA has not seen enough batches to be applied yet.")
-        return self.pca_transform_.transform(segment_embeds)
+        return self.pca_transform_.transform(chunk_embeds)
 
     def clear_pca(self) -> None:
         """Clear the fitted PCA transformation."""
@@ -981,10 +969,10 @@ class LiteEncoder(_EncoderBase):
         return_text: bool = True,
         show_progress: bool = True,
     ) -> dict[str, np.ndarray | torch.Tensor]:
-        """Obtain the segments and segment embeddings from a list of documents.
+        """Obtain the chunks and chunk embeddings from a list of documents.
 
-        This first encodes the input documents, then extracts segment embeddings
-        from the token embeddings. Segments are groups of consecutive sentences.
+        This first encodes the input documents, then extracts chunk embeddings
+        from the token embeddings. Chunks are groups of consecutive sentences.
 
         Parameters
         ----------
@@ -995,15 +983,15 @@ class LiteEncoder(_EncoderBase):
         batch_tokens : int, optional
             Maximum tokens per batch for encoder, by default 16384.
         num_sents : int, list, or tuple, optional
-            Number of sentences per segment, by default 1.
+            Number of sentences per chunk, by default 1.
         chunk_overlap : int, float, list, or dict, optional
-            Overlap between segments (in sentences), by default 0.
+            Overlap between chunks (in sentences), by default 0.
         prechunk : bool, optional
             Enable chunking of documents into overlapping sequences, by default True.
         prechunk_overlap : float or int, optional
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
         return_frame : str, optional
-            The type of DataFrame of segments and indices to return, by default 'polars'.
+            The type of DataFrame of chunks and indices to return, by default 'polars'.
             Options are 'pandas' or 'polars'.
         as_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
@@ -1019,17 +1007,11 @@ class LiteEncoder(_EncoderBase):
         Returns
         -------
         tuple[pd.DataFrame | pl.DataFrame, np.ndarray | torch.Tensor]
-            Tuple containing the DataFrame of segments and the segment embeddings.
+            Tuple containing the DataFrame of chunks and the chunk embeddings.
         """
         # Validate return_frame early to fail fast before expensive computation
         if return_frame == "pandas":
-            try:
-                import pandas  # noqa: F401
-            except ImportError:
-                raise ImportError(
-                    "pandas is required for return_frame='pandas'. "
-                    "Install it with: pip install pandas"
-                ) from None
+            require_pandas()
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
 
@@ -1052,7 +1034,7 @@ class LiteEncoder(_EncoderBase):
             ),
             collate_fn=partial(dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id),
         )
-        batches = self._generate_segment_embeds(
+        batches = self._generate_chunk_embeds(
             loader,
             num_sents=num_sents,
             chunk_overlap=chunk_overlap,
@@ -1097,11 +1079,11 @@ class LiteEncoder(_EncoderBase):
             batch = move_or_convert_tensors(batch, return_tensors="pt", move_to_cpu=True)
             results["batch_idx"].append(batch["batch_idx"])
             results["sequence_idx"].append(batch["sequence_idx"])
-            # segment_idx is per-document (resets for each document)
+            # chunk_idx is per-document (resets for each document)
             results["chunk_idx"].append(batch["chunk_idx"])
             if isinstance(batch["chunk_token_ids"], list):
                 results["chunk_token_ids"].extend(batch["chunk_token_ids"])
-            else:  # If segment_token_ids is a tensor, convert to list
+            else:  # If chunk_token_ids is a tensor, convert to list
                 results["chunk_token_ids"].append(batch["chunk_token_ids"])
             results["chunk_size"].append(batch["chunk_size"])
             results["chunk_embeds"].append(batch["chunk_embeds"])
@@ -1116,9 +1098,9 @@ class LiteEncoder(_EncoderBase):
                 self.pca_transform_.to(self.device)  # Move back to device
             else:
                 warnings.warn("PCA did not finish fitting and will not be applied.", stacklevel=2)
-        # Decode segments in existing batches
+        # Decode chunks in existing batches
         if return_text:
-            results["chunk"] = self._decode_segments(results.pop("chunk_token_ids"), show_progress)
+            results["chunk"] = self._decode_chunks(results.pop("chunk_token_ids"), show_progress)
         else:
             results.pop("chunk_token_ids")
         # Combine results
@@ -1141,7 +1123,7 @@ class LiteEncoder(_EncoderBase):
         else:
             results["document_idx"] = results["sequence_idx"]
         results["embed_idx"] = torch.arange(results["chunk_embeds"].shape[0])
-        pdf, vecs = self._build_results_dataframe(
+        pdf, vecs = self._build_results_df(
             results,
             as_numpy=as_numpy,
             return_frame="polars",

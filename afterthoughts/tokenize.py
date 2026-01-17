@@ -1,6 +1,5 @@
 import logging
 import math
-import os
 import random
 import warnings
 from collections.abc import Iterator
@@ -17,7 +16,12 @@ from torch.utils.data import Dataset, Sampler
 from tqdm.auto import tqdm
 from transformers import PreTrainedTokenizerFast
 
-from afterthoughts.utils import get_overlap_count, order_by_indices, round_up_to_power_of_2
+from afterthoughts.utils import (
+    disable_tokenizer_parallelism,
+    get_overlap_count,
+    order_by_indices,
+    round_up_to_power_of_2,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -606,27 +610,26 @@ def tokenize_docs(
         desc="Tokenizing",
         disable=not show_progress,
     )
-    # Disable built-in parallelism in tokenizers
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     # Threading is surprisingly fast because tokenizers are Rust-based and GIL free
     # MP has serialization difficulties and high overhead
-    tok_batches = Parallel(n_jobs=n_jobs, prefer="threads")(
-        delayed(_tokenize_batch)(
-            docs=batch["text"].to_list(),
-            sample_idx=batch["sample_idx"].to_list(),
-            tokenizer=tokenizer,
-            max_length=max_length,
-            padding=False,
-            truncation=truncation,
-            return_overflowing_tokens=prechunk,
-            stride=stride,
-            return_tensors=None,
-            add_special_tokens=add_special_tokens,
-            return_attention_mask=return_attention_mask,
-            return_offsets_mapping=return_offsets_mapping,
+    with disable_tokenizer_parallelism():
+        tok_batches = Parallel(n_jobs=n_jobs, prefer="threads")(
+            delayed(_tokenize_batch)(
+                docs=batch["text"].to_list(),
+                sample_idx=batch["sample_idx"].to_list(),
+                tokenizer=tokenizer,
+                max_length=max_length,
+                padding=False,
+                truncation=truncation,
+                return_overflowing_tokens=prechunk,
+                stride=stride,
+                return_tensors=None,
+                add_special_tokens=add_special_tokens,
+                return_attention_mask=return_attention_mask,
+                return_offsets_mapping=return_offsets_mapping,
+            )
+            for batch in batches
         )
-        for batch in batches
-    )
     # Combine the results into a single dictionary
     combined = {}
     for key, val in tok_batches[0].items():

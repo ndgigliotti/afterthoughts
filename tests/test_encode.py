@@ -307,11 +307,11 @@ def test_build_results_dataframe(return_frame, as_numpy):
     # Test for invalid return_frame value
     if return_frame == "teddies":
         with pytest.raises(ValueError, match="Invalid value for"):
-            _EncoderBase._build_results_dataframe(results, return_frame, as_numpy)
+            _EncoderBase._build_results_df(results, return_frame, as_numpy)
     else:
         # Build the results dataframe and check the types
         expected_length = len(results["sample_idx"])
-        df, embeds = _EncoderBase._build_results_dataframe(results, return_frame, as_numpy)
+        df, embeds = _EncoderBase._build_results_df(results, return_frame, as_numpy)
         assert isinstance(df, expected_df_type)
         assert isinstance(embeds, expected_embeds_type)
         assert len(df) == len(embeds) == expected_length
@@ -336,7 +336,7 @@ def test_build_results_dataframe_pandas():
     }
 
     expected_length = len(results["sample_idx"])
-    df, embeds = _EncoderBase._build_results_dataframe(results, return_frame, as_numpy)
+    df, embeds = _EncoderBase._build_results_df(results, return_frame, as_numpy)
     assert isinstance(df, expected_df_type)
     assert isinstance(embeds, expected_embeds_type)
     assert len(df) == len(embeds) == expected_length
