@@ -23,7 +23,6 @@ from functools import singledispatch
 from operator import itemgetter
 
 import numpy as np
-import pandas as pd
 import polars as pl
 import pyarrow as pa
 import torch
@@ -216,11 +215,17 @@ def get_memory_size(
         return a.element_size() * a.numel()
     elif isinstance(a, (pl.Series, pl.DataFrame)):
         return a.estimated_size()
-    elif isinstance(a, pd.Series):
-        return a.memory_usage(index=True, deep=True)
-    elif isinstance(a, pd.DataFrame):
-        return a.memory_usage(index=True, deep=True).sum()
     else:
+        # Check for pandas types (optional dependency)
+        try:
+            import pandas as pd
+
+            if isinstance(a, pd.Series):
+                return a.memory_usage(index=True, deep=True)
+            elif isinstance(a, pd.DataFrame):
+                return a.memory_usage(index=True, deep=True).sum()
+        except ImportError:
+            pass
         raise TypeError(f"Invalid input type {type(a).__name__}.")
 
 
@@ -267,15 +272,20 @@ def get_memory_report(
     """
     report = {}
     for name, arr in data.items():
-        valid_types = (
+        valid_types: tuple[type, ...] = (
             pa.Array,
             torch.Tensor,
             np.ndarray,
             pl.Series,
             pl.DataFrame,
-            pd.Series,
-            pd.DataFrame,
         )
+        # Add pandas types if available (optional dependency)
+        try:
+            import pandas as pd
+
+            valid_types = valid_types + (pd.Series, pd.DataFrame)
+        except ImportError:
+            pass
         if not isinstance(arr, valid_types):
             warnings.warn(f"Encountered invalid input type {type(arr).__name__}.", stacklevel=2)
         else:
@@ -573,6 +583,12 @@ def _build_results_dataframe(
     if return_frame == "polars":
         df = pl.DataFrame(df)
     elif return_frame == "pandas":
+        try:
+            import pandas as pd
+        except ImportError:
+            raise ImportError(
+                "pandas is required for return_frame='pandas'. Install it with: pip install pandas"
+            ) from None
         df = pd.DataFrame(df)
     elif return_frame == "arrow":
         df = pa.Table.from_pydict(df)

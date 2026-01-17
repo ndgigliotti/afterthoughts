@@ -21,7 +21,6 @@ dependencies = [
     "blingfire",
     "joblib",
     "numpy",
-    "pandas",
     "polars",
     "pyarrow",
     "torch",
@@ -30,6 +29,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+pandas = [
+    "pandas",
+]
 dev = [
     "coverage",  # testing
     "mypy",  # linting
