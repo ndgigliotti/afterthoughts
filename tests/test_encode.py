@@ -179,7 +179,6 @@ def test_encoder_to_cuda():
     encoder = Encoder(
         model_name=MODEL_NAME,
         device="cpu",
-        compile=False,
         _num_token_jobs=1,
     )
     assert encoder.device.type == "cpu"
@@ -193,7 +192,6 @@ def test_encoder_to_device():
     encoder = Encoder(
         model_name=MODEL_NAME,
         device="cpu",
-        compile=False,
         _num_token_jobs=1,
     )
     assert encoder.device.type == "cpu"

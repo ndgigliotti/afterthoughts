@@ -14,7 +14,6 @@ def model():
     return Encoder(
         model_name=MODEL_NAME,
         device="cpu",
-        compile=False,
         _num_token_jobs=1,
     )
 

@@ -70,7 +70,6 @@ class _EncoderBase(ABC):
         amp: bool = False,
         amp_dtype: torch.dtype = torch.float16,
         attn_implementation: str | None = None,
-        compile: bool | str = False,
         normalize: bool = False,
         device: torch.device | str | int = "cuda",
         _num_token_jobs: int | None = -1,
@@ -90,13 +89,6 @@ class _EncoderBase(ABC):
         attn_implementation : str | None, optional
             Attention implementation to use, by default None. If None, the model will use the
             default attention implementation.
-        compile : bool | str, optional
-            Compile the model, by default False. If True, the model will be compiled using
-            torch.compile(mode="reduce-overhead"). If False, the model will not be compiled.
-            You can specify the compilation mode using a string:
-            - "reduce-overhead"
-            - "default"
-            - "max-autotune"
         normalize : bool, optional
             Normalize the embeddings to unit length, by default False.
             This is useful for quick cosine similarity calculations downstream, since
@@ -123,14 +115,6 @@ class _EncoderBase(ABC):
             model_kws["attn_implementation"] = self.attn_implementation
         logger.info("Loading model '%s' on device '%s'", model_name, device)
         self.model = AutoModel.from_pretrained(model_name, **model_kws).eval()
-        self.compile = compile
-        match compile:
-            case True | "reduce-overhead":
-                logger.info("Compiling model with mode='reduce-overhead'")
-                self.model = torch.compile(self.model, mode="reduce-overhead", dynamic=False)
-            case str():
-                logger.info("Compiling model with mode='%s'", compile)
-                self.model = torch.compile(self.model, mode=compile, dynamic=False)
         self.amp = amp
         self.amp_dtype = amp_dtype
         self.normalize = normalize
@@ -506,7 +490,6 @@ class Encoder(_EncoderBase):
         amp: bool = False,
         amp_dtype: torch.dtype = torch.float16,
         attn_implementation: str | None = None,
-        compile: bool | str = False,
         normalize: bool = False,
         device: torch.device | str | int = "cuda",
         _num_token_jobs: int | None = -1,
@@ -526,13 +509,6 @@ class Encoder(_EncoderBase):
         attn_implementation : str | None, optional
             Attention implementation to use, by default None. If None, the model will use the
             default attention implementation.
-        compile : bool | str, optional
-            Compile the model, by default False. If True, the model will be compiled using
-            torch.compile(mode="reduce-overhead"). If False, the model will not be compiled.
-            You can specify the compilation mode using a string:
-            - "reduce-overhead"
-            - "default"
-            - "max-autotune"
         normalize : bool, optional
             Normalize the embeddings to unit length, by default False.
             This is useful for quick cosine similarity calculations downstream, since
@@ -549,7 +525,6 @@ class Encoder(_EncoderBase):
             amp=amp,
             amp_dtype=amp_dtype,
             attn_implementation=attn_implementation,
-            compile=compile,
             normalize=normalize,
             device=device,
             _num_token_jobs=_num_token_jobs,
@@ -746,7 +721,6 @@ class LiteEncoder(_EncoderBase):
         amp: bool = False,
         amp_dtype: torch.dtype = torch.float16,
         attn_implementation: str | None = None,
-        compile: bool | str = False,
         half_embeds: bool = False,
         truncate_dims: int | None = None,
         normalize: bool = False,
@@ -769,8 +743,6 @@ class LiteEncoder(_EncoderBase):
             Data type for automatic mixed precision, by default torch.float16.
         attn_implementation : str | None, optional
             Attention implementation to use, by default None.
-        compile : bool | str, optional
-            Compile the model, by default False.
         half_embeds : bool, optional
             Reduce the final embedding precision to float16, by default False.
         truncate_dims : int, None, optional
@@ -793,7 +765,6 @@ class LiteEncoder(_EncoderBase):
             amp=amp,
             amp_dtype=amp_dtype,
             attn_implementation=attn_implementation,
-            compile=compile,
             normalize=normalize,
             device=device,
             _num_token_jobs=_num_token_jobs,
