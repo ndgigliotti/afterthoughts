@@ -952,6 +952,8 @@ class LiteEncoder(_EncoderBase):
             raise AttributeError("PCA must be fitted first.")
         if not self.pca_is_ready:
             raise RuntimeError("PCA has not seen enough batches to be applied yet.")
+        # Ensure PCA is on the same device as input
+        self.pca_transform_.to(chunk_embeds.device)
         return self.pca_transform_.transform(chunk_embeds)
 
     def clear_pca(self) -> None:
@@ -977,17 +979,11 @@ class LiteEncoder(_EncoderBase):
         if not self.pca_is_ready:
             warnings.warn("PCA did not finish fitting and will not be applied.", stacklevel=3)
             return
-        # Move PCA to CPU since early batches are already on CPU
-        self.pca_transform_.to("cpu")
-        try:
-            for i in range(self._n_pca_fit_batches):
-                batch_embeds = results["chunk_embeds"][i]
-                # Skip if already postprocessed (dimension matches PCA output)
-                if batch_embeds.size(1) != self.pca:
-                    results["chunk_embeds"][i] = self.postprocess(batch_embeds)
-        finally:
-            # Always restore PCA to the working device
-            self.pca_transform_.to(self.device)
+        for i in range(self._n_pca_fit_batches):
+            batch_embeds = results["chunk_embeds"][i]
+            # Skip if already postprocessed (dimension matches PCA output)
+            if batch_embeds.size(1) != self.pca:
+                results["chunk_embeds"][i] = self.postprocess(batch_embeds)
 
     def encode(
         self,
@@ -1170,6 +1166,4 @@ class LiteEncoder(_EncoderBase):
 
     def _postprocess_query_embeds(self, mean_tokens: torch.Tensor) -> torch.Tensor:
         """Apply postprocessing (including PCA if enabled) to query embeddings."""
-        if self.pca_mode:
-            self.pca_transform_.to(self.device)
         return self.postprocess(mean_tokens)
