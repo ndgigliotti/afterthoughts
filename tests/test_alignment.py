@@ -26,7 +26,7 @@ from afterthoughts import Encoder
 def model():
     """Load model once per test module to avoid repeated downloads."""
     return Encoder(
-        "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
+        "sentence-transformers/paraphrase-MiniLM-L3-v2",
         compile=False,
     )
 
