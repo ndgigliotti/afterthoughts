@@ -712,7 +712,6 @@ class Encoder(_EncoderBase):
             "chunk_token_ids": [],
             "chunk_size": [],
             "chunk_embeds": [],
-            "sentence_ids": [],
         }
         for batch in batches:
             # Apply normalization if needed
@@ -871,23 +870,36 @@ class LiteEncoder(_EncoderBase):
             embeds = truncate_dims(embeds, dim=self.truncate_dims)
         return embeds
 
-    def postprocess(self, embeds: np.ndarray) -> np.ndarray:
+    def postprocess(self, embeds: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
         """Apply all postprocessing steps to the embeddings.
 
         The steps are:
-        1. Reduce precision to float16, if enabled.
-        2. Normalize embeddings to unit length, if enabled.
+        1. Apply PCA transformation (if PCA mode is enabled).
+        2. Reduce precision to float16, if enabled.
+        3. Normalize embeddings to unit length, if enabled.
 
         Parameters
         ----------
-        embeds : np.ndarray
+        embeds : torch.Tensor or np.ndarray
             Embeddings to postprocess.
 
         Returns
         -------
-        np.ndarray
+        torch.Tensor or np.ndarray
             Postprocessed embeddings.
+
+        Raises
+        ------
+        RuntimeError
+            If PCA mode is enabled but PCA is not ready.
         """
+        if self.pca_mode:
+            if not self.pca_is_ready:
+                raise RuntimeError(
+                    "Cannot postprocess in PCA mode when PCA is not ready. "
+                    "Fit more batches or disable PCA."
+                )
+            embeds = self.apply_pca(embeds)
         steps = [
             self.half_embeds_if_needed,
             self.normalize_if_needed,
@@ -949,6 +961,33 @@ class LiteEncoder(_EncoderBase):
             if hasattr(self, attr):
                 delattr(self, attr)
         logger.info("PCA cleared.")
+
+    def _postprocess_early_batches(self, results: dict) -> None:
+        """Apply postprocessing to early batches that were used for PCA fitting.
+
+        During the fitting phase, early batches are stored without postprocessing.
+        Once PCA fitting is complete, this method goes back and applies
+        postprocessing (including PCA) to those batches.
+
+        Parameters
+        ----------
+        results : dict
+            Results dictionary containing chunk_embeds list to process in-place.
+        """
+        if not self.pca_is_ready:
+            warnings.warn("PCA did not finish fitting and will not be applied.", stacklevel=3)
+            return
+        # Move PCA to CPU since early batches are already on CPU
+        self.pca_transform_.to("cpu")
+        try:
+            for i in range(self._n_pca_fit_batches):
+                batch_embeds = results["chunk_embeds"][i]
+                # Skip if already postprocessed (dimension matches PCA output)
+                if batch_embeds.size(1) != self.pca:
+                    results["chunk_embeds"][i] = self.postprocess(batch_embeds)
+        finally:
+            # Always restore PCA to the working device
+            self.pca_transform_.to(self.device)
 
     def encode(
         self,
@@ -1058,19 +1097,14 @@ class LiteEncoder(_EncoderBase):
             "chunk_token_ids": [],
             "chunk_size": [],
             "chunk_embeds": [],
-            "sentence_ids": [],
         }
         for batch in batches:
-            if not self.pca_mode:
-                # Postprocess on the fly to potentially conserve memory
-                batch["chunk_embeds"] = self.postprocess(batch["chunk_embeds"])
+            if self.pca_mode and not self.pca_is_ready:
+                # Fitting PCA - don't postprocess yet
+                self.update_pca(batch["chunk_embeds"])
             else:
-                if self.pca_is_ready:
-                    # Apply PCA and postprocess to potentially conserve memory
-                    batch["chunk_embeds"] = self.postprocess(self.apply_pca(batch["chunk_embeds"]))
-                else:
-                    # Update PCA if not ready yet
-                    self.update_pca(batch["chunk_embeds"])
+                # Postprocess (includes PCA if enabled and ready)
+                batch["chunk_embeds"] = self.postprocess(batch["chunk_embeds"])
             # Offload batch to CPU
             batch = move_or_convert_tensors(batch, return_tensors="pt", move_to_cpu=True)
             results["batch_idx"].append(batch["batch_idx"])
@@ -1083,17 +1117,9 @@ class LiteEncoder(_EncoderBase):
                 results["chunk_token_ids"].append(batch["chunk_token_ids"])
             results["chunk_size"].append(batch["chunk_size"])
             results["chunk_embeds"].append(batch["chunk_embeds"])
-        # Process early batches with PCA if necessary
+        # Postprocess early batches that were used for PCA fitting
         if self.pca_mode and not pca_ready_at_start:
-            if self.pca_is_ready:
-                self.pca_transform_.to("cpu")  # Temporarily move to CPU
-                for i in range(self._n_pca_fit_batches):
-                    batch_embeds = results["chunk_embeds"][i]
-                    if batch_embeds.size(1) != self.pca:
-                        results["chunk_embeds"][i] = self.postprocess(self.apply_pca(batch_embeds))
-                self.pca_transform_.to(self.device)  # Move back to device
-            else:
-                warnings.warn("PCA did not finish fitting and will not be applied.", stacklevel=2)
+            self._postprocess_early_batches(results)
         # Decode chunks in existing batches
         if return_text:
             results["chunk"] = self._decode_chunks(results.pop("chunk_token_ids"), show_progress)
@@ -1143,8 +1169,7 @@ class LiteEncoder(_EncoderBase):
         return pdf, vecs
 
     def _postprocess_query_embeds(self, mean_tokens: torch.Tensor) -> torch.Tensor:
-        """Apply PCA (if ready) and postprocessing to query embeddings."""
-        if self.pca_mode and self.pca_is_ready:
+        """Apply postprocessing (including PCA if enabled) to query embeddings."""
+        if self.pca_mode:
             self.pca_transform_.to(self.device)
-            mean_tokens = self.apply_pca(mean_tokens)
         return self.postprocess(mean_tokens)
