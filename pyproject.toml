@@ -13,9 +13,7 @@ authors = [
 maintainers = [
   {name = "Nicholas Gigliotti", email = "ndgigliotti@gmail.com"}
 ]
-classifiers = [
-
-]
+classifiers = []
 license = {text = "Apache-2.0"}
 dependencies = [
     "blingfire",
@@ -33,14 +31,13 @@ pandas = [
 ]
 dev = [
     "coverage",  # testing
-    "mypy",  # linting
     "pre-commit",  # git hooks
+    "pyright",  # type checking
     "pytest",  # testing
     "ruff",  # linting & formatting
 ]
 
 [project.urls]
-
 bugs = "https://github.com/ndgigliotti/finephrase/issues"
 changelog = "https://github.com/ndgigliotti/finephrase/blob/master/changelog.md"
 homepage = "https://github.com/ndgigliotti/finephrase"
@@ -51,24 +48,24 @@ packages = ["afterthoughts"]
 [tool.setuptools.package-data]
 "*" = ["*.*"]
 
+# Pyright
+# -------
 
-
-
-# Mypy
-# ----
-
-[tool.mypy]
-files = "."
-
-# Use strict defaults
-strict = true
-warn_unreachable = true
-warn_no_return = true
-
-[[tool.mypy.overrides]]
-# Don't require test functions to include types
-module = "tests.*"
-ignore_missing_imports = true
+[tool.pyright]
+include = ["afterthoughts"]
+exclude = ["tests", "benchmarks"]
+typeCheckingMode = "basic"
+reportMissingTypeStubs = false
+# Disable checks that are primarily triggered by incorrect transformers/tokenizers stubs
+reportArgumentType = false
+reportReturnType = false
+reportGeneralTypeIssues = false
+reportCallIssue = false
+reportOperatorIssue = false
+reportIndexIssue = false
+reportOptionalMemberAccess = false
+reportOptionalSubscript = false
+reportOptionalIterable = false
 
 [tool.ruff]
 target-version = "py310"

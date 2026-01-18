@@ -52,19 +52,14 @@ Chunk embeddings capture meaning from surrounding context. For example, "the cha
 * **Late chunking implementation**: Embed documents first, then pool into chunks for context-aware embeddings
 * **Flexible chunk configuration**: Customize sentences per chunk and overlap between chunks
 * **Sentence boundary detection**: Choice of BlingFire (default), NLTK, pysbd, or syntok for accurate sentence segmentation
-* **Two encoder classes**: `Encoder` for simple usage, `LiteEncoder` (experimental) for memory-efficient workflows with large datasets
-* **GPU-accelerated PCA**: Incremental PCA for dimensionality reduction on massive embedding sets
 * **Query embedding**: Embed queries in the same space as chunks for semantic search
 * **HuggingFace integration**: Works with any transformer model from the HuggingFace Hub
 * **Automatic mixed precision (AMP)**: Faster inference with reduced memory footprint
 * **Dynamic batching**: Batches by total token count (not sequence count) for optimal GPU utilization
 * **Structured output**: Returns chunks and metadata as Polars/pandas DataFrame for easy manipulation
+* **Memory optimizations**: Optional float16 embedding conversion and dimension truncation for reduced memory
 
 ## Usage Guide
-
-Afterthoughts provides two classes:
-- **`Encoder`**: Simple API for most use cases
-- **`LiteEncoder`** (experimental): Advanced API with memory optimizations (PCA, quantization, dimension truncation), enabling in-memory exploration of large datasets that would otherwise exceed available RAM. Configure options like `amp`, `quantize`, and `pca` based on your hardware and dataset size.
 
 ### Basic Usage
 
@@ -141,98 +136,41 @@ Afterthoughts provides two classes:
     doc_chunks = X[df["sample_idx"] == i]
     ```
 
-### Memory Optimizations with LiteEncoder (Experimental)
+### Memory Optimizations
 
-For advanced users working with large datasets, `LiteEncoder` provides memory-efficient features including PCA, embedding quantization, and dimension truncation. These are "lossy" optimizations that trade some embedding quality for significant memory savings.
+The `Encoder` class supports two memory optimization parameters:
 
-**Important:** `LiteEncoder` is designed to be configured based on your specific hardware and use case. Tune options like `amp` (automatic mixed precision), `quantize`, and `pca` based on your workflow.
+#### Dimension Truncation (`truncate_dims`)
 
-#### Choosing the Right Technique
-
-| Technique | Best For | Notes |
-|-----------|----------|-------|
-| **Truncation** (`truncate_dims`) | Models trained with Matryoshka Representation Learning (MRL) like nomic-embed, jina-v3, OpenAI v3 | Simplest option—no fitting required, just slice the first N dimensions |
-| **PCA** (`pca`) | Older models (sentence-transformers, BERT-based) or when you need aggressive reduction | Learns optimal projection from your data; GPU-accelerated incremental fitting handles large datasets |
-| **Quantization** (`quantize`) | All models; combines with above techniques | float16 (2x) or binary (32x) compression |
-
-These techniques stack: you can use PCA to reduce 768d → 128d, then quantize to float16 for 12x total memory reduction.
-
-#### Using PCA
-
-If you are working with an extremely large dataset (hundreds of thousands of documents, extremely long documents, or extremely fine-grained chunk settings), it may be necessary to use the PCA feature. If PCA is enabled, `LiteEncoder` will incrementally learn a PCA transformation and then, once finished, begin applying it to each batch. The transformation is considered fit when it has seen the specified number (or proportion) of batches. This implementation of PCA harnesses the GPU, so it is fast to train and apply. Using PCA can significantly reduce the memory requirements of the pipeline without sacrificing too much quality or speed. Be sure to set the `pca` parameter to a value that balances memory efficiency and accuracy for your use case. Also be sure to set the `pca_early_stop` parameter to a value that is large enough to learn the transformation. Initialize the model like so:
+For models trained with Matryoshka Representation Learning (MRL) like nomic-embed, jina-v3, or OpenAI v3, you can truncate embeddings to a smaller size without retraining. This is the simplest option—no fitting required, just slice the first N dimensions.
 
 ```python
-import torch
-from afterthoughts import LiteEncoder
+from afterthoughts import Encoder
 
-model = LiteEncoder(
-    "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",  # Lightweight model
-    pca=64,  # 64 components should capture a lot of the variance
-    pca_early_stop=0.33,  # The first 33% of batches will be used to fit PCA
-)
-```
-
-By default, `pca_early_stop` is set to `1.0`, meaning that the entire dataset will be used to fit PCA. This is good if you are not worried about memory usage and just want to apply the transformation after all the batches are finished. However, if you are working with a very large dataset and have limited memory, you can set `pca_early_stop` to a value less than `1.0` to fit PCA on a subset of the batches. This will allow you to start applying the transformation sooner, at the cost of potentially lower quality embeddings.
-
-Also keep in mind that using too small a batch size may cause the PCA transformation to be less effective, as each batch will be less representative of the overall dataset. It is recommended to use a batch size that is large enough to capture the overall distribution of the data. You may also want to shuffle your dataset before passing it in, to increase the representativeness of each batch. Furthermore, keep in mind that what PCA is being updated on are the chunk embeddings, of which there are many per sequence. So if the batch size is set to 128 and there are 100 chunks per sequence, then PCA is being updated on batches of 12,800 chunk embeddings.
-
-If you wish to clear the PCA transformation and start over, you can call the `clear_pca` method:
-
-```python
-model.clear_pca()
-```
-
-This will reset the PCA transformation and let you fit it again.
-
-#### Truncating the Embeddings
-
-If you are working with a very large dataset and have limited memory, you may want to truncate the embeddings to a smaller size. This can be done by setting the `truncate_dims` parameter to a value less than the model's hidden size. For example, if the model's hidden size is 384 and you set `truncate_dims=256`, then the embeddings will be truncated to the first 256 dimensions. This can significantly reduce the memory requirements of the pipeline, but it will also reduce the quality of the embeddings. It is recommended to use this option only if you are working with a very large dataset and have limited memory. Also, PCA generally produces higher quality results and is extremely fast.
-
-```python
-from afterthoughts import LiteEncoder
-
-model = LiteEncoder(
+model = Encoder(
     "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
     truncate_dims=256,  # Truncate the embeddings to 256 dimensions
 )
 ```
 
-#### Embedding Quantization
+Truncation is applied to token embeddings *before* pooling, which saves both memory and compute during inference.
 
-LiteEncoder supports several quantization options to reduce memory footprint via the `quantize` parameter:
+#### Float16 Embeddings (`half_embeds`)
 
-| Option | Compression | Description |
-|--------|-------------|-------------|
-| `"float16"` (default) | 2x | Reduces precision to 16-bit floating point |
-| `"binary"` | 32x | Packed binary (1 bit per dimension) |
-| `None` | 1x | No quantization (full float32) |
-
-**Float16** is the default and provides a good balance of compression and quality:
+Convert chunk embeddings to float16 for 2x memory reduction:
 
 ```python
-from afterthoughts import LiteEncoder
+from afterthoughts import Encoder
 
-model = LiteEncoder(
+model = Encoder(
     "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
-    quantize="float16",  # Default: reduce precision to 16-bit
+    half_embeds=True,  # Convert embeddings to float16
 )
 ```
 
-**Binary** provides maximum compression (32x) by packing 8 dimensions into each byte. Use Hamming distance for similarity search:
-
-```python
-model = LiteEncoder(
-    "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
-    quantize="binary",
-    normalize=False,  # Binary quantization is incompatible with normalization
-)
-```
-
-> Note: `binary` quantization is incompatible with `normalize=True`. Float16 embeddings may be slower for CPU calculations but significantly reduce memory footprint.
+These options can be combined for additional savings.
 
 ### Performance Optimizations
-
-These optimizations work with both `Encoder` and `LiteEncoder`.
 
 #### Using Automatic Mixed Precision (AMP)
 
@@ -271,23 +209,6 @@ model = Encoder("sentence-transformers/multi-qa-MiniLM-L6-cos-v1")
 model.half()  # Convert the model to 16-bit precision
 ```
 
-#### Example High Efficiency Configuration
-
-An example of a highly memory-efficient configuration is to use `LiteEncoder` with AMP, PCA, and quantization. This configuration is ideal for working with large datasets on a machine with limited memory. Here is an example of how to initialize the model with this configuration:
-
-```python
-import torch
-from afterthoughts import LiteEncoder
-
-model = LiteEncoder(
-    "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",  # Lightweight model
-    pca=64,  # Enable PCA with 64 components
-    pca_early_stop=0.33,  # Use the first 33% of batches to fit PCA
-    amp=True,  # Enable automatic mixed precision
-    quantize="float16",  # Reduce the precision of the final embeds to 16-bit
-)
-```
-
 ### Logging
 
 Afterthoughts uses Python's standard logging module for diagnostic output. By default, logging is silent. To enable logging:
@@ -310,7 +231,7 @@ logging.basicConfig()
 ```
 
 **Log levels:**
-- `INFO`: Model loading, compilation, preprocessing time, PCA status
+- `INFO`: Model loading, compilation, preprocessing time
 - `DEBUG`: Batch sizes, token counts, and other diagnostic details
 
 ## Differences from the Late Chunking Paper
@@ -355,7 +276,7 @@ df, X = model.encode(docs, deduplicate=False)
 
 #### Memory Requirements
 
-Since each document can contain many chunks, the memory requirements for this approach can be quite high. Use `LiteEncoder` with PCA and precision reduction for large-scale processing.
+Since each document can contain many chunks, the memory requirements for this approach can be quite high. Use `half_embeds=True` and `truncate_dims` for reduced memory footprint.
 
 #### Sequence Length
 
@@ -365,7 +286,6 @@ Late chunking's contextual benefits are bounded by the model's maximum sequence 
 
 * Add paragraph segmentation
 * Support for additional chunking strategies (e.g., semantic chunking)
-* Persist `LiteEncoder` with its fitted PCA transformation
 * Support instruct embedding models
 
 ## References

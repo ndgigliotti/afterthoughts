@@ -1,4 +1,46 @@
-"""Top-level package for Afterthoughts."""
+"""Afterthoughts: Context-aware sentence-chunk embeddings via late chunking.
+
+This library implements late chunking for extracting sentence-chunk embeddings
+using transformer models. Late chunking processes entire documents through the
+model to capture full context, then extracts embeddings for sentence groups
+(chunks) by mean-pooling token embeddings within sentence boundaries.
+
+Key Features
+------------
+- Context-aware embeddings: Full document context is preserved during encoding
+- Flexible chunking: Configure chunk size (number of sentences) and overlap
+- Sentence boundary detection: Multiple backends (BlingFire, NLTK, pysbd, syntok)
+- Memory efficient: Dynamic batching by token count, optional float16 conversion
+- Matryoshka support: Dimension truncation for MRL-trained models
+- Multiple output formats: Polars or pandas DataFrames with NumPy/PyTorch arrays
+
+Basic Usage
+-----------
+    >>> from afterthoughts import Encoder
+    >>>
+    >>> # Initialize encoder
+    >>> encoder = Encoder("sentence-transformers/all-MiniLM-L6-v2")
+    >>>
+    >>> # Encode documents into sentence chunks
+    >>> docs = ["First sentence. Second sentence.", "Another document."]
+    >>> df, embeddings = encoder.encode(docs, num_sents=1)
+    >>>
+    >>> # Encode queries for semantic search
+    >>> query_embeds = encoder.encode_queries(["search query"])
+
+Main Classes
+------------
+Encoder : Main API for encoding documents and queries into embeddings
+
+Utility Functions
+-----------------
+configure_logging : Configure logging output for the library
+
+See Also
+--------
+The full documentation provides details on chunking strategies, sentence
+tokenizers, and advanced configuration options.
+"""
 
 __author__ = """Nicholas Gigliotti"""
 __email__ = "ndgigliotti@gmail.com"
@@ -18,5 +60,5 @@ __version__ = "0.1.0"
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from afterthoughts.encode import Encoder, LiteEncoder  # noqa
+from afterthoughts.encode import Encoder  # noqa
 from afterthoughts.utils import configure_logging  # noqa
