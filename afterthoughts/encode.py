@@ -41,11 +41,12 @@ from afterthoughts.tokenize import (
     dynamic_pad_collate,
 )
 from afterthoughts.utils import (
+    binary_quantize,
     disable_tokenizer_parallelism,
+    half_embeds,
     move_or_convert_tensors,
     normalize,
     normalize_num_jobs,
-    reduce_precision,
     timer,
     truncate_dims,
 )
@@ -891,6 +892,7 @@ class LiteEncoder(_EncoderBase):
     - PCA dimensionality reduction (GPU-accelerated, incremental fitting)
     - Precision reduction (float32/64 to float16)
     - Dimension truncation
+    - Binary quantization (32x compression)
 
     For simple use cases without these optimizations, use Encoder instead.
     """
@@ -907,6 +909,7 @@ class LiteEncoder(_EncoderBase):
         normalize: bool = False,
         pca: int | None = None,
         pca_early_stop: int | float = 1.0,
+        binary_quantize: bool = False,
         device: torch.device | str | int = "cuda",
         _num_token_jobs: int | None = -1,
     ) -> None:
@@ -935,6 +938,10 @@ class LiteEncoder(_EncoderBase):
         pca_early_stop : int, float, optional
             Number of batches to use for fitting the PCA model, by default 1.0.
             If a float, it is the fraction of the dataset to use.
+        binary_quantize : bool, optional
+            Quantize embeddings to binary (1 bit per dimension), by default False.
+            Returns packed uint8 array where each byte holds 8 dimensions.
+            Provides 32x compression vs float32. Mutually exclusive with half_embeds.
         device : torch.device, str, int, optional
             Device to use for inference, by default "cuda".
         _num_token_jobs : int, None, optional
@@ -954,14 +961,19 @@ class LiteEncoder(_EncoderBase):
         self.truncate_dims = truncate_dims
         self.pca = pca
         self.pca_early_stop = pca_early_stop
+        self.binary_quantize = binary_quantize
 
         if truncate_dims is not None and pca is not None and truncate_dims < pca:
             raise ValueError("`truncate_dims` must be greater than `pca`.")
+        if binary_quantize and half_embeds:
+            raise ValueError("`binary_quantize` and `half_embeds` are mutually exclusive.")
+        if binary_quantize and normalize:
+            raise ValueError("`binary_quantize` and `normalize` are mutually exclusive.")
 
     def half_embeds_if_needed(self, embeds: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
-        """Quantize the embeddings if needed."""
+        """Reduce embedding precision to float16 if enabled."""
         if self.half_embeds:
-            embeds = reduce_precision(embeds)
+            embeds = half_embeds(embeds)
         return embeds
 
     def truncate_dims_if_needed(self, embeds: torch.Tensor | np.ndarray):
@@ -1212,11 +1224,13 @@ class LiteEncoder(_EncoderBase):
         tuple[pd.DataFrame | pl.DataFrame, np.ndarray | torch.Tensor]
             Tuple containing the DataFrame of chunks and the chunk embeddings.
         """
-        # Validate return_frame early to fail fast before expensive computation
+        # Validate arguments early to fail fast before expensive computation
         if return_frame == "pandas":
             require_pandas()
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
+        if self.binary_quantize and not as_numpy:
+            raise ValueError("`binary_quantize=True` requires `as_numpy=True`.")
 
         inputs, sentence_texts = self._tokenize(
             docs,
@@ -1320,8 +1334,51 @@ class LiteEncoder(_EncoderBase):
             df = df.to_pandas()
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
+        # Apply binary quantization (includes packing) for 32x compression
+        if self.binary_quantize:
+            vecs = binary_quantize(vecs)
         return df, vecs
 
     def _postprocess_query_embeds(self, mean_tokens: torch.Tensor) -> torch.Tensor:
         """Apply postprocessing (including PCA if enabled) to query embeddings."""
         return self.postprocess(mean_tokens)
+
+    def encode_queries(
+        self,
+        queries: list[str],
+        max_length: int | None = None,
+        batch_size: int = 32,
+        as_numpy: bool = True,
+    ) -> np.ndarray:
+        """Obtain the mean-tokens embeddings for a list of query strings.
+
+        This is a convenient method for embedding query strings into the same space
+        as the chunks extracted from documents. It is mainly useful for doing semantic
+        search.
+
+        Parameters
+        ----------
+        queries : list[str]
+            List of queries to encode.
+        max_length : int, optional
+            Maximum length of the query sequences, by default None.
+        batch_size : int, optional
+            Batch size for encoding, by default 32.
+        as_numpy : bool, optional
+            Convert the tensors to numpy arrays before returning, by default True.
+
+        Returns
+        -------
+        np.ndarray
+            Mean-token embeddings for each query. If binary_quantize is enabled,
+            returns packed uint8 array.
+        """
+        if self.binary_quantize and not as_numpy:
+            raise ValueError("`binary_quantize=True` requires `as_numpy=True`.")
+        query_embeds = super().encode_queries(
+            queries, max_length=max_length, batch_size=batch_size, as_numpy=as_numpy
+        )
+        # Apply binary quantization (includes packing) for 32x compression
+        if self.binary_quantize:
+            query_embeds = binary_quantize(query_embeds)
+        return query_embeds

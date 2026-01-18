@@ -11,9 +11,9 @@ from afterthoughts.utils import (
     get_memory_report,
     get_memory_size,
     get_torch_dtype,
+    half_embeds,
     normalize,
     normalize_num_jobs,
-    reduce_precision,
     timer,
     truncate_dims,
 )
@@ -104,13 +104,13 @@ def test_get_torch_dtype():
 
 def test_reduce_precision_numpy():
     np_array = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-    np_reduced = reduce_precision(np_array)
+    np_reduced = half_embeds(np_array)
     assert np_reduced.dtype == np.float16
 
 
 def test_reduce_precision_torch():
     torch_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
-    torch_reduced = reduce_precision(torch_tensor)
+    torch_reduced = half_embeds(torch_tensor)
     assert torch_reduced.dtype == torch.float16
 
 

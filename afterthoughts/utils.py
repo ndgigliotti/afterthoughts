@@ -362,7 +362,7 @@ def get_torch_dtype(dtype: str) -> torch.dtype:
 
 
 @singledispatch
-def reduce_precision(a: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
+def half_embeds(a: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
     """Reduce the precision of the input to float16.
 
     If the precision is already float16 or below, the input is returned as is.
@@ -387,7 +387,7 @@ def reduce_precision(a: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
         raise TypeError(f"Invalid input type {type(a).__name__}.")
 
 
-@reduce_precision.register
+@half_embeds.register
 def _(a: torch.Tensor) -> torch.Tensor:
     """Sub-function for reducing the precision of Torch tensors."""
     if a.dtype.is_floating_point and a.element_size() > 2:
@@ -395,7 +395,7 @@ def _(a: torch.Tensor) -> torch.Tensor:
     return a
 
 
-@reduce_precision.register
+@half_embeds.register
 def _(a: np.ndarray) -> np.ndarray:
     """Sub-function for reducing the precision of NumPy arrays."""
     if np.issubdtype(a.dtype, np.floating) and a.dtype.itemsize > 2:
@@ -542,3 +542,39 @@ def order_by_indices(elements: list, indices: list[int]) -> list:
 def round_up_to_power_of_2(x: int) -> int:
     """Round up to the nearest power of 2."""
     return 2 ** math.ceil(math.log2(x))
+
+
+def binary_quantize(embeds: torch.Tensor | np.ndarray, pack: bool = True) -> np.ndarray:
+    """Convert embeddings to packed binary representation.
+
+    Values > 0 become 1, values <= 0 become 0. The result is packed into
+    bits using np.packbits, providing 32x compression vs float32.
+
+    Parameters
+    ----------
+    embeds : torch.Tensor or np.ndarray
+        Embeddings to quantize. Shape (n, d) where d is the embedding dimension.
+    pack : bool, optional
+        Pack bits into bytes for 32x compression, by default True.
+
+    Returns
+    -------
+    np.ndarray
+        Packed binary embeddings as uint8 with shape (n, ceil(d/8)).
+
+    Raises
+    ------
+    TypeError
+        If the input is not a Torch tensor or NumPy array.
+    ValueError
+        If pack is False (unpacked binary is not supported).
+    """
+    if not pack:
+        raise ValueError("pack=False is not supported. Use int8 quantization instead.")
+    if isinstance(embeds, torch.Tensor):
+        binary = (embeds > 0).cpu().numpy().astype(np.uint8)
+    elif isinstance(embeds, np.ndarray):
+        binary = (embeds > 0).astype(np.uint8)
+    else:
+        raise TypeError(f"Invalid input type {type(embeds).__name__}.")
+    return np.packbits(binary, axis=-1)
