@@ -147,6 +147,16 @@ For advanced users working with large datasets, `LiteEncoder` provides memory-ef
 
 **Important:** `LiteEncoder` is designed to be configured based on your specific hardware and use case. Tune options like `amp` (automatic mixed precision), `quantize`, and `pca` based on your workflow.
 
+#### Choosing the Right Technique
+
+| Technique | Best For | Notes |
+|-----------|----------|-------|
+| **Truncation** (`truncate_dims`) | Models trained with Matryoshka Representation Learning (MRL) like nomic-embed, jina-v3, OpenAI v3 | Simplest option—no fitting required, just slice the first N dimensions |
+| **PCA** (`pca`) | Older models (sentence-transformers, BERT-based) or when you need aggressive reduction | Learns optimal projection from your data; GPU-accelerated incremental fitting handles large datasets |
+| **Quantization** (`quantize`) | All models; combines with above techniques | float16 (2x), int8 (4x), or binary (32x) compression |
+
+These techniques stack: you can use PCA to reduce 768d → 128d, then quantize to float16 for 12x total memory reduction.
+
 #### Using PCA
 
 If you are working with an extremely large dataset (hundreds of thousands of documents, extremely long documents, or extremely fine-grained chunk settings), it may be necessary to use the PCA feature. If PCA is enabled, `LiteEncoder` will incrementally learn a PCA transformation and then, once finished, begin applying it to each batch. The transformation is considered fit when it has seen the specified number (or proportion) of batches. This implementation of PCA harnesses the GPU, so it is fast to train and apply. Using PCA can significantly reduce the memory requirements of the pipeline without sacrificing too much quality or speed. Be sure to set the `pca` parameter to a value that balances memory efficiency and accuracy for your use case. Also be sure to set the `pca_early_stop` parameter to a value that is large enough to learn the transformation. Initialize the model like so:
