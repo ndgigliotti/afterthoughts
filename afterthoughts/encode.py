@@ -652,6 +652,9 @@ class _EncoderBase(ABC):
             mean_tokens = self.postprocess(mean_tokens)
             query_embeds.append(mean_tokens.cpu())
         query_embeds = torch.vstack(query_embeds)
+        # Restore original order (TokenizedDataset sorts by token count for efficiency)
+        if inputs.sort_by_token_count:
+            query_embeds = query_embeds[inputs.unsort_idx]
         if as_numpy:
             query_embeds = query_embeds.numpy()
         return query_embeds
