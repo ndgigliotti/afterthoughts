@@ -1607,9 +1607,9 @@ class LiteEncoder(_EncoderBase):
 
         Returns
         -------
-        np.ndarray or BinaryEmbeds
+        np.ndarray
             Mean-token embeddings for each query. If quantize='binary', returns
-            packed BinaryEmbeds.
+            packed uint8 array with shape (n, ceil(d/8)).
         """
         if self.quantize == "binary" and not as_numpy:
             raise ValueError("`quantize='binary'` requires `as_numpy=True`.")

@@ -30,20 +30,8 @@ import torch.nn.functional as F
 from joblib import cpu_count
 
 from afterthoughts.avail import get_pandas
-from afterthoughts.quantize import (
-    BinaryEmbeds,
-    QuantizedEmbeds,
-    binary_quantize,
-)
 
 logger = logging.getLogger(__name__)
-
-# Re-export quantization utilities for backwards compatibility
-__all__ = [
-    "BinaryEmbeds",
-    "QuantizedEmbeds",
-    "binary_quantize",
-]
 
 
 def configure_logging(
@@ -554,3 +542,28 @@ def order_by_indices(elements: list, indices: list[int]) -> list:
 def round_up_to_power_of_2(x: int) -> int:
     """Round up to the nearest power of 2."""
     return 2 ** math.ceil(math.log2(x))
+
+
+def binary_quantize(embeds: torch.Tensor | np.ndarray) -> np.ndarray:
+    """Convert embeddings to packed binary representation.
+
+    Values > 0 become 1, values <= 0 become 0. The result is packed into
+    bits using np.packbits, providing 32x compression vs float32.
+
+    Parameters
+    ----------
+    embeds : torch.Tensor or np.ndarray
+        Embeddings to quantize. Shape (n, d).
+
+    Returns
+    -------
+    np.ndarray
+        Packed binary data with shape (n, ceil(d/8)) and dtype uint8.
+    """
+    if isinstance(embeds, torch.Tensor):
+        binary = (embeds > 0).cpu().numpy().astype(np.uint8)
+    elif isinstance(embeds, np.ndarray):
+        binary = (embeds > 0).astype(np.uint8)
+    else:
+        raise TypeError(f"Invalid input type {type(embeds).__name__}.")
+    return np.packbits(binary, axis=-1)
