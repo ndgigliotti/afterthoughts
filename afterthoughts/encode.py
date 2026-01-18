@@ -993,9 +993,14 @@ class LiteEncoder(_EncoderBase):
                 )
 
     def quantize_if_needed(self, embeds: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
-        """Apply float16 quantization during postprocessing if enabled."""
-        if self.quantize == "float16":
-            embeds = half_embeds(embeds)
+        """Apply quantization if enabled."""
+        match self.quantize:
+            case "float16":
+                embeds = half_embeds(embeds)
+            case "int8":
+                embeds = int8_quantize(embeds)
+            case "binary":
+                embeds = binary_quantize(embeds)
         return embeds
 
     def truncate_dims_if_needed(self, embeds: torch.Tensor | np.ndarray):
@@ -1019,9 +1024,9 @@ class LiteEncoder(_EncoderBase):
         """Apply all postprocessing steps to the embeddings.
 
         The steps are:
-        1. Apply PCA transformation (if PCA mode is enabled).
-        2. Reduce precision to float16, if enabled.
-        3. Normalize embeddings to unit length, if enabled.
+        1. Apply PCA transformation (if enabled).
+        2. Apply quantization (float16, int8, or binary).
+        3. Normalize embeddings to unit length (if enabled, only for float16/None).
 
         Parameters
         ----------
@@ -1356,11 +1361,6 @@ class LiteEncoder(_EncoderBase):
             df = df.to_pandas()
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
-        # Apply int8/binary quantization at the end (fp16 is applied in postprocess)
-        if self.quantize == "binary":
-            vecs = binary_quantize(vecs)
-        elif self.quantize == "int8":
-            vecs = int8_quantize(vecs)
         return df, vecs
 
     def encode_queries(
@@ -1396,12 +1396,6 @@ class LiteEncoder(_EncoderBase):
         """
         if self.quantize == "binary" and not as_numpy:
             raise ValueError("`quantize='binary'` requires `as_numpy=True`.")
-        query_embeds = super().encode_queries(
+        return super().encode_queries(
             queries, max_length=max_length, batch_size=batch_size, as_numpy=as_numpy
         )
-        # Apply int8/binary quantization at the end (fp16 is applied in postprocess)
-        if self.quantize == "binary":
-            query_embeds = binary_quantize(query_embeds)
-        elif self.quantize == "int8":
-            query_embeds = int8_quantize(query_embeds)
-        return query_embeds
