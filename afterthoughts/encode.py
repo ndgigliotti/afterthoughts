@@ -207,6 +207,24 @@ class _EncoderBase(ABC):
             embeds = normalize(embeds, dim=dim)
         return embeds
 
+    def postprocess(self, embeds: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
+        """Apply postprocessing steps to embeddings.
+
+        Base implementation only normalizes if enabled. Subclasses may override
+        to add additional steps (e.g., quantization, PCA).
+
+        Parameters
+        ----------
+        embeds : torch.Tensor or np.ndarray
+            Embeddings to postprocess.
+
+        Returns
+        -------
+        torch.Tensor or np.ndarray
+            Postprocessed embeddings.
+        """
+        return self.normalize_if_needed(embeds)
+
     def _decode_chunks(
         self, chunk_token_ids: list[torch.Tensor], show_progress: bool = True
     ) -> pl.Series:
@@ -566,10 +584,6 @@ class _EncoderBase(ABC):
         """Obtain the chunks and chunk embeddings from a list of documents."""
         pass
 
-    def _postprocess_query_embeds(self, mean_tokens: torch.Tensor) -> torch.Tensor:
-        """Postprocess query embeddings. Override in subclasses for additional processing."""
-        return self.normalize_if_needed(mean_tokens)
-
     def encode_queries(
         self,
         queries: list[str],
@@ -635,7 +649,7 @@ class _EncoderBase(ABC):
             mean_tokens = (token_embeds * valid_token_weight).sum(dim=1) / valid_token_weight.sum(
                 dim=1
             )
-            mean_tokens = self._postprocess_query_embeds(mean_tokens)
+            mean_tokens = self.postprocess(mean_tokens)
             query_embeds.append(mean_tokens.cpu())
         query_embeds = torch.vstack(query_embeds)
         if as_numpy:
@@ -808,8 +822,8 @@ class Encoder(_EncoderBase):
             "chunk_embeds": [],
         }
         for batch in batches:
-            # Apply normalization if needed
-            batch["chunk_embeds"] = self.normalize_if_needed(batch["chunk_embeds"])
+            # Apply postprocessing (normalization in base Encoder)
+            batch["chunk_embeds"] = self.postprocess(batch["chunk_embeds"])
             # Offload batch to CPU
             batch = move_or_convert_tensors(batch, return_tensors="pt", move_to_cpu=True)
             results["batch_idx"].append(batch["batch_idx"])
@@ -1348,10 +1362,6 @@ class LiteEncoder(_EncoderBase):
         elif self.quantize == "int8":
             vecs = int8_quantize(vecs)
         return df, vecs
-
-    def _postprocess_query_embeds(self, mean_tokens: torch.Tensor) -> torch.Tensor:
-        """Apply postprocessing (including PCA if enabled) to query embeddings."""
-        return self.postprocess(mean_tokens)
 
     def encode_queries(
         self,
