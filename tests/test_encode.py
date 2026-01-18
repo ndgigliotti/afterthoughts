@@ -743,3 +743,104 @@ def test_deduplicate_disabled_when_no_prechunk(model):
 
     assert len(df1) == len(df2)
     np.testing.assert_array_almost_equal(emb1, emb2)
+
+
+def test_deduplicate_averaging_correctness():
+    """Verify that deduplication correctly averages embeddings for duplicate chunks."""
+    from afterthoughts.encode import _EncoderBase
+
+    # Create test data with known duplicates
+    # Chunks 0 and 2 are duplicates (same doc, size, sentences)
+    # Chunks 1 and 3 are duplicates (same doc, size, sentences)
+    results = {
+        "document_idx": torch.tensor([0, 0, 0, 0]),
+        "chunk_size": torch.tensor([2, 2, 2, 2]),
+        "chunk_embeds": torch.tensor(
+            [
+                [1.0, 2.0, 3.0],  # chunk 0: sentences 0-1
+                [4.0, 5.0, 6.0],  # chunk 1: sentences 2-3
+                [7.0, 8.0, 9.0],  # chunk 2: sentences 0-1 (duplicate of 0)
+                [10.0, 11.0, 12.0],  # chunk 3: sentences 2-3 (duplicate of 1)
+            ]
+        ),
+        "chunk_sentence_ids": [
+            torch.tensor([0, 0, 1, 1, -1]),  # sentences 0-1
+            torch.tensor([2, 2, 3, 3, -1]),  # sentences 2-3
+            torch.tensor([0, 0, 1, 1, -1]),  # sentences 0-1 (duplicate)
+            torch.tensor([2, 2, 3, 3, -1]),  # sentences 2-3 (duplicate)
+        ],
+        "chunk_idx": torch.tensor([0, 1, 2, 3]),
+        "sequence_idx": torch.tensor([0, 0, 1, 1]),
+        "batch_idx": torch.tensor([0, 0, 0, 0]),
+        "chunk_token_ids": [
+            torch.tensor([1, 2, 3, 4, 0]),
+            torch.tensor([5, 6, 7, 8, 0]),
+            torch.tensor([1, 2, 3, 4, 0]),
+            torch.tensor([5, 6, 7, 8, 0]),
+        ],
+    }
+
+    # Test averaging method
+    dedup_results = _EncoderBase._deduplicate_chunk_embeds(results, method="average")
+
+    # Should have 2 unique chunks
+    assert len(dedup_results["document_idx"]) == 2
+    assert dedup_results["chunk_embeds"].shape[0] == 2
+
+    # Verify averaged embeddings
+    # Chunk 0-1 average: ([1,2,3] + [7,8,9]) / 2 = [4, 5, 6]
+    # Chunk 2-3 average: ([4,5,6] + [10,11,12]) / 2 = [7, 8, 9]
+    expected_embeds = torch.tensor(
+        [
+            [4.0, 5.0, 6.0],  # average of chunks 0 and 2
+            [7.0, 8.0, 9.0],  # average of chunks 1 and 3
+        ]
+    )
+    torch.testing.assert_close(dedup_results["chunk_embeds"], expected_embeds)
+
+    # Verify chunk_idx is reindexed sequentially
+    assert dedup_results["chunk_idx"].tolist() == [0, 1]
+
+
+def test_deduplicate_first_method():
+    """Verify that method='first' keeps first occurrence without averaging."""
+    from afterthoughts.encode import _EncoderBase
+
+    results = {
+        "document_idx": torch.tensor([0, 0, 0]),
+        "chunk_size": torch.tensor([1, 1, 1]),
+        "chunk_embeds": torch.tensor(
+            [
+                [1.0, 2.0],
+                [3.0, 4.0],  # duplicate of chunk 0
+                [5.0, 6.0],
+            ]
+        ),
+        "chunk_sentence_ids": [
+            torch.tensor([0, 0, -1]),
+            torch.tensor([0, 0, -1]),  # same as chunk 0
+            torch.tensor([1, 1, -1]),
+        ],
+        "chunk_idx": torch.tensor([0, 1, 2]),
+        "sequence_idx": torch.tensor([0, 0, 0]),
+        "batch_idx": torch.tensor([0, 0, 0]),
+        "chunk_token_ids": [
+            torch.tensor([1, 2, 0]),
+            torch.tensor([1, 2, 0]),
+            torch.tensor([3, 4, 0]),
+        ],
+    }
+
+    dedup_results = _EncoderBase._deduplicate_chunk_embeds(results, method="first")
+
+    # Should have 2 unique chunks
+    assert len(dedup_results["document_idx"]) == 2
+
+    # Should keep first occurrence, not average
+    expected_embeds = torch.tensor(
+        [
+            [1.0, 2.0],  # first occurrence of sentence 0
+            [5.0, 6.0],  # sentence 1
+        ]
+    )
+    torch.testing.assert_close(dedup_results["chunk_embeds"], expected_embeds)
