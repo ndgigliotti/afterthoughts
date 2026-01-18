@@ -240,6 +240,33 @@ def test_encoder_encode_queries(model):
     assert len(query_embeds) == len(queries)
 
 
+def test_encoder_encode_queries_preserves_order(model):
+    """Test that encode_queries returns embeddings in the original input order.
+
+    This is a regression test for a bug where TokenizedDataset's sorting by
+    token count caused embeddings to be returned in the wrong order.
+    """
+    # Use queries of very different lengths to trigger reordering
+    queries = [
+        "Short query",
+        "This is a much longer query with many more words to ensure different token counts",
+        "Medium length query here",
+    ]
+
+    # Encode all at once
+    batch_embeds = model.encode_queries(queries)
+
+    # Encode individually for comparison
+    individual_embeds = [model.encode_queries([q])[0] for q in queries]
+
+    # Embeddings should match in order
+    for i, (batch_emb, indiv_emb) in enumerate(zip(batch_embeds, individual_embeds, strict=False)):
+        similarity = np.dot(batch_emb, indiv_emb) / (
+            np.linalg.norm(batch_emb) * np.linalg.norm(indiv_emb)
+        )
+        assert similarity > 0.99, f"Query {i} embedding mismatch: similarity={similarity:.4f}"
+
+
 def test_encoder_lite_quantize_if_needed():
     model = LiteEncoder(model_name=MODEL_NAME, device="cpu", quantize="float16")
     embeds = torch.randn(10, 10, dtype=torch.float32)
@@ -462,3 +489,358 @@ def test_encoder_text_reconstruction_fallback(model):
     assert len(df) > 0
     # All chunks should have non-empty text (either reconstructed or decoded fallback)
     assert all(len(chunk) > 0 for chunk in df["chunk"].to_list())
+
+
+# =============================================================================
+# Tests for special token handling (exclude_special_tokens parameter)
+# =============================================================================
+
+
+def test_exclude_special_tokens_option(model):
+    """Setting exclude_special_tokens=True excludes all special tokens."""
+    docs = ["This is a sentence. This is another."]
+    df_exclude, emb_exclude = model.encode(
+        docs,
+        num_sents=1,
+        exclude_special_tokens=True,
+        show_progress=False,
+    )
+
+    # Should produce results
+    assert len(df_exclude) > 0
+    assert emb_exclude.shape[0] == len(df_exclude)
+
+
+def test_include_boundary_special_tokens(model):
+    """exclude_special_tokens=False includes [CLS] in first, [SEP] in last."""
+    docs = ["First sentence. Second sentence. Third sentence."]
+
+    df_exclude, emb_exclude = model.encode(
+        docs,
+        num_sents=1,
+        exclude_special_tokens=True,
+        deduplicate=False,
+        show_progress=False,
+    )
+
+    df_include, emb_include = model.encode(
+        docs,
+        num_sents=1,
+        exclude_special_tokens=False,
+        deduplicate=False,
+        show_progress=False,
+    )
+
+    # Same number of chunks
+    assert len(df_exclude) == len(df_include)
+
+    # But embeddings should differ (because special tokens are included)
+    # The first and last chunk embeddings should differ most
+    first_chunk_diff = np.linalg.norm(emb_exclude[0] - emb_include[0])
+    last_chunk_diff = np.linalg.norm(emb_exclude[-1] - emb_include[-1])
+
+    # First chunk should differ (CLS included vs excluded)
+    assert first_chunk_diff > 0
+
+    # Last chunk should differ (SEP included vs excluded)
+    assert last_chunk_diff > 0
+
+
+def test_single_chunk_includes_both_special_tokens(model):
+    """Single-chunk doc with exclude_special_tokens=False includes both CLS and SEP."""
+    docs = ["Just one sentence."]
+
+    df_exclude, emb_exclude = model.encode(
+        docs,
+        num_sents=1,
+        exclude_special_tokens=True,
+        show_progress=False,
+    )
+
+    df_include, emb_include = model.encode(
+        docs,
+        num_sents=1,
+        exclude_special_tokens=False,
+        show_progress=False,
+    )
+
+    # Both should produce one chunk
+    assert len(df_exclude) == 1
+    assert len(df_include) == 1
+
+    # Embeddings should differ (special tokens now included)
+    diff = np.linalg.norm(emb_exclude[0] - emb_include[0])
+    assert diff > 0
+
+
+def test_encode_queries_special_tokens(model):
+    """Test encode_queries respects exclude_special_tokens parameter."""
+    queries = ["What is machine learning?"]
+
+    emb_exclude = model.encode_queries(queries, exclude_special_tokens=True)
+    emb_include = model.encode_queries(queries, exclude_special_tokens=False)
+
+    # Both should produce embeddings
+    assert emb_exclude.shape == emb_include.shape
+
+    # Embeddings should differ
+    diff = np.linalg.norm(emb_exclude - emb_include)
+    assert diff > 0
+
+
+# =============================================================================
+# Tests for deduplication (deduplicate parameter)
+# =============================================================================
+
+
+def test_deduplicate_averages_overlapping_chunks(model):
+    """Overlapping pre-chunks produce averaged embeddings when deduplicate=True."""
+    # Create a long document that will require pre-chunking
+    sentences = [f"This is sentence number {i}." for i in range(50)]
+    long_doc = " ".join(sentences)
+
+    df_no_dedup, emb_no_dedup = model.encode(
+        [long_doc],
+        num_sents=1,
+        deduplicate=False,
+        max_length=128,  # Force pre-chunking
+        show_progress=False,
+    )
+
+    df_dedup, emb_dedup = model.encode(
+        [long_doc],
+        num_sents=1,
+        deduplicate=True,
+        max_length=128,  # Force pre-chunking
+        show_progress=False,
+    )
+
+    # Without deduplication, there may be more rows due to overlapping chunks
+    # With deduplication, duplicates should be merged
+    # Note: If no duplicates exist, the counts will be equal
+    assert len(df_dedup) <= len(df_no_dedup)
+
+
+def test_no_duplicates_after_dedup(model):
+    """Same (doc, chunk_size, sentences) appears only once after deduplication."""
+    # Create a document that requires pre-chunking with overlap
+    sentences = [f"Sentence {i}." for i in range(40)]
+    long_doc = " ".join(sentences)
+
+    df, emb = model.encode(
+        [long_doc],
+        num_sents=1,
+        deduplicate=True,
+        max_length=128,
+        prechunk_overlap=0.5,
+        show_progress=False,
+    )
+
+    # Check that each (document_idx, chunk_size, chunk text) combination is unique
+    # Using chunk text as proxy for sentence_ids
+    if "chunk" in df.columns:
+        unique_chunks = df.select(["document_idx", "chunk_size", "chunk"]).unique()
+        assert len(unique_chunks) == len(df)
+
+
+def test_short_docs_unaffected_by_dedup(model):
+    """Documents not requiring pre-chunking are unchanged by deduplication."""
+    short_docs = [
+        "Short doc one. Two sentences.",
+        "Short doc two. Also two sentences.",
+    ]
+
+    df_no_dedup, emb_no_dedup = model.encode(
+        short_docs,
+        num_sents=1,
+        deduplicate=False,
+        show_progress=False,
+    )
+
+    df_dedup, emb_dedup = model.encode(
+        short_docs,
+        num_sents=1,
+        deduplicate=True,
+        show_progress=False,
+    )
+
+    # Should have same number of chunks (no duplicates to remove)
+    assert len(df_dedup) == len(df_no_dedup)
+
+    # Embeddings should be identical
+    np.testing.assert_array_almost_equal(emb_dedup, emb_no_dedup)
+
+
+def test_deduplicate_preserves_metadata(model):
+    """Deduplication preserves chunk metadata correctly."""
+    sentences = [f"Sentence {i}." for i in range(30)]
+    doc = " ".join(sentences)
+
+    df, emb = model.encode(
+        [doc],
+        num_sents=2,
+        deduplicate=True,
+        max_length=128,
+        show_progress=False,
+    )
+
+    # All chunks should have document_idx = 0
+    assert (df["document_idx"] == 0).all()
+
+    # chunk_idx should be sequential
+    expected_chunk_idx = list(range(len(df)))
+    assert df["chunk_idx"].to_list() == expected_chunk_idx
+
+    # chunk_size should all be 2
+    assert (df["chunk_size"] == 2).all()
+
+
+def test_deduplicate_with_multiple_docs(model):
+    """Deduplication works correctly with multiple documents."""
+    docs = [
+        " ".join([f"Sentence {i} in doc 1." for i in range(25)]),
+        " ".join([f"Sentence {i} in doc 2." for i in range(25)]),
+    ]
+
+    df, emb = model.encode(
+        docs,
+        num_sents=1,
+        deduplicate=True,
+        max_length=128,
+        show_progress=False,
+    )
+
+    # Should have chunks from both documents
+    assert set(df["document_idx"].to_list()) == {0, 1}
+
+    # chunk_idx should be sequential within each document
+    for doc_idx in [0, 1]:
+        doc_chunks = df.filter(df["document_idx"] == doc_idx)
+        expected = list(range(len(doc_chunks)))
+        assert doc_chunks["chunk_idx"].to_list() == expected
+
+
+def test_deduplicate_disabled_when_no_prechunk(model):
+    """Deduplication is skipped when prechunk=False."""
+    docs = ["Short document."]
+
+    # With prechunk=False, deduplicate should have no effect
+    df1, emb1 = model.encode(
+        docs,
+        num_sents=1,
+        prechunk=False,
+        deduplicate=True,
+        show_progress=False,
+    )
+
+    df2, emb2 = model.encode(
+        docs,
+        num_sents=1,
+        prechunk=False,
+        deduplicate=False,
+        show_progress=False,
+    )
+
+    assert len(df1) == len(df2)
+    np.testing.assert_array_almost_equal(emb1, emb2)
+
+
+def test_deduplicate_averaging_correctness():
+    """Verify that deduplication correctly averages embeddings for duplicate chunks."""
+    from afterthoughts.encode import _EncoderBase
+
+    # Create test data with known duplicates
+    # Chunks 0 and 2 are duplicates (same doc, size, sentences)
+    # Chunks 1 and 3 are duplicates (same doc, size, sentences)
+    results = {
+        "document_idx": torch.tensor([0, 0, 0, 0]),
+        "chunk_size": torch.tensor([2, 2, 2, 2]),
+        "chunk_embeds": torch.tensor(
+            [
+                [1.0, 2.0, 3.0],  # chunk 0: sentences 0-1
+                [4.0, 5.0, 6.0],  # chunk 1: sentences 2-3
+                [7.0, 8.0, 9.0],  # chunk 2: sentences 0-1 (duplicate of 0)
+                [10.0, 11.0, 12.0],  # chunk 3: sentences 2-3 (duplicate of 1)
+            ]
+        ),
+        "chunk_sentence_ids": [
+            torch.tensor([0, 0, 1, 1, -1]),  # sentences 0-1
+            torch.tensor([2, 2, 3, 3, -1]),  # sentences 2-3
+            torch.tensor([0, 0, 1, 1, -1]),  # sentences 0-1 (duplicate)
+            torch.tensor([2, 2, 3, 3, -1]),  # sentences 2-3 (duplicate)
+        ],
+        "chunk_idx": torch.tensor([0, 1, 2, 3]),
+        "sequence_idx": torch.tensor([0, 0, 1, 1]),
+        "batch_idx": torch.tensor([0, 0, 0, 0]),
+        "chunk_token_ids": [
+            torch.tensor([1, 2, 3, 4, 0]),
+            torch.tensor([5, 6, 7, 8, 0]),
+            torch.tensor([1, 2, 3, 4, 0]),
+            torch.tensor([5, 6, 7, 8, 0]),
+        ],
+    }
+
+    # Test averaging method
+    dedup_results = _EncoderBase._deduplicate_chunk_embeds(results, method="average")
+
+    # Should have 2 unique chunks
+    assert len(dedup_results["document_idx"]) == 2
+    assert dedup_results["chunk_embeds"].shape[0] == 2
+
+    # Verify averaged embeddings
+    # Chunk 0-1 average: ([1,2,3] + [7,8,9]) / 2 = [4, 5, 6]
+    # Chunk 2-3 average: ([4,5,6] + [10,11,12]) / 2 = [7, 8, 9]
+    expected_embeds = torch.tensor(
+        [
+            [4.0, 5.0, 6.0],  # average of chunks 0 and 2
+            [7.0, 8.0, 9.0],  # average of chunks 1 and 3
+        ]
+    )
+    torch.testing.assert_close(dedup_results["chunk_embeds"], expected_embeds)
+
+    # Verify chunk_idx is reindexed sequentially
+    assert dedup_results["chunk_idx"].tolist() == [0, 1]
+
+
+def test_deduplicate_first_method():
+    """Verify that method='first' keeps first occurrence without averaging."""
+    from afterthoughts.encode import _EncoderBase
+
+    results = {
+        "document_idx": torch.tensor([0, 0, 0]),
+        "chunk_size": torch.tensor([1, 1, 1]),
+        "chunk_embeds": torch.tensor(
+            [
+                [1.0, 2.0],
+                [3.0, 4.0],  # duplicate of chunk 0
+                [5.0, 6.0],
+            ]
+        ),
+        "chunk_sentence_ids": [
+            torch.tensor([0, 0, -1]),
+            torch.tensor([0, 0, -1]),  # same as chunk 0
+            torch.tensor([1, 1, -1]),
+        ],
+        "chunk_idx": torch.tensor([0, 1, 2]),
+        "sequence_idx": torch.tensor([0, 0, 0]),
+        "batch_idx": torch.tensor([0, 0, 0]),
+        "chunk_token_ids": [
+            torch.tensor([1, 2, 0]),
+            torch.tensor([1, 2, 0]),
+            torch.tensor([3, 4, 0]),
+        ],
+    }
+
+    dedup_results = _EncoderBase._deduplicate_chunk_embeds(results, method="first")
+
+    # Should have 2 unique chunks
+    assert len(dedup_results["document_idx"]) == 2
+
+    # Should keep first occurrence, not average
+    expected_embeds = torch.tensor(
+        [
+            [1.0, 2.0],  # first occurrence of sentence 0
+            [5.0, 6.0],  # sentence 1
+        ]
+    )
+    torch.testing.assert_close(dedup_results["chunk_embeds"], expected_embeds)

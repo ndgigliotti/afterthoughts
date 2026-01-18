@@ -267,47 +267,47 @@ def test_binary_quantize_pack_false_raises():
 def test_int8_quantize_numpy():
     """Test int8 quantization with numpy arrays."""
     embeds = np.array([[0.0, 0.5, 1.0], [-1.0, 0.0, 1.0]], dtype=np.float32)
-    quantized, scales, min_vals = int8_quantize(embeds)
+    result = int8_quantize(embeds)
 
-    assert quantized.dtype == np.uint8
-    assert scales.dtype == np.float32
-    assert min_vals.dtype == np.float32
-    assert quantized.shape == embeds.shape
-    assert scales.shape == (2,)
-    assert min_vals.shape == (2,)
+    assert result.quantized.dtype == np.uint8
+    assert result.scales.dtype == np.float32
+    assert result.min_vals.dtype == np.float32
+    assert result.shape == embeds.shape
+    assert result.scales.shape == (2,)
+    assert result.min_vals.shape == (2,)
 
     # First row: [0.0, 0.5, 1.0] -> min=0, max=1, scale=1/255
     # Quantized: [0, 127.5, 255] -> [0, 128, 255]
-    assert quantized[0, 0] == 0
-    assert quantized[0, 2] == 255
+    assert result.quantized[0, 0] == 0
+    assert result.quantized[0, 2] == 255
 
     # Verify dequantization works
-    dequantized = quantized.astype(np.float32) * scales[:, None] + min_vals[:, None]
+    dequantized = result.dequantize()
     np.testing.assert_allclose(dequantized, embeds, atol=0.01)
 
 
 def test_int8_quantize_torch():
     """Test int8 quantization with torch tensors."""
     embeds = torch.tensor([[0.0, 0.5, 1.0], [-1.0, 0.0, 1.0]], dtype=torch.float32)
-    quantized, scales, min_vals = int8_quantize(embeds)
+    result = int8_quantize(embeds)
 
-    assert quantized.dtype == torch.uint8
-    assert scales.dtype == torch.float32
-    assert min_vals.dtype == torch.float32
-    assert quantized.shape == embeds.shape
-    assert scales.shape == (2,)
-    assert min_vals.shape == (2,)
+    assert result.quantized.dtype == np.uint8
+    assert result.scales.dtype == np.float32
+    assert result.min_vals.dtype == np.float32
+    assert result.shape == embeds.shape
+    assert result.scales.shape == (2,)
+    assert result.min_vals.shape == (2,)
 
     # Verify dequantization works
-    dequantized = quantized.float() * scales[:, None] + min_vals[:, None]
-    torch.testing.assert_close(dequantized, embeds, atol=0.01, rtol=0.01)
+    dequantized = result.dequantize()
+    np.testing.assert_allclose(dequantized, embeds.numpy(), atol=0.01)
 
 
 def test_int8_quantize_constant_row():
     """Test int8 quantization handles constant rows (zero scale)."""
     embeds = np.array([[0.5, 0.5, 0.5], [0.0, 0.5, 1.0]], dtype=np.float32)
-    quantized, scales, min_vals = int8_quantize(embeds)
+    result = int8_quantize(embeds)
 
     # Constant row should not cause division by zero
-    assert not np.any(np.isnan(quantized))
-    assert not np.any(np.isinf(quantized))
+    assert not np.any(np.isnan(result.quantized))
+    assert not np.any(np.isinf(result.quantized))

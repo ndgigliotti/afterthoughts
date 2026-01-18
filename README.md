@@ -52,7 +52,7 @@ Chunk embeddings capture meaning from surrounding context. For example, "the cha
 * **Late chunking implementation**: Embed documents first, then pool into chunks for context-aware embeddings
 * **Flexible chunk configuration**: Customize sentences per chunk and overlap between chunks
 * **Sentence boundary detection**: Choice of BlingFire (default), NLTK, pysbd, or syntok for accurate sentence segmentation
-* **Two encoder classes**: `Encoder` for simple usage, `LiteEncoder` for memory-efficient workflows with large datasets
+* **Two encoder classes**: `Encoder` for simple usage, `LiteEncoder` (experimental) for memory-efficient workflows with large datasets
 * **GPU-accelerated PCA**: Incremental PCA for dimensionality reduction on massive embedding sets
 * **Query embedding**: Embed queries in the same space as chunks for semantic search
 * **HuggingFace integration**: Works with any transformer model from the HuggingFace Hub
@@ -64,7 +64,7 @@ Chunk embeddings capture meaning from surrounding context. For example, "the cha
 
 Afterthoughts provides two classes:
 - **`Encoder`**: Simple API for most use cases
-- **`LiteEncoder`**: Advanced API with memory optimizations (PCA, quantization, dimension truncation), enabling in-memory exploration of large datasets that would otherwise exceed available RAM. Configure options like `amp`, `quantize`, and `pca` based on your hardware and dataset size.
+- **`LiteEncoder`** (experimental): Advanced API with memory optimizations (PCA, quantization, dimension truncation), enabling in-memory exploration of large datasets that would otherwise exceed available RAM. Configure options like `amp`, `quantize`, and `pca` based on your hardware and dataset size.
 
 ### Basic Usage
 
@@ -141,7 +141,7 @@ Afterthoughts provides two classes:
     doc_chunks = X[df["sample_idx"] == i]
     ```
 
-### Memory Optimizations with LiteEncoder
+### Memory Optimizations with LiteEncoder (Experimental)
 
 For advanced users working with large datasets, `LiteEncoder` provides memory-efficient features including PCA, embedding quantization, and dimension truncation. These are "lossy" optimizations that trade some embedding quality for significant memory savings.
 
@@ -317,6 +317,44 @@ logging.basicConfig()
 - `INFO`: Model loading, compilation, preprocessing time, PCA status
 - `DEBUG`: Batch sizes, token counts, and other diagnostic details
 
+## Differences from the Late Chunking Paper
+
+Afterthoughts implements the core late chunking approach from [Günther et al., 2024](https://arxiv.org/abs/2409.04701) with some implementation choices that differ from the paper's recommendations. These can be toggled via parameters.
+
+### Special Token Handling
+
+**Paper recommendation:** Include `[CLS]` in the first chunk's mean pooling and `[SEP]` in the last chunk's mean pooling.
+
+**Afterthoughts default:** Follows the paper's approach (`exclude_special_tokens=False`).
+
+To exclude all special tokens from mean pooling:
+
+```python
+df, X = model.encode(docs, exclude_special_tokens=True)
+```
+
+### Deduplication of Overlapping Pre-chunks
+
+When documents exceed the model's max sequence length, both approaches split them into overlapping macro chunks. The key difference is how overlapping regions are handled:
+
+**Paper approach (Algorithm 2):** Performs token-level deduplication by keeping only the first occurrence of overlapping token embeddings. After processing each macro chunk, the overlap tokens are dropped before concatenating with subsequent chunks. This creates a single unified token embedding sequence with a bias toward earlier context.
+
+**Afterthoughts approach:** Computes chunk embeddings from each macro chunk separately, then deduplicates at the embedding level by averaging embeddings for chunks covering the exact same sentence IDs. This is more bidirectional, incorporating context from both preceding and following macro chunks. It also enables fast vectorized pooling operations on tensors rather than requiring concatenation of ragged token embedding matrices.
+
+Note that only chunks with identical sentence ID sequences are averaged. Chunks in the overlap region that cover different (even partially overlapping) sentence groups are kept as distinct embeddings. The deduplication uses `np.unique` for grouping and `torch.scatter_add` for vectorized averaging, making it efficient even for large numbers of chunks (e.g., when processing books).
+
+To disable deduplication and keep all duplicate embeddings:
+
+```python
+df, X = model.encode(docs, deduplicate=False)
+```
+
+### Chunk Definition
+
+**Paper:** Tests multiple chunking strategies - fixed token counts (256 tokens), fixed sentence counts (5 sentences), and semantic boundaries. Late chunking is agnostic to the chunking method.
+
+**Afterthoughts:** Uses sentence-based chunking exclusively (similar to the paper's "Sentence Boundaries" strategy). Chunks are defined as N consecutive sentences, detected via BlingFire, NLTK, or syntok. This means chunk sizes vary based on sentence length rather than being fixed token counts.
+
 ## Known Limitations
 
 #### Memory Requirements
@@ -332,8 +370,6 @@ Late chunking's contextual benefits are bounded by the model's maximum sequence 
 * Add paragraph segmentation
 * Support for additional chunking strategies (e.g., semantic chunking)
 * Persist `LiteEncoder` with its fitted PCA transformation
-* Include special tokens in chunk embeddings (as in the late chunking paper)
-* Handle duplicate sentence embeddings from overlapping pre-chunks by averaging
 * Support instruct embedding models
 
 ## References
