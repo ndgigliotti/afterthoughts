@@ -341,7 +341,7 @@ When documents exceed the model's max sequence length, both approaches split the
 
 **Afterthoughts approach:** Computes chunk embeddings from each macro chunk separately, then deduplicates at the embedding level by averaging embeddings for chunks covering the exact same sentence IDs. This is more bidirectional, incorporating context from both preceding and following macro chunks. It also enables fast vectorized pooling operations on tensors rather than requiring concatenation of ragged token embedding matrices.
 
-Note that only chunks with identical sentence ID sets are averaged. Chunks in the overlap region that cover different (even partially overlapping) sentence groups are kept as distinct embeddings. The deduplication step uses Python loops rather than vectorized operations, but this is typically fast since it only processes chunks from documents exceeding max_length.
+Note that only chunks with identical sentence ID sequences are averaged. Chunks in the overlap region that cover different (even partially overlapping) sentence groups are kept as distinct embeddings. The deduplication step uses Python loops rather than vectorized operations, but this is typically fast since it only processes chunks from documents exceeding max_length.
 
 To disable deduplication and keep all duplicate embeddings:
 
