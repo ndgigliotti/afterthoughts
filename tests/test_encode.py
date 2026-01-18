@@ -240,6 +240,33 @@ def test_encoder_encode_queries(model):
     assert len(query_embeds) == len(queries)
 
 
+def test_encoder_encode_queries_preserves_order(model):
+    """Test that encode_queries returns embeddings in the original input order.
+
+    This is a regression test for a bug where TokenizedDataset's sorting by
+    token count caused embeddings to be returned in the wrong order.
+    """
+    # Use queries of very different lengths to trigger reordering
+    queries = [
+        "Short query",
+        "This is a much longer query with many more words to ensure different token counts",
+        "Medium length query here",
+    ]
+
+    # Encode all at once
+    batch_embeds = model.encode_queries(queries)
+
+    # Encode individually for comparison
+    individual_embeds = [model.encode_queries([q])[0] for q in queries]
+
+    # Embeddings should match in order
+    for i, (batch_emb, indiv_emb) in enumerate(zip(batch_embeds, individual_embeds, strict=False)):
+        similarity = np.dot(batch_emb, indiv_emb) / (
+            np.linalg.norm(batch_emb) * np.linalg.norm(indiv_emb)
+        )
+        assert similarity > 0.99, f"Query {i} embedding mismatch: similarity={similarity:.4f}"
+
+
 def test_encoder_lite_quantize_if_needed():
     model = LiteEncoder(model_name=MODEL_NAME, device="cpu", quantize="float16")
     embeds = torch.randn(10, 10, dtype=torch.float32)
