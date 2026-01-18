@@ -306,11 +306,10 @@ def test_encoder_lite_quantize_invalid():
         LiteEncoder(model_name=MODEL_NAME, device="cpu", quantize="invalid")
 
 
-@pytest.mark.parametrize("quantize", ["int8", "binary"])
-def test_encoder_lite_quantize_normalize_incompatible(quantize):
-    """Test that quantize='int8' and 'binary' are incompatible with normalize=True."""
+def test_encoder_lite_quantize_normalize_incompatible():
+    """Test that quantize='binary' is incompatible with normalize=True."""
     with pytest.raises(ValueError, match="incompatible"):
-        LiteEncoder(model_name=MODEL_NAME, device="cpu", quantize=quantize, normalize=True)
+        LiteEncoder(model_name=MODEL_NAME, device="cpu", quantize="binary", normalize=True)
 
 
 def test_encoder_normalize_if_needed():

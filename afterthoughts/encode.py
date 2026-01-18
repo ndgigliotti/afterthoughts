@@ -44,7 +44,6 @@ from afterthoughts.utils import (
     binary_quantize,
     disable_tokenizer_parallelism,
     half_embeds,
-    int8_quantize,
     move_or_convert_tensors,
     normalize,
     normalize_num_jobs,
@@ -1089,13 +1088,13 @@ class LiteEncoder(_EncoderBase):
 
     This class includes lossy memory optimizations:
     - PCA dimensionality reduction (GPU-accelerated, incremental fitting)
-    - Quantization (fp16, int8, or binary)
+    - Quantization (fp16 or binary)
     - Dimension truncation
 
     For simple use cases without these optimizations, use Encoder instead.
     """
 
-    QUANTIZE_OPTIONS = (None, "float16", "int8", "binary")
+    QUANTIZE_OPTIONS = (None, "float16", "binary")
 
     def __init__(
         self,
@@ -1139,8 +1138,6 @@ class LiteEncoder(_EncoderBase):
             Quantization method for embeddings, by default "float16".
             - None: No quantization (full float32)
             - "float16": Float16 precision (2x compression)
-            - "int8": Per-row uint8 quantization (4x compression).
-              Returns (embeds, scales, min_vals) tuple for dequantization.
             - "binary": Packed binary (32x compression). Incompatible with normalize.
         device : torch.device, str, int, optional
             Device to use for inference, by default "cuda".
@@ -1167,9 +1164,9 @@ class LiteEncoder(_EncoderBase):
         match quantize:
             case None | "float16":
                 pass
-            case "int8" | "binary" if normalize:
-                raise ValueError(f"`quantize={quantize!r}` is incompatible with `normalize=True`.")
-            case "int8" | "binary":
+            case "binary" if normalize:
+                raise ValueError("`quantize='binary'` is incompatible with `normalize=True`.")
+            case "binary":
                 pass
             case _:
                 raise ValueError(
@@ -1179,8 +1176,8 @@ class LiteEncoder(_EncoderBase):
     def quantize_if_needed(self, embeds: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
         """Apply float16 quantization if enabled.
 
-        Note: int8 and binary quantization are applied at the end of encode()
-        since they return different types (tuple for int8, packed uint8 for binary).
+        Note: binary quantization is applied at the end of encode()
+        since it returns a different type (packed uint8).
         """
         if self.quantize == "float16":
             embeds = half_embeds(embeds)
@@ -1211,8 +1208,8 @@ class LiteEncoder(_EncoderBase):
         2. Apply float16 quantization (if enabled).
         3. Normalize embeddings to unit length (if enabled).
 
-        Note: int8 and binary quantization are applied at the end of encode()
-        since they return different types (tuple for int8, packed uint8 for binary).
+        Note: binary quantization is applied at the end of encode()
+        since it returns a different type (packed uint8).
 
         Parameters
         ----------
@@ -1575,10 +1572,8 @@ class LiteEncoder(_EncoderBase):
             df = df.to_pandas()
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
-        # Apply int8/binary quantization at the end (returns different types)
-        if self.quantize == "int8":
-            vecs = int8_quantize(vecs)
-        elif self.quantize == "binary":
+        # Apply binary quantization at the end (returns different type)
+        if self.quantize == "binary":
             vecs = binary_quantize(vecs)
         return df, vecs
 
@@ -1612,10 +1607,9 @@ class LiteEncoder(_EncoderBase):
 
         Returns
         -------
-        np.ndarray or tuple
+        np.ndarray
             Mean-token embeddings for each query. If quantize='binary', returns
-            packed uint8 array. If quantize='int8', returns (quantized, scales,
-            min_vals) tuple.
+            packed uint8 array with shape (n, ceil(d/8)).
         """
         if self.quantize == "binary" and not as_numpy:
             raise ValueError("`quantize='binary'` requires `as_numpy=True`.")
@@ -1626,9 +1620,7 @@ class LiteEncoder(_EncoderBase):
             exclude_special_tokens=exclude_special_tokens,
             as_numpy=as_numpy,
         )
-        # Apply int8/binary quantization at the end (returns different types)
-        if self.quantize == "int8":
-            query_embeds = int8_quantize(query_embeds)
-        elif self.quantize == "binary":
+        # Apply binary quantization at the end (returns different type)
+        if self.quantize == "binary":
             query_embeds = binary_quantize(query_embeds)
         return query_embeds
