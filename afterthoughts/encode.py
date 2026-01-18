@@ -384,11 +384,12 @@ class _EncoderBase(ABC):
         prechunk_overlap: float | int = 0.5,
         batch_size: int = 10,
         num_jobs: int | None = None,
+        sent_tokenizer: str = "blingfire",
         show_progress: bool = True,
     ) -> tuple[TokenizedDataset, list[list[str]]]:
         """Tokenize a list of documents into input sequences for the model.
 
-        Tokenization preserves sentence boundaries using BlingFire sentence detection.
+        Tokenization preserves sentence boundaries using sentence detection.
 
         Parameters
         ----------
@@ -409,6 +410,9 @@ class _EncoderBase(ABC):
         num_jobs : int, optional
             Number of jobs to use for parallel processing on tokenization.
             If None, will default to `self._num_token_jobs`.
+        sent_tokenizer : str, optional
+            Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
+            Options are "blingfire", "nltk", or "syntok".
         show_progress : bool, optional
             Show progress bar during tokenization, by default True.
 
@@ -427,6 +431,7 @@ class _EncoderBase(ABC):
         inputs, sentence_texts = tokenize_with_sentence_boundaries(
             docs,
             self.tokenizer,
+            method=sent_tokenizer,
             max_length=max_length,
             prechunk=prechunk,
             prechunk_overlap=prechunk_overlap,
@@ -700,6 +705,7 @@ class Encoder(_EncoderBase):
         chunk_overlap: int | float | list | dict = 0,
         prechunk: bool = True,
         prechunk_overlap: float | int = 0.5,
+        sent_tokenizer: str = "blingfire",
         return_frame: str = "polars",
         as_numpy: bool = True,
         debug: bool = False,
@@ -733,6 +739,9 @@ class Encoder(_EncoderBase):
             Enable chunking of documents into overlapping sequences, by default True.
         prechunk_overlap : float or int, optional
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
+        sent_tokenizer : str, optional
+            Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
+            Options are "blingfire", "nltk", or "syntok".
         return_frame : str, optional
             The type of DataFrame of chunks and indices to return, by default 'polars'.
             Options are 'pandas' or 'polars'.
@@ -764,6 +773,7 @@ class Encoder(_EncoderBase):
             prechunk=prechunk,
             prechunk_overlap=prechunk_overlap,
             batch_size=_get_tokenization_batch_size(docs),
+            sent_tokenizer=sent_tokenizer,
             show_progress=show_progress,
         )
         loader = DataLoader(
@@ -1152,6 +1162,7 @@ class LiteEncoder(_EncoderBase):
         chunk_overlap: int | float | list | dict = 0,
         prechunk: bool = True,
         prechunk_overlap: float | int = 0.5,
+        sent_tokenizer: str = "blingfire",
         return_frame: str = "polars",
         as_numpy: bool = True,
         debug: bool = False,
@@ -1179,6 +1190,9 @@ class LiteEncoder(_EncoderBase):
             Enable chunking of documents into overlapping sequences, by default True.
         prechunk_overlap : float or int, optional
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
+        sent_tokenizer : str, optional
+            Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
+            Options are "blingfire", "nltk", or "syntok".
         return_frame : str, optional
             The type of DataFrame of chunks and indices to return, by default 'polars'.
             Options are 'pandas' or 'polars'.
@@ -1210,6 +1224,7 @@ class LiteEncoder(_EncoderBase):
             prechunk=prechunk,
             prechunk_overlap=prechunk_overlap,
             batch_size=_get_tokenization_batch_size(docs),
+            sent_tokenizer=sent_tokenizer,
             show_progress=show_progress,
         )
         loader = DataLoader(

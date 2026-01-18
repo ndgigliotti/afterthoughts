@@ -1,10 +1,8 @@
 # Afterthoughts
 
-A Python library for generating fine-grained, context-aware sentence-chunk embeddings with transformer models.
+A Python library for late chunking, preserving context across chunks for improved RAG retrieval, semantic search, clustering, and exploratory data analysis. Based on the approach described in [Günther et al., 2024](https://arxiv.org/abs/2409.04701).
 
-Afterthoughts implements a variant of **late chunking** ([Günther et al., 2024](https://arxiv.org/abs/2409.04701)), embedding documents first and chunking second to preserve contextual information across chunks. The implementation differs in minor details but follows the same core approach: chunking happens *late*, after the model has contextualized all tokens.
-
-> **Note:** I began developing Afterthoughts in early 2024, independently exploring ways to derive context-aware chunk embeddings from transformer models. After much iteration, I arrived at a method closely resembling what Günther et al. later formalized as "late chunking" in their September 2024 paper.
+Independently developed with focus on production robustness, edge case handling, and ease of integration.
 
 ## What is Late Chunking?
 
@@ -21,7 +19,7 @@ This approach ensures that pronouns, references, and contextual cues in each chu
 
 Afterthoughts provides a fast, memory-efficient implementation of late chunking optimized for production use:
 
-1. **Sentence boundary detection** using BlingFire for accurate, linguistically-aware chunking
+1. **Sentence boundary detection** using BlingFire, NLTK, or syntok for accurate, linguistically-aware chunking
 2. **Full document embedding** through transformer models to capture cross-sentence context
 3. **Sentence-based pooling** of token embeddings from the model's final hidden state
 4. **Overlapping chunk extraction** with configurable sentence counts and overlap ratios
@@ -53,7 +51,7 @@ Chunk embeddings capture meaning from surrounding context. For example, "the cha
 
 * **Late chunking implementation**: Embed documents first, then pool into chunks for context-aware embeddings
 * **Flexible chunk configuration**: Customize sentences per chunk and overlap between chunks
-* **Sentence boundary detection**: BlingFire integration for accurate, fast sentence segmentation
+* **Sentence boundary detection**: Choice of BlingFire (default), NLTK, or syntok for accurate sentence segmentation
 * **Two encoder classes**: `Encoder` for simple usage, `LiteEncoder` for memory-efficient workflows with large datasets
 * **GPU-accelerated PCA**: Incremental PCA for dimensionality reduction on massive embedding sets
 * **Query embedding**: Embed queries in the same space as chunks for semantic search
@@ -73,7 +71,7 @@ Afterthoughts provides two classes:
 1. Install the package using pip:
 
     ```bash
-    pip install git+https://github.com/ndgigliotti/finephrase.git
+    pip install afterthoughts
     ```
 
 2. Create an `Encoder` object and load a transformer model.
@@ -106,6 +104,16 @@ Afterthoughts provides two classes:
     )
     ```
     The `encode` method returns a tuple containing the pandas DataFrame and the NumPy array of chunk embeddings. If `return_frame="polars"` is passed, it returns a Polars DataFrame instead.
+
+    To use a different sentence tokenizer, pass the `sent_tokenizer` parameter:
+
+    ```python
+    df, X = model.encode(
+        docs,
+        num_sents=2,
+        sent_tokenizer="nltk",  # Options: "blingfire" (default), "nltk", "syntok"
+    )
+    ```
 
     The DataFrame contains the following columns:
     * `sample_idx`: The index of the document from which the chunk was extracted
@@ -291,7 +299,6 @@ Late chunking's contextual benefits are bounded by the model's maximum sequence 
 
 * Add paragraph segmentation
 * Support for additional chunking strategies (e.g., semantic chunking)
-* Support more sentence tokenizers beyond BlingFire
 * Persist `LiteEncoder` with its fitted PCA transformation
 * Include special tokens in chunk embeddings (as in the late chunking paper)
 * Handle duplicate sentence embeddings from overlapping pre-chunks by averaging
