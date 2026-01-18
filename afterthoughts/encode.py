@@ -18,7 +18,6 @@ import logging
 import math
 import warnings
 from abc import ABC, abstractmethod
-from collections import defaultdict
 from functools import partial
 
 import numpy as np
@@ -407,8 +406,11 @@ class _EncoderBase(ABC):
         When documents exceed max_length, they are split into overlapping pre-chunks.
         This can create duplicate chunk embeddings for the same sentence groups
         (with different attention contexts). This function groups by
-        (document_idx, chunk_size, sentence_ids) and either averages embeddings
-        or keeps the first occurrence.
+        (document_idx, chunk_size, first_sent, last_sent) and either averages
+        embeddings or keeps the first occurrence.
+
+        Uses vectorized operations (np.unique, torch.scatter_add) for performance
+        on large numbers of chunks.
 
         Parameters
         ----------
@@ -438,70 +440,92 @@ class _EncoderBase(ABC):
         chunk_embeds = results["chunk_embeds"]
         chunk_sentence_ids = results["chunk_sentence_ids"]
 
-        # Build group keys: (document_idx, chunk_size, sentence_id_sequence)
-        # We use a tuple of unique sentence IDs as the key
-        group_keys = []
-        for i in range(len(document_idx)):
-            doc_idx = document_idx[i].item()
-            size = chunk_size[i].item()
-            # Get unique sentence IDs preserving order (excluding -1 padding)
-            sent_ids = chunk_sentence_ids[i]
+        n_chunks = len(document_idx)
+
+        # Compute first and last sentence ID for each chunk
+        # Since sentences are consecutive within a chunk, (first, last) uniquely identifies it
+        first_sent = torch.zeros(n_chunks, dtype=torch.long)
+        last_sent = torch.zeros(n_chunks, dtype=torch.long)
+
+        for i, sent_ids in enumerate(chunk_sentence_ids):
             if isinstance(sent_ids, torch.Tensor):
-                unique_sents = tuple(dict.fromkeys(s.item() for s in sent_ids if s.item() != -1))
+                valid_mask = sent_ids != -1
+                if valid_mask.any():
+                    valid_ids = sent_ids[valid_mask]
+                    first_sent[i] = valid_ids[0]
+                    last_sent[i] = valid_ids[-1]
             else:
-                unique_sents = tuple(dict.fromkeys(s for s in sent_ids if s != -1))
-            group_keys.append((doc_idx, size, unique_sents))
+                valid_ids = [s for s in sent_ids if s != -1]
+                if valid_ids:
+                    first_sent[i] = valid_ids[0]
+                    last_sent[i] = valid_ids[-1]
 
-        # Group indices by key
-        groups = defaultdict(list)
-        for i, key in enumerate(group_keys):
-            groups[key].append(i)
+        # Build compound key and use np.unique for fast grouping
+        keys = torch.stack([document_idx, chunk_size, first_sent, last_sent], dim=1).numpy()
+        _, inverse_indices, counts = np.unique(
+            keys, axis=0, return_inverse=True, return_counts=True
+        )
 
-        # Build deduplicated results
-        dedup_indices = []  # Indices to keep (first of each group)
-        dedup_embeds = []  # Embeddings (averaged if method='average')
+        n_groups = len(counts)
+        group_indices = torch.from_numpy(inverse_indices).long()
 
-        for _key, indices in groups.items():
-            dedup_indices.append(indices[0])  # Keep first occurrence's metadata
-            if method == "average" and len(indices) > 1:
-                # Average embeddings from all occurrences
-                avg_embed = chunk_embeds[indices].mean(dim=0)
-                dedup_embeds.append(avg_embed)
-            else:
-                dedup_embeds.append(chunk_embeds[indices[0]])
+        # Find first occurrence index for each group (for metadata)
+        first_occurrence = torch.zeros(n_groups, dtype=torch.long)
+        seen = torch.zeros(n_groups, dtype=torch.bool)
+        for i in range(n_chunks):
+            g = group_indices[i].item()
+            if not seen[g]:
+                first_occurrence[g] = i
+                seen[g] = True
 
-        # Sort by original order to maintain document ordering
-        sorted_pairs = sorted(zip(dedup_indices, dedup_embeds, strict=True), key=lambda x: x[0])
-        dedup_indices = [p[0] for p in sorted_pairs]
-        dedup_embeds = torch.stack([p[1] for p in sorted_pairs])
+        if method == "first":
+            # Just keep first occurrence
+            sorted_group_order = torch.argsort(first_occurrence)
+            dedup_indices = first_occurrence[sorted_group_order]
+            dedup_embeds = chunk_embeds[dedup_indices]
+        else:
+            # Average embeddings per group using scatter_add
+            embed_dim = chunk_embeds.shape[1]
+            group_sums = torch.zeros(n_groups, embed_dim, dtype=chunk_embeds.dtype)
+
+            # scatter_add to sum embeddings per group
+            expanded_indices = group_indices.unsqueeze(1).expand_as(chunk_embeds)
+            group_sums.scatter_add_(0, expanded_indices, chunk_embeds)
+
+            # Divide by counts to get means
+            group_counts = torch.from_numpy(counts).to(chunk_embeds.dtype).unsqueeze(1)
+            group_means = group_sums / group_counts
+
+            # Reorder to match original document order
+            sorted_group_order = torch.argsort(first_occurrence)
+            dedup_indices = first_occurrence[sorted_group_order]
+            dedup_embeds = group_means[sorted_group_order]
 
         # Build deduplicated results dict
+        dedup_indices_list = dedup_indices.tolist()
         dedup_results = {}
         for key in results:
             if key == "chunk_embeds":
                 dedup_results[key] = dedup_embeds
             elif key == "chunk_sentence_ids":
-                dedup_results[key] = [chunk_sentence_ids[i] for i in dedup_indices]
+                dedup_results[key] = [chunk_sentence_ids[i] for i in dedup_indices_list]
             elif key == "chunk_token_ids":
-                dedup_results[key] = [results[key][i] for i in dedup_indices]
+                dedup_results[key] = [results[key][i] for i in dedup_indices_list]
             elif isinstance(results[key], torch.Tensor):
                 dedup_results[key] = results[key][dedup_indices]
             elif isinstance(results[key], list):
-                dedup_results[key] = [results[key][i] for i in dedup_indices]
+                dedup_results[key] = [results[key][i] for i in dedup_indices_list]
             else:
                 dedup_results[key] = results[key]
 
-        # Reindex chunk_idx to be sequential within each document
+        # Reindex chunk_idx to be sequential within each document (vectorized)
         if "chunk_idx" in dedup_results and "document_idx" in dedup_results:
-            new_chunk_idx = torch.zeros_like(dedup_results["chunk_idx"])
-            doc_counters = {}
-            for i in range(len(dedup_results["document_idx"])):
-                doc_idx = dedup_results["document_idx"][i].item()
-                if doc_idx not in doc_counters:
-                    doc_counters[doc_idx] = 0
-                new_chunk_idx[i] = doc_counters[doc_idx]
-                doc_counters[doc_idx] += 1
-            dedup_results["chunk_idx"] = new_chunk_idx
+            doc_idx_arr = dedup_results["document_idx"].numpy()
+            new_chunk_idx = np.zeros(len(doc_idx_arr), dtype=np.int64)
+            for doc in np.unique(doc_idx_arr):
+                mask = doc_idx_arr == doc
+                new_chunk_idx[mask] = np.arange(mask.sum())
+            dedup_results["chunk_idx"] = torch.from_numpy(new_chunk_idx)
 
         return dedup_results
 
