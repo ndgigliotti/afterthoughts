@@ -12,6 +12,44 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Utility functions for embedding processing, memory management, and configuration.
+
+This module provides helper functions for:
+- Logging configuration
+- Embedding normalization and precision conversion
+- Memory size calculation and reporting
+- Tensor/array manipulation and conversion
+- Overlap and job count calculations
+- Function timing and context managers
+
+Key Functions
+-------------
+configure_logging : Set up logging with console and/or file output
+normalize : L2-normalize embeddings to unit length
+half_embeds : Convert embeddings to float16 for memory efficiency
+truncate_dims : Truncate embedding dimensions (for MRL models)
+get_overlap_count : Calculate overlap count from fraction or absolute value
+normalize_num_jobs : Validate and normalize parallel job count
+timer : Decorator for timing function execution
+disable_tokenizer_parallelism : Context manager for nested parallelism safety
+
+Memory Management
+-----------------
+get_memory_size : Calculate memory footprint of tensors/arrays/dataframes
+format_memory_size : Format byte counts as human-readable strings
+get_memory_report : Generate memory usage report for data dictionaries
+
+Tensor Utilities
+----------------
+move_or_convert_tensors : Convert between PyTorch and NumPy formats
+order_by_indices : Reorder list elements by index mapping
+round_up_to_power_of_2 : Round integers to next power of 2 (for batching)
+
+Notes
+-----
+This module uses singledispatch for type-aware processing of torch.Tensor
+and np.ndarray objects, enabling consistent APIs across array types.
+"""
 
 import logging
 import math

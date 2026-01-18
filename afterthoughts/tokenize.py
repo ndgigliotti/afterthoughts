@@ -77,16 +77,69 @@ def _get_tokenization_batch_size(docs: list[str], sample_size: int = 100) -> int
 
 
 class TokenizedDataset(Dataset[dict[str, Any]]):
-    """A dataset class for tokenized data."""
+    """Dataset for tokenized sequences with automatic sorting and batching support.
+
+    This dataset stores tokenized sequences and automatically sorts them by token
+    count (longest first) to enable efficient dynamic batching. This minimizes
+    padding when creating batches and improves GPU utilization.
+
+    Attributes
+    ----------
+    data : dict[str, list]
+        Dictionary containing tokenized data with keys like 'input_ids',
+        'sequence_idx', 'sentence_ids', and 'overflow_to_sample_mapping'.
+        Each value is a list where each element corresponds to one sequence.
+    sort_by_token_count : bool
+        Whether the dataset has been sorted by token count (longest first).
+    token_counts : list[int]
+        Number of tokens in each sequence (cached property).
+    sort_idx : list[int]
+        Indices that sort sequences by token count descending (cached property).
+    unsort_idx : list[int]
+        Inverse mapping to restore original order after sorting (cached property).
+
+    Examples
+    --------
+    Create a dataset from tokenized data:
+
+    >>> data = {
+    ...     "input_ids": [[1, 2, 3], [4, 5], [6, 7, 8, 9]],
+    ...     "sequence_idx": [0, 1, 2]
+    ... }
+    >>> dataset = TokenizedDataset(data, sort_by_token_count=True)
+    >>> len(dataset)
+    3
+
+    Access sequences in sorted order:
+
+    >>> first_item = dataset[0]  # Longest sequence
+    >>> len(first_item["input_ids"])
+    4
+
+    Notes
+    -----
+    - Sequences are sorted longest-first to minimize padding in batches
+    - Use the unsort_idx property to restore results to original document order
+    - All lists in data must have the same length (one entry per sequence)
+    """
 
     def __init__(self, data: dict[str, list[Any]], sort_by_token_count: bool = True) -> None:
-        """
-        Initialize the TokenizedDataset.
+        """Initialize the TokenizedDataset.
 
         Parameters
         ----------
-        data : dict
-            A dictionary containing the tokenized data.
+        data : dict[str, list]
+            Dictionary containing tokenized data. Must include 'input_ids' key
+            with a list of token ID lists. All values must be lists of the same length.
+        sort_by_token_count : bool, optional
+            Whether to sort sequences by token count (longest first), by default True.
+            Sorting improves batching efficiency but requires using unsort_idx to
+            restore original order.
+
+        Raises
+        ------
+        ValueError
+            If data validation fails (see validate_data for details).
         """
         self.data = data
         self.validate_data()
@@ -206,25 +259,46 @@ class TokenizedDataset(Dataset[dict[str, Any]]):
 
 
 class DynamicTokenSampler(Sampler[list[int]]):
-    """A sampler that creates batches based on token count.
+    """Batch sampler that groups sequences by total token count for efficient GPU usage.
 
-    This sampler groups sequences into batches such that the total number of tokens
-    in each batch does not exceed a specified maximum. It assumes the dataset has been
-    pre-sorted by length (longest first) to minimize padding within batches.
+    This sampler creates variable-size batches where each batch contains up to
+    max_tokens total tokens (accounting for padding). It assumes sequences are
+    pre-sorted longest-first, which minimizes padding and maximizes GPU utilization.
 
-    Parameters
+    Traditional fixed-size batching wastes computation on padding tokens. This
+    sampler ensures consistent computational load per batch by counting tokens
+    rather than sequences.
+
+    Attributes
     ----------
     data_source : TokenizedDataset
-        The dataset containing the tokenized sequences. Should be pre-sorted by length
-        (longest first) for optimal batching.
+        Dataset containing tokenized sequences, sorted by token count.
     max_tokens : int
-        The maximum number of tokens allowed in each batch.
+        Maximum total tokens per batch (including padding).
+    token_counts : list[int]
+        Token count for each sequence (alias for data_source.token_counts).
+    batches : list[list[int]]
+        Pre-computed list of batches, where each batch is a list of sequence indices.
 
     Examples
     --------
-    >>> dataset = TokenizedDataset(data, sort_by_token_count=True)  # Sort dataset first
+    Create a dataloader with dynamic batching:
+
+    >>> dataset = TokenizedDataset(data, sort_by_token_count=True)
     >>> sampler = DynamicTokenSampler(dataset, max_tokens=8192)
-    >>> dataloader = DataLoader(dataset, batch_sampler=sampler)
+    >>> loader = DataLoader(dataset, batch_sampler=sampler, collate_fn=collate_fn)
+
+    Batch sizes adapt to sequence lengths:
+
+    >>> # Long sequences -> small batches (e.g., 4 sequences x 2048 tokens)
+    >>> # Short sequences -> large batches (e.g., 64 sequences x 128 tokens)
+
+    Notes
+    -----
+    - Sequences are padded to the next power of 2 for efficiency
+    - Longest sequence in batch determines padding length
+    - Pre-sorting is critical: random order would create inefficient batches
+    - Total tokens = batch_size * next_power_of_2(max_seq_len_in_batch)
     """
 
     def __init__(

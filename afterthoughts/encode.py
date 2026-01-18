@@ -12,7 +12,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Encoder is a library for extracting sentence-chunk embeddings using transformer models."""
+"""Main encoder class for extracting context-aware sentence-chunk embeddings.
+
+This module provides the Encoder class, which implements late chunking for
+transformer-based embedding models. Late chunking processes entire documents
+through the model to capture full context, then extracts embeddings for
+sentence groups by mean-pooling token embeddings within sentence boundaries.
+
+The encoder supports various optimizations including automatic mixed precision,
+model compilation, dynamic batching by token count, optional dimension
+truncation for Matryoshka models, and memory-efficient float16 conversion.
+
+Classes
+-------
+Encoder : Main API for encoding documents and queries
+
+Key Features
+------------
+- Late chunking: Context-aware embeddings that preserve document-level context
+- Flexible chunking: Configure number of sentences per chunk and overlap
+- Sentence tokenizers: BlingFire, NLTK, pysbd, or syntok backends
+- Memory optimization: Dynamic batching, float16 conversion, dimension truncation
+- Performance: AMP support, torch.compile compatibility, GPU acceleration
+- Output formats: Polars/pandas DataFrames with NumPy/PyTorch embeddings
+
+Notes
+-----
+The Encoder class wraps HuggingFace transformers models and adds sentence-aware
+chunking on top of the model's token embeddings. This enables semantic search
+and retrieval over variable-length text chunks while maintaining full document
+context during encoding.
+"""
 
 import logging
 import math
@@ -57,10 +87,78 @@ _MIN_BATCHES_FOR_PARALLEL = 5
 
 
 class Encoder:
-    """Encoder model for generating sentence-chunk embeddings.
+    """Encoder for generating context-aware sentence-chunk embeddings.
 
-    This class provides an API for extracting chunk embeddings from documents
-    using late chunking with transformer models.
+    This class implements late chunking: encoding entire documents through a
+    transformer model to capture full context, then extracting embeddings for
+    groups of consecutive sentences (chunks) via mean-pooling of token embeddings.
+
+    Late chunking preserves document-level context that would be lost with
+    traditional chunking approaches that split documents before encoding.
+
+    Attributes
+    ----------
+    model_name : str
+        Name or path of the HuggingFace transformer model.
+    model_dtype : torch.dtype
+        Data type used for model weights (e.g., torch.float32, torch.float16).
+    tokenizer : transformers.PreTrainedTokenizer
+        HuggingFace tokenizer for the model.
+    model : transformers.PreTrainedModel
+        HuggingFace transformer model in evaluation mode.
+    attn_implementation : str or None
+        Attention implementation to use (e.g., "flash_attention_2", "sdpa").
+    amp : bool
+        Whether automatic mixed precision is enabled for inference.
+    amp_dtype : torch.dtype
+        Data type for AMP autocast (typically torch.float16 or torch.bfloat16).
+    normalize : bool
+        Whether to L2-normalize embeddings to unit length.
+    half_embeds : bool
+        Whether to convert chunk embeddings to float16 after computation.
+    truncate_dims : int or None
+        Number of embedding dimensions to keep (for MRL models), or None.
+    _num_token_jobs : int or None
+        Number of parallel jobs for tokenization/detokenization.
+
+    Examples
+    --------
+    Basic usage with default settings:
+
+    >>> encoder = Encoder("sentence-transformers/all-MiniLM-L6-v2")
+    >>> docs = ["First sentence. Second sentence.", "Another document."]
+    >>> df, embeddings = encoder.encode(docs, num_sents=1)
+
+    Encode with multiple chunk sizes and overlap:
+
+    >>> df, embeddings = encoder.encode(
+    ...     docs,
+    ...     num_sents=[1, 2, 3],
+    ...     chunk_overlap=0.5
+    ... )
+
+    Encode queries for semantic search:
+
+    >>> query_embeds = encoder.encode_queries(["search query"])
+    >>> # Compare with chunk embeddings via dot product (if normalized)
+    >>> similarities = query_embeds @ embeddings.T
+
+    Use memory optimization for large datasets:
+
+    >>> encoder = Encoder(
+    ...     "sentence-transformers/all-MiniLM-L6-v2",
+    ...     half_embeds=True,
+    ...     normalize=True
+    ... )
+
+    Notes
+    -----
+    - The encoder automatically handles documents longer than model max_length
+      by splitting them into overlapping sequences while preserving sentences.
+    - Chunk embeddings are computed by mean-pooling token embeddings within
+      sentence boundaries, following the late chunking methodology.
+    - For retrieval tasks, set normalize=True to enable fast cosine similarity
+      via dot product.
     """
 
     def __init__(
