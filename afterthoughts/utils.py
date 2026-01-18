@@ -544,6 +544,67 @@ def round_up_to_power_of_2(x: int) -> int:
     return 2 ** math.ceil(math.log2(x))
 
 
+@singledispatch
+def int8_quantize(
+    embeds: torch.Tensor | np.ndarray,
+) -> tuple[torch.Tensor | np.ndarray, torch.Tensor | np.ndarray, torch.Tensor | np.ndarray]:
+    """Quantize embeddings to uint8 using per-row min-max scaling.
+
+    Maps each row's values from [min, max] to [0, 255]. This provides 4x
+    compression vs float32 while preserving much more information than
+    binary quantization.
+
+    Parameters
+    ----------
+    embeds : torch.Tensor or np.ndarray
+        Embeddings to quantize. Shape (n, d) where d is the embedding dimension.
+
+    Returns
+    -------
+    tuple
+        - quantized: uint8 array/tensor with shape (n, d)
+        - scales: float32 array/tensor with shape (n,) for dequantization
+        - min_vals: float32 array/tensor with shape (n,) for dequantization
+
+        To dequantize: `embeds = quantized.float() * scales[:, None] + min_vals[:, None]`
+
+    Raises
+    ------
+    TypeError
+        If the input is not a Torch tensor or NumPy array.
+    """
+    if not isinstance(embeds, (torch.Tensor, np.ndarray)):
+        raise TypeError(f"Invalid input type {type(embeds).__name__}.")
+
+
+@int8_quantize.register
+def _(embeds: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Sub-function for int8 quantization of Torch tensors."""
+    min_vals = embeds.min(dim=1).values.float()
+    max_vals = embeds.max(dim=1).values.float()
+    scales = (max_vals - min_vals) / 255.0
+
+    # Avoid division by zero for constant rows
+    scales = torch.where(scales == 0, torch.ones_like(scales), scales)
+
+    quantized = torch.round((embeds - min_vals[:, None]) / scales[:, None]).to(torch.uint8)
+    return quantized, scales, min_vals
+
+
+@int8_quantize.register
+def _(embeds: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Sub-function for int8 quantization of NumPy arrays."""
+    min_vals = embeds.min(axis=1).astype(np.float32)
+    max_vals = embeds.max(axis=1).astype(np.float32)
+    scales = ((max_vals - min_vals) / 255.0).astype(np.float32)
+
+    # Avoid division by zero for constant rows
+    scales = np.where(scales == 0, 1.0, scales)
+
+    quantized = np.round((embeds - min_vals[:, None]) / scales[:, None]).astype(np.uint8)
+    return quantized, scales, min_vals
+
+
 def binary_quantize(embeds: torch.Tensor | np.ndarray, pack: bool = True) -> np.ndarray:
     """Convert embeddings to packed binary representation.
 

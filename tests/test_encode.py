@@ -280,6 +280,24 @@ def test_encoder_lite_binary_normalize_mutually_exclusive():
         )
 
 
+def test_encoder_lite_int8_half_embeds_mutually_exclusive():
+    """Test that int8_quantize and half_embeds cannot both be True."""
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        LiteEncoder(model_name=MODEL_NAME, device="cpu", int8_quantize=True, half_embeds=True)
+
+
+def test_encoder_lite_int8_binary_mutually_exclusive():
+    """Test that int8_quantize and binary_quantize cannot both be True."""
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        LiteEncoder(
+            model_name=MODEL_NAME,
+            device="cpu",
+            int8_quantize=True,
+            binary_quantize=True,
+            half_embeds=False,
+        )
+
+
 def test_encoder_normalize_if_needed():
     encoder = Encoder(model_name=MODEL_NAME, device="cpu", normalize=True)
     embeds = torch.randn(10, 10)
