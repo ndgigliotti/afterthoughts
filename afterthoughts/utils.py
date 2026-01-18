@@ -30,8 +30,20 @@ import torch.nn.functional as F
 from joblib import cpu_count
 
 from afterthoughts.avail import get_pandas
+from afterthoughts.quantize import (
+    BinaryEmbeds,
+    QuantizedEmbeds,
+    binary_quantize,
+)
 
 logger = logging.getLogger(__name__)
+
+# Re-export quantization utilities for backwards compatibility
+__all__ = [
+    "BinaryEmbeds",
+    "QuantizedEmbeds",
+    "binary_quantize",
+]
 
 
 def configure_logging(
@@ -542,169 +554,3 @@ def order_by_indices(elements: list, indices: list[int]) -> list:
 def round_up_to_power_of_2(x: int) -> int:
     """Round up to the nearest power of 2."""
     return 2 ** math.ceil(math.log2(x))
-
-
-class Int8Embeddings:
-    """Wrapper for int8 quantized embeddings with dequantization support.
-
-    This class stores uint8 quantized embeddings along with the per-row
-    scales and min values needed for dequantization. It behaves like a
-    numpy array for basic operations while preserving quantization metadata.
-
-    Parameters
-    ----------
-    quantized : np.ndarray
-        Quantized embeddings with dtype uint8 and shape (n, d).
-    scales : np.ndarray
-        Per-row scale factors with shape (n,).
-    min_vals : np.ndarray
-        Per-row minimum values with shape (n,).
-
-    Examples
-    --------
-    >>> embeds = Int8Embeddings(quantized, scales, min_vals)
-    >>> embeds.shape
-    (1000, 768)
-    >>> embeds.dequantize()  # Returns float32 array
-    >>> embeds[0:10]  # Slicing returns new Int8Embeddings
-    >>> embeds[0].dequantize()  # Single row dequantization
-    """
-
-    def __init__(self, quantized: np.ndarray, scales: np.ndarray, min_vals: np.ndarray) -> None:
-        self.quantized = quantized
-        self.scales = scales
-        self.min_vals = min_vals
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        """Shape of the quantized embeddings."""
-        return self.quantized.shape
-
-    @property
-    def dtype(self) -> np.dtype:
-        """Data type of the quantized embeddings (uint8)."""
-        return self.quantized.dtype
-
-    def __len__(self) -> int:
-        return len(self.quantized)
-
-    def __getitem__(self, idx) -> "Int8Embeddings":
-        """Index or slice the embeddings, preserving quantization metadata."""
-        quantized = self.quantized[idx]
-        scales = self.scales[idx]
-        min_vals = self.min_vals[idx]
-
-        # Handle single row indexing - keep arrays 2D/1D consistent
-        if quantized.ndim == 1:
-            quantized = quantized[np.newaxis, :]
-            scales = np.atleast_1d(scales)
-            min_vals = np.atleast_1d(min_vals)
-
-        return Int8Embeddings(quantized, scales, min_vals)
-
-    def dequantize(self) -> np.ndarray:
-        """Dequantize to float32 array.
-
-        Returns
-        -------
-        np.ndarray
-            Float32 embeddings with approximate original values.
-        """
-        return self.quantized.astype(np.float32) * self.scales[:, None] + self.min_vals[:, None]
-
-    def __repr__(self) -> str:
-        return f"Int8Embeddings(shape={self.shape}, dtype={self.dtype})"
-
-
-@singledispatch
-def int8_quantize(
-    embeds: torch.Tensor | np.ndarray,
-) -> Int8Embeddings:
-    """Quantize embeddings to uint8 using per-row min-max scaling.
-
-    Maps each row's values from [min, max] to [0, 255]. This provides 4x
-    compression vs float32 while preserving much more information than
-    binary quantization.
-
-    Parameters
-    ----------
-    embeds : torch.Tensor or np.ndarray
-        Embeddings to quantize. Shape (n, d) where d is the embedding dimension.
-
-    Returns
-    -------
-    Int8Embeddings
-        Wrapper containing quantized uint8 embeddings with dequantization metadata.
-        Call `.dequantize()` to recover approximate float32 values.
-
-    Raises
-    ------
-    TypeError
-        If the input is not a Torch tensor or NumPy array.
-    """
-    if not isinstance(embeds, (torch.Tensor, np.ndarray)):
-        raise TypeError(f"Invalid input type {type(embeds).__name__}.")
-
-
-@int8_quantize.register
-def _(embeds: torch.Tensor) -> Int8Embeddings:
-    """Sub-function for int8 quantization of Torch tensors."""
-    min_vals = embeds.min(dim=1).values.float()
-    max_vals = embeds.max(dim=1).values.float()
-    scales = (max_vals - min_vals) / 255.0
-
-    # Avoid division by zero for constant rows
-    scales = torch.where(scales == 0, torch.ones_like(scales), scales)
-
-    quantized = torch.round((embeds - min_vals[:, None]) / scales[:, None]).to(torch.uint8)
-    return Int8Embeddings(quantized.numpy(), scales.numpy(), min_vals.numpy())
-
-
-@int8_quantize.register
-def _(embeds: np.ndarray) -> Int8Embeddings:
-    """Sub-function for int8 quantization of NumPy arrays."""
-    min_vals = embeds.min(axis=1).astype(np.float32)
-    max_vals = embeds.max(axis=1).astype(np.float32)
-    scales = ((max_vals - min_vals) / 255.0).astype(np.float32)
-
-    # Avoid division by zero for constant rows
-    scales = np.where(scales == 0, 1.0, scales)
-
-    quantized = np.round((embeds - min_vals[:, None]) / scales[:, None]).astype(np.uint8)
-    return Int8Embeddings(quantized, scales, min_vals)
-
-
-def binary_quantize(embeds: torch.Tensor | np.ndarray, pack: bool = True) -> np.ndarray:
-    """Convert embeddings to packed binary representation.
-
-    Values > 0 become 1, values <= 0 become 0. The result is packed into
-    bits using np.packbits, providing 32x compression vs float32.
-
-    Parameters
-    ----------
-    embeds : torch.Tensor or np.ndarray
-        Embeddings to quantize. Shape (n, d) where d is the embedding dimension.
-    pack : bool, optional
-        Pack bits into bytes for 32x compression, by default True.
-
-    Returns
-    -------
-    np.ndarray
-        Packed binary embeddings as uint8 with shape (n, ceil(d/8)).
-
-    Raises
-    ------
-    TypeError
-        If the input is not a Torch tensor or NumPy array.
-    ValueError
-        If pack is False (unpacked binary is not supported).
-    """
-    if not pack:
-        raise ValueError("pack=False is not supported. Use int8 quantization instead.")
-    if isinstance(embeds, torch.Tensor):
-        binary = (embeds > 0).cpu().numpy().astype(np.uint8)
-    elif isinstance(embeds, np.ndarray):
-        binary = (embeds > 0).astype(np.uint8)
-    else:
-        raise TypeError(f"Invalid input type {type(embeds).__name__}.")
-    return np.packbits(binary, axis=-1)

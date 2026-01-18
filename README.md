@@ -153,7 +153,7 @@ For advanced users working with large datasets, `LiteEncoder` provides memory-ef
 |-----------|----------|-------|
 | **Truncation** (`truncate_dims`) | Models trained with Matryoshka Representation Learning (MRL) like nomic-embed, jina-v3, OpenAI v3 | Simplest option—no fitting required, just slice the first N dimensions |
 | **PCA** (`pca`) | Older models (sentence-transformers, BERT-based) or when you need aggressive reduction | Learns optimal projection from your data; GPU-accelerated incremental fitting handles large datasets |
-| **Quantization** (`quantize`) | All models; combines with above techniques | float16 (2x), int8 (4x), or binary (32x) compression |
+| **Quantization** (`quantize`) | All models; combines with above techniques | float16 (2x) or binary (32x) compression |
 
 These techniques stack: you can use PCA to reduce 768d → 128d, then quantize to float16 for 12x total memory reduction.
 
@@ -204,7 +204,6 @@ LiteEncoder supports several quantization options to reduce memory footprint via
 | Option | Compression | Description |
 |--------|-------------|-------------|
 | `"float16"` (default) | 2x | Reduces precision to 16-bit floating point |
-| `"int8"` | 4x | Per-row min-max scaling to uint8 |
 | `"binary"` | 32x | Packed binary (1 bit per dimension) |
 | `None` | 1x | No quantization (full float32) |
 
@@ -219,19 +218,6 @@ model = LiteEncoder(
 )
 ```
 
-**INT8** provides 4x compression using per-row min-max scaling. The `encode()` method returns a tuple `(quantized, scales, min_vals)` that can be used for dequantization:
-
-```python
-model = LiteEncoder(
-    "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
-    quantize="int8",
-)
-df, (quantized, scales, min_vals) = model.encode(docs, num_sents=2)
-
-# Dequantize when needed
-dequantized = quantized.astype("float32") * scales[:, None] + min_vals[:, None]
-```
-
 **Binary** provides maximum compression (32x) by packing 8 dimensions into each byte. Use Hamming distance for similarity search:
 
 ```python
@@ -242,7 +228,7 @@ model = LiteEncoder(
 )
 ```
 
-> Note: `int8` and `binary` quantization are incompatible with `normalize=True`. Float16 embeddings may be slower for CPU calculations but significantly reduce memory footprint.
+> Note: `binary` quantization is incompatible with `normalize=True`. Float16 embeddings may be slower for CPU calculations but significantly reduce memory footprint.
 
 ### Performance Optimizations
 
