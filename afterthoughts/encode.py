@@ -438,18 +438,18 @@ class _EncoderBase(ABC):
         chunk_embeds = results["chunk_embeds"]
         chunk_sentence_ids = results["chunk_sentence_ids"]
 
-        # Build group keys: (document_idx, chunk_size, tuple(sorted(sentence_ids)))
+        # Build group keys: (document_idx, chunk_size, sentence_id_sequence)
         # We use a tuple of unique sentence IDs as the key
         group_keys = []
         for i in range(len(document_idx)):
             doc_idx = document_idx[i].item()
             size = chunk_size[i].item()
-            # Get unique sentence IDs (excluding -1 padding)
+            # Get unique sentence IDs preserving order (excluding -1 padding)
             sent_ids = chunk_sentence_ids[i]
             if isinstance(sent_ids, torch.Tensor):
-                unique_sents = tuple(sorted(set(s.item() for s in sent_ids if s.item() != -1)))
+                unique_sents = tuple(dict.fromkeys(s.item() for s in sent_ids if s.item() != -1))
             else:
-                unique_sents = tuple(sorted(set(s for s in sent_ids if s != -1)))
+                unique_sents = tuple(dict.fromkeys(s for s in sent_ids if s != -1))
             group_keys.append((doc_idx, size, unique_sents))
 
         # Group indices by key
