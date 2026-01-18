@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "FinePhrase"
+name = "afterthoughts"
 version = "0.1.0"
 description = "Generate fine-grained contextualized phrase embeddings with transformers."
 readme = "README.md"
@@ -18,15 +18,25 @@ classifiers = [
 ]
 license = {text = "Apache-2.0"}
 dependencies = [
-
+    "blingfire",
+    "joblib",
+    "numpy",
+    "polars",
+    "torch",
+    "tqdm",
+    "transformers",
 ]
 
 [project.optional-dependencies]
+pandas = [
+    "pandas",
+]
 dev = [
     "coverage",  # testing
     "mypy",  # linting
+    "pre-commit",  # git hooks
     "pytest",  # testing
-    "ruff"  # linting
+    "ruff",  # linting & formatting
 ]
 
 [project.urls]
@@ -36,7 +46,7 @@ changelog = "https://github.com/ndgigliotti/finephrase/blob/master/changelog.md"
 homepage = "https://github.com/ndgigliotti/finephrase"
 
 [tool.setuptools]
-packages = ["finephrase"]
+packages = ["afterthoughts"]
 
 [tool.setuptools.package-data]
 "*" = ["*.*"]
@@ -60,5 +70,36 @@ warn_no_return = true
 module = "tests.*"
 ignore_missing_imports = true
 
-[tool.isort]
-profile = "black"
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "F",      # pyflakes (includes F401 unused imports)
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "I",      # isort
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "SIM",    # flake8-simplify
+    "RUF",    # ruff-specific rules
+]
+ignore = [
+    "E501",   # line too long (let formatter handle it)
+    "E731",   # lambda assignment (sometimes cleaner)
+    "SIM108", # ternary operator (not always clearer)
+    "RUF005", # list concatenation is fine
+    "UP038",  # isinstance(x, (A, B)) is fine
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F811"]  # allow test function redefinition for parametrize patterns
+
+[tool.ruff.lint.isort]
+known-first-party = ["afterthoughts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-v", "--tb=short"]
+filterwarnings = ["ignore::DeprecationWarning"]

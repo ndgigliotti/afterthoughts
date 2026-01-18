@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import torch
 
-from finephrase.pca import IncrementalPCA, _add_to_diagonal, gen_batches
+from afterthoughts.pca import IncrementalPCA, _add_to_diagonal, gen_batches
 
 
 @pytest.mark.parametrize(
@@ -173,7 +173,7 @@ def test_incremental_pca_to_device():
     ipca = IncrementalPCA(n_components=5, device="cpu")
     ipca.fit(X)
     ipca.to("cuda")
-    assert ipca.device == "cuda"
+    assert ipca.device.type == "cuda"
     assert ipca.components_.device.type == "cuda"
     assert ipca.mean_.device.type == "cuda"
     assert ipca.singular_values_.device.type == "cuda"
@@ -181,6 +181,37 @@ def test_incremental_pca_to_device():
     assert ipca.explained_variance_ratio_.device.type == "cuda"
     assert ipca.var_.device.type == "cuda"
     assert ipca.noise_variance_.device.type == "cuda"
+
+
+def test_incremental_pca_save_load(tmp_path):
+    X = torch.randn(100, 20)
+    ipca = IncrementalPCA(n_components=5, device="cpu")
+    ipca.fit(X)
+    X_transformed_original = ipca.transform(X)
+
+    # Save and load
+    save_path = tmp_path / "pca.pt"
+    ipca.save(str(save_path))
+    ipca_loaded = IncrementalPCA.load(str(save_path), device="cpu")
+
+    # Verify config
+    assert ipca_loaded.n_components == ipca.n_components
+    assert ipca_loaded.whiten == ipca.whiten
+
+    # Verify fitted attributes
+    assert torch.allclose(ipca_loaded.components_, ipca.components_)
+    assert torch.allclose(ipca_loaded.mean_, ipca.mean_)
+    assert torch.allclose(ipca_loaded.explained_variance_, ipca.explained_variance_)
+
+    # Verify transform produces same results
+    X_transformed_loaded = ipca_loaded.transform(X)
+    assert torch.allclose(X_transformed_original, X_transformed_loaded)
+
+
+def test_incremental_pca_save_unfitted_raises():
+    ipca = IncrementalPCA(n_components=5, device="cpu")
+    with pytest.raises(ValueError, match="Cannot save unfitted"):
+        ipca.save("test.pt")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")

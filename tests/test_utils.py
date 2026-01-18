@@ -3,29 +3,22 @@ import time
 
 import numpy as np
 import polars as pl
-import pyarrow as pa
 import pytest
 import torch
 
-from finephrase.utils import (
-    _HAS_PANDAS,
-    build_faiss_index,
+from afterthoughts.utils import (
+    binary_quantize,
     format_memory_size,
     get_memory_report,
     get_memory_size,
     get_torch_dtype,
-    norm_jobs,
+    half_embeds,
+    int8_quantize,
     normalize,
-    reduce_precision,
-    search_phrases,
+    normalize_num_jobs,
     timer,
     truncate_dims,
 )
-
-if _HAS_PANDAS:
-    import pandas as pd
-else:
-    pd = None
 
 
 def test_timer_decorator():
@@ -40,34 +33,23 @@ def test_timer_decorator():
 
 def test_get_memory_size():
     # Test with supported types
-    pa_array = pa.array([1, 2, 3])
     np_array = np.array([1, 2, 3])
     torch_tensor = torch.tensor([1, 2, 3])
     pl_series = pl.Series("a", [1, 2, 3])
     pl_dataframe = pl.DataFrame({"a": [1, 2, 3]})
 
-    assert get_memory_size(pa_array) == sum(
-        buf.size for buf in pa_array.buffers() if buf is not None
-    )
     assert get_memory_size(np_array) == np_array.nbytes
-    assert (
-        get_memory_size(torch_tensor)
-        == torch_tensor.element_size() * torch_tensor.numel()
-    )
+    assert get_memory_size(torch_tensor) == torch_tensor.element_size() * torch_tensor.numel()
     assert get_memory_size(pl_series) == pl_series.estimated_size()
     assert get_memory_size(pl_dataframe) == pl_dataframe.estimated_size()
 
-    # Test with Pandas if available
-    if _HAS_PANDAS:
-        pd_series = pd.Series([1, 2, 3])
-        pd_dataframe = pd.DataFrame({"a": [1, 2, 3]})
-        assert get_memory_size(pd_series) == pd_series.memory_usage(
-            index=True, deep=True
-        )
-        assert (
-            get_memory_size(pd_dataframe)
-            == pd_dataframe.memory_usage(index=True, deep=True).sum()
-        )
+
+def test_get_memory_size_pandas():
+    pd = pytest.importorskip("pandas")
+    pd_series = pd.Series([1, 2, 3])
+    pd_dataframe = pd.DataFrame({"a": [1, 2, 3]})
+    assert get_memory_size(pd_series) == pd_series.memory_usage(index=True, deep=True)
+    assert get_memory_size(pd_dataframe) == pd_dataframe.memory_usage(index=True, deep=True).sum()
 
 
 def test_format_memory_size():
@@ -78,29 +60,29 @@ def test_format_memory_size():
 
 def test_get_memory_report():
     results = {
-        "pa_array": pa.array([1, 2, 3]),
         "np_array": np.array([1, 2, 3]),
         "torch_tensor": torch.tensor([1, 2, 3]),
         "pl_series": pl.Series("a", [1, 2, 3]),
         "pl_dataframe": pl.DataFrame({"a": [1, 2, 3]}),
     }
-    if _HAS_PANDAS:
-        results.update(
-            {
-                "pd_series": pd.Series([1, 2, 3]),
-                "pd_dataframe": pd.DataFrame({"a": [1, 2, 3]}),
-            }
-        )
     report = get_memory_report(results)
-    assert "pa_array" in report
     assert "np_array" in report
     assert "torch_tensor" in report
     assert "pl_series" in report
     assert "pl_dataframe" in report
     assert "_total_" in report
-    if _HAS_PANDAS:
-        assert "pd_series" in report
-        assert "pd_dataframe" in report
+
+
+def test_get_memory_report_pandas():
+    pd = pytest.importorskip("pandas")
+    results = {
+        "pd_series": pd.Series([1, 2, 3]),
+        "pd_dataframe": pd.DataFrame({"a": [1, 2, 3]}),
+    }
+    report = get_memory_report(results)
+    assert "pd_series" in report
+    assert "pd_dataframe" in report
+    assert "_total_" in report
 
 
 def test_normalize_numpy():
@@ -124,13 +106,13 @@ def test_get_torch_dtype():
 
 def test_reduce_precision_numpy():
     np_array = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-    np_reduced = reduce_precision(np_array)
+    np_reduced = half_embeds(np_array)
     assert np_reduced.dtype == np.float16
 
 
 def test_reduce_precision_torch():
     torch_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
-    torch_reduced = reduce_precision(torch_tensor)
+    torch_reduced = half_embeds(torch_tensor)
     assert torch_reduced.dtype == torch.float16
 
 
@@ -182,98 +164,150 @@ def test_truncate_dims_torch_3_axes():
     assert torch_truncated.shape == (2, 3, 2)
 
 
-def test_search_phrases():
-    faiss = pytest.importorskip("faiss", reason="FAISS is not installed")
-    queries = ["query1", "query2"]
-    query_embeds = np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
-    phrase_df = pl.DataFrame(
-        {"embed_idx": [0, 1, 2], "phrase": ["phrase1", "phrase2", "phrase3"]}
-    )
-    phrase_embeds = np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6], [0.7, 0.8, 0.9]])
-
-    index, hits = search_phrases(
-        queries, query_embeds, phrase_df, phrase_embeds, sim_thresh=0.5
-    )
-
-    assert isinstance(index, faiss.Index)
-    assert "query1" in hits
-    assert "query2" in hits
-    assert isinstance(hits["query1"], pl.DataFrame)
-    assert isinstance(hits["query2"], pl.DataFrame)
-
-    # Check if the hits contain the expected columns
-    if not hits["query1"].is_empty():
-        assert "embed_idx" in hits["query1"].columns
-        assert "phrase" in hits["query1"].columns
-        assert "query_sim" in hits["query1"].columns
-
-    if not hits["query2"].is_empty():
-        assert "embed_idx" in hits["query2"].columns
-        assert "phrase" in hits["query2"].columns
-        assert "query_sim" in hits["query2"].columns
-
-
 def test_norm_jobs():
     cpu_count = os.cpu_count()
 
     # Test with None
-    assert norm_jobs(None) == 1
+    assert normalize_num_jobs(None) == 1
 
     # Test with 0
     with pytest.warns(UserWarning, match="`num_jobs` cannot be 0."):
-        assert norm_jobs(0) == 1
+        assert normalize_num_jobs(0) == 1
 
     # Test with positive number less than CPU count
-    assert norm_jobs(2) == 2
+    assert normalize_num_jobs(2) == 2
 
     # Test with positive number greater than CPU count
     with pytest.warns(
         UserWarning,
         match=f"`num_jobs` \\(.*\\) exceeds the number of CPU cores \\({cpu_count}\\).",
     ):
-        assert norm_jobs(cpu_count + 2) == cpu_count
+        assert normalize_num_jobs(cpu_count + 2) == cpu_count
 
     # Test with negative number
-    assert norm_jobs(-1) == cpu_count
+    assert normalize_num_jobs(-1) == cpu_count
 
     # Test with a smaller negative number
-    assert norm_jobs(-3) == cpu_count - 3 + 1
+    assert normalize_num_jobs(-3) == cpu_count - 3 + 1
 
 
-def test_build_faiss_index():
-    faiss = pytest.importorskip("faiss", reason="FAISS is not installed")
-    embeds = np.random.rand(10, 128).astype(np.float32)
-    index = build_faiss_index(embeds)
-    assert isinstance(index, faiss.Index)
-    assert index.ntotal == 10
-
-
-def test_search_phrases():
-    faiss = pytest.importorskip("faiss", reason="FAISS is not installed")
-    queries = ["query1", "query2"]
-    query_embeds = np.random.rand(2, 128).astype(np.float32)
-    phrase_df = pl.DataFrame(
-        {"embed_idx": list(range(10)), "phrase": [f"phrase{i}" for i in range(10)]}
+def test_binary_quantize_torch():
+    """Test binary quantization with packing for torch tensors."""
+    # 16 dimensions -> 2 bytes per row when packed
+    embeds = torch.tensor(
+        [[-0.5, 0.3, -0.1, 0.8, -0.2, 0.1, -0.3, 0.9, 0.1, 0.2, 0.3, 0.4, -0.1, -0.2, -0.3, -0.4]],
+        dtype=torch.float32,
     )
-    phrase_embeds = np.random.rand(10, 128).astype(np.float32)
+    packed = binary_quantize(embeds)
 
-    index, hits = search_phrases(
-        queries, query_embeds, phrase_df, phrase_embeds, sim_thresh=0.5
+    assert packed.dtype == np.uint8
+    assert packed.shape == (1, 2)  # 16 dims -> 2 bytes
+    # Values: [0,1,0,1,0,1,0,1, 1,1,1,1,0,0,0,0] -> [0b01010101, 0b11110000] = [85, 240]
+    assert packed[0, 0] == 0b01010101
+    assert packed[0, 1] == 0b11110000
+
+
+def test_binary_quantize_numpy():
+    """Test binary quantization with packing for numpy arrays."""
+    # 16 dimensions -> 2 bytes per row when packed
+    embeds = np.array(
+        [
+            [
+                -0.5,
+                0.3,
+                -0.1,
+                0.8,
+                -0.2,
+                0.1,
+                -0.3,
+                0.9,
+                0.1,
+                0.2,
+                0.3,
+                0.4,
+                -0.1,
+                -0.2,
+                -0.3,
+                -0.4,
+            ],
+            [
+                0.1,
+                0.2,
+                0.3,
+                0.4,
+                -0.1,
+                -0.2,
+                -0.3,
+                -0.4,
+                -0.5,
+                0.3,
+                -0.1,
+                0.8,
+                -0.2,
+                0.1,
+                -0.3,
+                0.9,
+            ],
+        ],
+        dtype=np.float32,
     )
+    packed = binary_quantize(embeds)
 
-    assert isinstance(index, faiss.Index)
-    assert "query1" in hits
-    assert "query2" in hits
-    assert isinstance(hits["query1"], pl.DataFrame)
-    assert isinstance(hits["query2"], pl.DataFrame)
+    assert packed.dtype == np.uint8
+    assert packed.shape == (2, 2)  # 16 dims -> 2 bytes per row
 
-    # Check if the hits contain the expected columns
-    if not hits["query1"].is_empty():
-        assert "embed_idx" in hits["query1"].columns
-        assert "phrase" in hits["query1"].columns
-        assert "query_sim" in hits["query1"].columns
 
-    if not hits["query2"].is_empty():
-        assert "embed_idx" in hits["query2"].columns
-        assert "phrase" in hits["query2"].columns
-        assert "query_sim" in hits["query2"].columns
+def test_binary_quantize_pack_false_raises():
+    """Test that pack=False raises an error."""
+    embeds = np.array([[0.1, -0.2, 0.3, -0.4]], dtype=np.float32)
+    with pytest.raises(ValueError, match="pack=False is not supported"):
+        binary_quantize(embeds, pack=False)
+
+
+def test_int8_quantize_numpy():
+    """Test int8 quantization with numpy arrays."""
+    embeds = np.array([[0.0, 0.5, 1.0], [-1.0, 0.0, 1.0]], dtype=np.float32)
+    quantized, scales, min_vals = int8_quantize(embeds)
+
+    assert quantized.dtype == np.uint8
+    assert scales.dtype == np.float32
+    assert min_vals.dtype == np.float32
+    assert quantized.shape == embeds.shape
+    assert scales.shape == (2,)
+    assert min_vals.shape == (2,)
+
+    # First row: [0.0, 0.5, 1.0] -> min=0, max=1, scale=1/255
+    # Quantized: [0, 127.5, 255] -> [0, 128, 255]
+    assert quantized[0, 0] == 0
+    assert quantized[0, 2] == 255
+
+    # Verify dequantization works
+    dequantized = quantized.astype(np.float32) * scales[:, None] + min_vals[:, None]
+    np.testing.assert_allclose(dequantized, embeds, atol=0.01)
+
+
+def test_int8_quantize_torch():
+    """Test int8 quantization with torch tensors."""
+    embeds = torch.tensor([[0.0, 0.5, 1.0], [-1.0, 0.0, 1.0]], dtype=torch.float32)
+    quantized, scales, min_vals = int8_quantize(embeds)
+
+    assert quantized.dtype == torch.uint8
+    assert scales.dtype == torch.float32
+    assert min_vals.dtype == torch.float32
+    assert quantized.shape == embeds.shape
+    assert scales.shape == (2,)
+    assert min_vals.shape == (2,)
+
+    # Verify dequantization works
+    dequantized = quantized.float() * scales[:, None] + min_vals[:, None]
+    torch.testing.assert_close(dequantized, embeds, atol=0.01, rtol=0.01)
+
+
+def test_int8_quantize_constant_row():
+    """Test int8 quantization handles constant rows (zero scale)."""
+    embeds = np.array([[0.5, 0.5, 0.5], [0.0, 0.5, 1.0]], dtype=np.float32)
+    quantized, scales, min_vals = int8_quantize(embeds)
+
+    # Constant row should not cause division by zero
+    assert not np.any(np.isnan(quantized))
+    assert not np.any(np.isinf(quantized))

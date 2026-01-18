@@ -1,4 +1,4 @@
-# Copyright 2024 Nicholas Gigliotti
+# Copyright 2024-2026 Nicholas Gigliotti
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +19,12 @@
 # Modifications to the original code were made by Nicholas Gigliotti and are
 # licensed under the Apache 2.0 License.
 
+import logging
+from typing import ClassVar
+
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 class IncrementalPCA:
@@ -167,35 +172,111 @@ class IncrementalPCA:
 
     def __init__(
         self,
-        n_components: int = None,
+        n_components: int | None = None,
         *,
         whiten: bool = False,
         copy: bool = True,
-        batch_size: int = None,
-        device: str = "cuda",
+        batch_size: int | None = None,
+        device: str | torch.device = "cuda",
     ) -> None:
         self.n_components = n_components
         self.whiten = whiten
         self.copy = copy
         self.batch_size = batch_size
-        self.device = device
+        self.device = torch.device(device)
 
-    def to(self, device: str) -> "IncrementalPCA":
-        self.device = device
-        fitted_attrs = [
-            "n_samples_seen_",
-            "components_",
-            "mean_",
-            "singular_values_",
-            "explained_variance_",
-            "explained_variance_ratio_",
-            "var_",
-            "noise_variance_",
-        ]
-        for attr in fitted_attrs:
-            if hasattr(self, attr):
-                setattr(self, attr, getattr(self, attr).to(device))
+    def __repr__(self) -> str:
+        return f"IncrementalPCA(n_components={self.n_components}, device={self.device})"
+
+    _fitted_attrs: ClassVar[list[str]] = [
+        "n_samples_seen_",
+        "n_batches_seen_",
+        "n_components_",
+        "components_",
+        "mean_",
+        "singular_values_",
+        "explained_variance_",
+        "explained_variance_ratio_",
+        "var_",
+        "noise_variance_",
+    ]
+
+    def to(self, device: str | torch.device) -> "IncrementalPCA":
+        self.device = torch.device(device)
+        for attr in self._fitted_attrs:
+            val = getattr(self, attr, None)
+            if val is not None and isinstance(val, torch.Tensor):
+                setattr(self, attr, val.to(device))
         return self
+
+    def save(self, path: str) -> None:
+        """Save the fitted PCA estimator to a file.
+
+        Parameters
+        ----------
+        path : str
+            Path to save the estimator.
+
+        Raises
+        ------
+        ValueError
+            If the estimator has not been fitted.
+        """
+        if not hasattr(self, "components_"):
+            raise ValueError("Cannot save unfitted estimator. Call fit() first.")
+
+        state = {
+            "config": {
+                "n_components": self.n_components,
+                "whiten": self.whiten,
+                "copy": self.copy,
+                "batch_size": self.batch_size,
+            },
+            "fitted": {
+                attr: getattr(self, attr) for attr in self._fitted_attrs if hasattr(self, attr)
+            },
+        }
+        torch.save(state, path)
+        logger.info(f"Saved IncrementalPCA to {path}")
+
+    @classmethod
+    def load(cls, path: str, device: str | torch.device | None = None) -> "IncrementalPCA":
+        """Load a fitted PCA estimator from a file.
+
+        Parameters
+        ----------
+        path : str
+            Path to the saved estimator.
+        device : str or torch.device, optional
+            Device to load the tensors to. If None, uses the device from the saved state.
+
+        Returns
+        -------
+        IncrementalPCA
+            Loaded estimator.
+        """
+        state = torch.load(path, weights_only=False)
+        config = state["config"]
+
+        # Use provided device or default to CPU (saved tensors are on CPU after torch.save)
+        if device is None:
+            device = "cpu"
+
+        instance = cls(
+            n_components=config["n_components"],
+            whiten=config["whiten"],
+            copy=config["copy"],
+            batch_size=config["batch_size"],
+            device=device,
+        )
+
+        for attr, val in state["fitted"].items():
+            if isinstance(val, torch.Tensor):
+                val = val.to(device)
+            setattr(instance, attr, val)
+
+        logger.info(f"Loaded IncrementalPCA from {path}")
+        return instance
 
     @torch.no_grad()
     def get_covariance(self) -> torch.Tensor:
@@ -240,10 +321,7 @@ class IncrementalPCA:
 
         # Handle corner cases first
         if self.n_components_ == 0:
-            return (
-                torch.eye(n_features, device=self.components_.device)
-                / self.noise_variance_
-            )
+            return torch.eye(n_features, device=self.components_.device) / self.noise_variance_
 
         if self.noise_variance_ == 0.0:
             return torch.inverse(self.get_covariance())
@@ -327,9 +405,7 @@ class IncrementalPCA:
         exact inverse operation, which includes reversing whitening.
         """
         if self.whiten:
-            scaled_components = (
-                torch.sqrt(self.explained_variance_[:, None]) * self.components_
-            )
+            scaled_components = torch.sqrt(self.explained_variance_[:, None]) * self.components_
             return X @ scaled_components + self.mean_
         else:
             return X @ self.components_ + self.mean_
@@ -379,6 +455,7 @@ class IncrementalPCA:
         """
         self.components_ = None
         self.n_samples_seen_ = 0
+        self.n_batches_seen_ = 0
         self.mean_ = 0.0
         self.var_ = 0.0
         self.singular_values_ = None
@@ -421,7 +498,7 @@ class IncrementalPCA:
         """
         first_pass = not hasattr(self, "components_")
         if X.device != self.device:
-            print(f"Moving X to device '{self.device}'")
+            logger.debug(f"Moving X to device '{self.device}'")
             X = X.to(self.device)
 
         n_samples, n_features = X.shape
@@ -446,9 +523,7 @@ class IncrementalPCA:
         else:
             self.n_components_ = self.n_components
 
-        if (self.components_ is not None) and (
-            self.components_.shape[0] != self.n_components_
-        ):
+        if (self.components_ is not None) and (self.components_.shape[0] != self.n_components_):
             raise ValueError(
                 f"Number of input features has changed from {self.components_.shape[0]} "
                 f"to {self.n_components_} between calls to partial_fit! Try "
@@ -458,6 +533,7 @@ class IncrementalPCA:
         # This is the first partial_fit
         if not hasattr(self, "n_samples_seen_"):
             self.n_samples_seen_ = 0
+            self.n_batches_seen_ = 0
             self.mean_ = torch.zeros(n_features, device=self.device)
             self.var_ = torch.zeros(n_features, device=self.device)
 
@@ -466,9 +542,9 @@ class IncrementalPCA:
             X,
             last_mean=self.mean_,
             last_variance=self.var_,
-            last_sample_count=torch.as_tensor(
-                self.n_samples_seen_, device=self.device
-            ).repeat(X.shape[1]),
+            last_sample_count=torch.as_tensor(self.n_samples_seen_, device=self.device).repeat(
+                X.shape[1]
+            ),
         )
         n_total_samples = n_total_samples[0]
         # Whitening
@@ -479,9 +555,9 @@ class IncrementalPCA:
             col_batch_mean = torch.mean(X, axis=0)
             X -= col_batch_mean
             # Build matrix of combined previous basis and new data
-            mean_correction = torch.sqrt(
-                (self.n_samples_seen_ / n_total_samples) * n_samples
-            ) * (self.mean_ - col_batch_mean)
+            mean_correction = torch.sqrt((self.n_samples_seen_ / n_total_samples) * n_samples) * (
+                self.mean_ - col_batch_mean
+            )
             X = torch.vstack(
                 (
                     self.singular_values_.reshape((-1, 1)) * self.components_,
@@ -506,7 +582,8 @@ class IncrementalPCA:
         if self.n_components_ not in (n_samples, n_features):
             self.noise_variance_ = explained_variance[self.n_components_ :].mean()
         else:
-            self.noise_variance_ = 0.0
+            self.noise_variance_ = torch.tensor(0.0, device=self.device)
+        self.n_batches_seen_ += 1
         return self
 
 
