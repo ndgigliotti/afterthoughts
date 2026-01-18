@@ -891,13 +891,13 @@ class LiteEncoder(_EncoderBase):
 
     This class includes lossy memory optimizations:
     - PCA dimensionality reduction (GPU-accelerated, incremental fitting)
-    - Precision reduction (float32/64 to float16)
+    - Quantization (fp16, int8, or binary)
     - Dimension truncation
-    - Binary quantization (32x compression)
-    - INT8 quantization (4x compression)
 
     For simple use cases without these optimizations, use Encoder instead.
     """
+
+    QUANTIZE_OPTIONS = (None, "float16", "int8", "binary")
 
     def __init__(
         self,
@@ -906,13 +906,11 @@ class LiteEncoder(_EncoderBase):
         amp: bool = False,
         amp_dtype: torch.dtype = torch.float16,
         attn_implementation: str | None = None,
-        half_embeds: bool = True,
         truncate_dims: int | None = None,
         normalize: bool = False,
         pca: int | None = None,
         pca_early_stop: int | float = 1.0,
-        binary_quantize: bool = False,
-        int8_quantize: bool = False,
+        quantize: str | None = "float16",
         device: torch.device | str | int = "cuda",
         _num_token_jobs: int | None = -1,
     ) -> None:
@@ -930,8 +928,6 @@ class LiteEncoder(_EncoderBase):
             Data type for automatic mixed precision, by default torch.float16.
         attn_implementation : str | None, optional
             Attention implementation to use, by default None.
-        half_embeds : bool, optional
-            Reduce the final embedding precision to float16, by default True.
         truncate_dims : int, None, optional
             Truncate the dimensions of the embeddings, by default None.
         normalize : bool, optional
@@ -941,15 +937,13 @@ class LiteEncoder(_EncoderBase):
         pca_early_stop : int, float, optional
             Number of batches to use for fitting the PCA model, by default 1.0.
             If a float, it is the fraction of the dataset to use.
-        binary_quantize : bool, optional
-            Quantize embeddings to binary (1 bit per dimension), by default False.
-            Returns packed uint8 array where each byte holds 8 dimensions.
-            Provides 32x compression vs float32. Mutually exclusive with half_embeds,
-            normalize, and int8_quantize.
-        int8_quantize : bool, optional
-            Quantize embeddings to uint8 using per-row min-max scaling, by default False.
-            Provides 4x compression vs float32. Returns (embeds, scales, min_vals) tuple
-            for dequantization. Mutually exclusive with half_embeds and binary_quantize.
+        quantize : str or None, optional
+            Quantization method for embeddings, by default "float16".
+            - None: No quantization (full float32)
+            - "float16": Float16 precision (2x compression)
+            - "int8": Per-row uint8 quantization (4x compression).
+              Returns (embeds, scales, min_vals) tuple for dequantization.
+            - "binary": Packed binary (32x compression). Incompatible with normalize.
         device : torch.device, str, int, optional
             Device to use for inference, by default "cuda".
         _num_token_jobs : int, None, optional
@@ -965,27 +959,28 @@ class LiteEncoder(_EncoderBase):
             device=device,
             _num_token_jobs=_num_token_jobs,
         )
-        self.half_embeds = half_embeds
         self.truncate_dims = truncate_dims
         self.pca = pca
         self.pca_early_stop = pca_early_stop
-        self.binary_quantize = binary_quantize
-        self.int8_quantize = int8_quantize
+        self.quantize = quantize
 
         if truncate_dims is not None and pca is not None and truncate_dims < pca:
             raise ValueError("`truncate_dims` must be greater than `pca`.")
-        if binary_quantize and half_embeds:
-            raise ValueError("`binary_quantize` and `half_embeds` are mutually exclusive.")
-        if binary_quantize and normalize:
-            raise ValueError("`binary_quantize` and `normalize` are mutually exclusive.")
-        if binary_quantize and int8_quantize:
-            raise ValueError("`binary_quantize` and `int8_quantize` are mutually exclusive.")
-        if int8_quantize and half_embeds:
-            raise ValueError("`int8_quantize` and `half_embeds` are mutually exclusive.")
+        match quantize:
+            case None | "float16" | "int8":
+                pass
+            case "binary" if normalize:
+                raise ValueError("`quantize='binary'` is incompatible with `normalize=True`.")
+            case "binary":
+                pass
+            case _:
+                raise ValueError(
+                    f"`quantize` must be one of {self.QUANTIZE_OPTIONS}, got {quantize!r}."
+                )
 
-    def half_embeds_if_needed(self, embeds: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
-        """Reduce embedding precision to float16 if enabled."""
-        if self.half_embeds:
+    def quantize_if_needed(self, embeds: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
+        """Apply float16 quantization during postprocessing if enabled."""
+        if self.quantize == "float16":
             embeds = half_embeds(embeds)
         return embeds
 
@@ -1037,7 +1032,7 @@ class LiteEncoder(_EncoderBase):
                 )
             embeds = self.apply_pca(embeds)
         steps = [
-            self.half_embeds_if_needed,
+            self.quantize_if_needed,
             self.normalize_if_needed,
         ]
         for step in steps:
@@ -1242,8 +1237,8 @@ class LiteEncoder(_EncoderBase):
             require_pandas()
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
-        if self.binary_quantize and not as_numpy:
-            raise ValueError("`binary_quantize=True` requires `as_numpy=True`.")
+        if self.quantize == "binary" and not as_numpy:
+            raise ValueError("`quantize='binary'` requires `as_numpy=True`.")
 
         inputs, sentence_texts = self._tokenize(
             docs,
@@ -1347,10 +1342,10 @@ class LiteEncoder(_EncoderBase):
             df = df.to_pandas()
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
-        # Apply quantization if enabled
-        if self.binary_quantize:
+        # Apply int8/binary quantization at the end (fp16 is applied in postprocess)
+        if self.quantize == "binary":
             vecs = binary_quantize(vecs)
-        elif self.int8_quantize:
+        elif self.quantize == "int8":
             vecs = int8_quantize(vecs)
         return df, vecs
 
@@ -1385,18 +1380,18 @@ class LiteEncoder(_EncoderBase):
         Returns
         -------
         np.ndarray or tuple
-            Mean-token embeddings for each query. If binary_quantize is enabled,
-            returns packed uint8 array. If int8_quantize is enabled, returns
-            (quantized, scales, min_vals) tuple.
+            Mean-token embeddings for each query. If quantize='binary', returns
+            packed uint8 array. If quantize='int8', returns (quantized, scales,
+            min_vals) tuple.
         """
-        if self.binary_quantize and not as_numpy:
-            raise ValueError("`binary_quantize=True` requires `as_numpy=True`.")
+        if self.quantize == "binary" and not as_numpy:
+            raise ValueError("`quantize='binary'` requires `as_numpy=True`.")
         query_embeds = super().encode_queries(
             queries, max_length=max_length, batch_size=batch_size, as_numpy=as_numpy
         )
-        # Apply quantization if enabled
-        if self.binary_quantize:
+        # Apply int8/binary quantization at the end (fp16 is applied in postprocess)
+        if self.quantize == "binary":
             query_embeds = binary_quantize(query_embeds)
-        elif self.int8_quantize:
+        elif self.quantize == "int8":
             query_embeds = int8_quantize(query_embeds)
         return query_embeds

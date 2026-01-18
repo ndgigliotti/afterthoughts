@@ -47,7 +47,7 @@ def test_encoder_lite_init():
     model_name = MODEL_NAME
     amp = False
     amp_dtype = torch.float16
-    half_embeds = True
+    quantize = "float16"
     truncate_dims = 128
     normalize = True
     pca = 50
@@ -59,7 +59,7 @@ def test_encoder_lite_init():
         model_name=model_name,
         amp=amp,
         amp_dtype=amp_dtype,
-        half_embeds=half_embeds,
+        quantize=quantize,
         truncate_dims=truncate_dims,
         normalize=normalize,
         pca=pca,
@@ -72,7 +72,7 @@ def test_encoder_lite_init():
     assert encoder.model is not None
     assert encoder.amp == amp
     assert encoder.amp_dtype == amp_dtype
-    assert encoder.half_embeds == half_embeds
+    assert encoder.quantize == quantize
     assert encoder.truncate_dims == truncate_dims
     assert encoder.normalize == normalize
     assert encoder.pca == pca
@@ -240,14 +240,14 @@ def test_encoder_encode_queries(model):
     assert len(query_embeds) == len(queries)
 
 
-def test_encoder_lite_half_embeds_if_needed():
-    model = LiteEncoder(model_name=MODEL_NAME, device="cpu", half_embeds=True)
+def test_encoder_lite_quantize_if_needed():
+    model = LiteEncoder(model_name=MODEL_NAME, device="cpu", quantize="float16")
     embeds = torch.randn(10, 10, dtype=torch.float32)
-    reduced_embeds = model.half_embeds_if_needed(embeds)
+    reduced_embeds = model.quantize_if_needed(embeds)
     assert reduced_embeds.dtype == torch.float16
 
-    model.half_embeds = False
-    non_reduced_embeds = model.half_embeds_if_needed(embeds)
+    model.quantize = None
+    non_reduced_embeds = model.quantize_if_needed(embeds)
     assert non_reduced_embeds.dtype == torch.float32
 
 
@@ -262,40 +262,27 @@ def test_encoder_lite_truncate_dims_if_needed():
     assert non_truncated_embeds.shape[1] == 10
 
 
-def test_encoder_lite_binary_half_embeds_mutually_exclusive():
-    """Test that binary_quantize and half_embeds cannot both be True."""
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        LiteEncoder(model_name=MODEL_NAME, device="cpu", binary_quantize=True, half_embeds=True)
+def test_encoder_lite_quantize_options():
+    """Test that LiteEncoder accepts valid quantize options."""
+    for opt in LiteEncoder.QUANTIZE_OPTIONS:
+        if opt == "binary":
+            # binary is incompatible with normalize=True (default is False, so this works)
+            encoder = LiteEncoder(model_name=MODEL_NAME, device="cpu", quantize=opt)
+        else:
+            encoder = LiteEncoder(model_name=MODEL_NAME, device="cpu", quantize=opt)
+        assert encoder.quantize == opt
 
 
-def test_encoder_lite_binary_normalize_mutually_exclusive():
-    """Test that binary_quantize and normalize cannot both be True."""
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        LiteEncoder(
-            model_name=MODEL_NAME,
-            device="cpu",
-            binary_quantize=True,
-            half_embeds=False,
-            normalize=True,
-        )
+def test_encoder_lite_quantize_invalid():
+    """Test that invalid quantize value raises error."""
+    with pytest.raises(ValueError, match="must be one of"):
+        LiteEncoder(model_name=MODEL_NAME, device="cpu", quantize="invalid")
 
 
-def test_encoder_lite_int8_half_embeds_mutually_exclusive():
-    """Test that int8_quantize and half_embeds cannot both be True."""
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        LiteEncoder(model_name=MODEL_NAME, device="cpu", int8_quantize=True, half_embeds=True)
-
-
-def test_encoder_lite_int8_binary_mutually_exclusive():
-    """Test that int8_quantize and binary_quantize cannot both be True."""
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        LiteEncoder(
-            model_name=MODEL_NAME,
-            device="cpu",
-            int8_quantize=True,
-            binary_quantize=True,
-            half_embeds=False,
-        )
+def test_encoder_lite_binary_normalize_incompatible():
+    """Test that quantize='binary' is incompatible with normalize=True."""
+    with pytest.raises(ValueError, match="incompatible"):
+        LiteEncoder(model_name=MODEL_NAME, device="cpu", quantize="binary", normalize=True)
 
 
 def test_encoder_normalize_if_needed():
