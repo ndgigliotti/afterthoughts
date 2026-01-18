@@ -617,6 +617,7 @@ def _compute_chunk_embeds_slow(
     tokenizer,
     num_sents: int | list | tuple = 2,
     chunk_overlap: int | float | list | dict = 0.5,
+    exclude_special_tokens: bool = False,
 ) -> dict[str, torch.Tensor]:
     """
     Compute chunk embeddings (slow version).
@@ -637,6 +638,10 @@ def _compute_chunk_embeds_slow(
         Number of sentences per chunk. Default is 2.
     chunk_overlap : int or float or list or dict, optional
         Overlap between chunks. Default is 0.5.
+    exclude_special_tokens : bool, optional
+        If True, exclude all special tokens from mean pooling.
+        If False (default), include [CLS] in first chunk and [SEP] in last chunk
+        of each sequence, per the late chunking paper's recommendation.
 
     Returns
     -------
@@ -654,25 +659,45 @@ def _compute_chunk_embeds_slow(
         chunk_overlap=chunk_overlap,
         sequence_idx=sequence_idx,
     )
-    # Mask all special tokens
-    special_tokens_mask = torch.isin(
-        input_ids,
-        torch.tensor(tokenizer.all_special_ids, device=input_ids.device),
-        invert=True,
-    ).to(torch.uint8)
+
+    if exclude_special_tokens:
+        # Default behavior: mask all special tokens at input level
+        special_tokens_mask = torch.isin(
+            input_ids,
+            torch.tensor(tokenizer.all_special_ids, device=input_ids.device),
+            invert=True,
+        ).to(torch.uint8)
+    else:
+        # Paper's approach: use boundary mask computed at chunk level
+        valid_token_mask = _compute_boundary_special_token_mask(
+            chunk_data, tokenizer, input_ids.device
+        )
+
     results = {
         "sequence_idx": chunk_data["sequence_idx"],
         "chunk_token_ids": chunk_data["chunk_token_ids"],
         "chunk_size": chunk_data["chunk_size"],
         "chunk_embeds": [],
     }
-    masked_token_embeds = token_embeds * special_tokens_mask.unsqueeze(-1)
-    for seq_idx, chunk_token_idx in zip(
-        chunk_data["sequence_idx"], chunk_data["chunk_token_idx"], strict=False
-    ):
-        divisor = special_tokens_mask[seq_idx, chunk_token_idx].sum().clamp(min=1)
-        embed = masked_token_embeds[seq_idx, chunk_token_idx].sum(dim=0) / divisor
-        results["chunk_embeds"].append(embed)
+
+    if exclude_special_tokens:
+        masked_token_embeds = token_embeds * special_tokens_mask.unsqueeze(-1)
+        for seq_idx, chunk_token_idx in zip(
+            chunk_data["sequence_idx"], chunk_data["chunk_token_idx"], strict=False
+        ):
+            divisor = special_tokens_mask[seq_idx, chunk_token_idx].sum().clamp(min=1)
+            embed = masked_token_embeds[seq_idx, chunk_token_idx].sum(dim=0) / divisor
+            results["chunk_embeds"].append(embed)
+    else:
+        # Use pre-computed boundary mask for each chunk
+        for i, (seq_idx, chunk_token_idx) in enumerate(
+            zip(chunk_data["sequence_idx"], chunk_data["chunk_token_idx"], strict=False)
+        ):
+            chunk_embeds = token_embeds[seq_idx, chunk_token_idx]
+            chunk_mask = valid_token_mask[i, : len(chunk_token_idx)]
+            divisor = chunk_mask.sum().clamp(min=1)
+            embed = (chunk_embeds * chunk_mask.unsqueeze(-1)).sum(dim=0) / divisor
+            results["chunk_embeds"].append(embed)
 
     results["chunk_embeds"] = torch.vstack(results["chunk_embeds"])
     assert (
@@ -684,6 +709,78 @@ def _compute_chunk_embeds_slow(
     return results
 
 
+def _compute_boundary_special_token_mask(
+    chunk_data: dict,
+    tokenizer,
+    device: torch.device,
+) -> torch.Tensor:
+    """
+    Create mask that includes [CLS] in first chunk and [SEP] in last chunk
+    of each sequence, excludes other special tokens.
+
+    This implements the paper's recommendation to include boundary special tokens
+    in the mean pooling for the first and last chunks of each sequence.
+
+    Parameters
+    ----------
+    chunk_data : dict
+        Dictionary from get_chunk_idx() containing chunk_token_ids, sequence_idx, etc.
+    tokenizer : PreTrainedTokenizer
+        Tokenizer used to identify special tokens.
+    device : torch.device
+        Device to place tensors on.
+
+    Returns
+    -------
+    torch.Tensor
+        Float mask of shape (num_chunks, max_chunk_len) where 1.0 means include token.
+    """
+    chunk_token_ids = chunk_data["chunk_token_ids"]
+    sequence_idx = chunk_data["sequence_idx"]
+    num_chunks, max_chunk_len = chunk_token_ids.shape
+
+    # Get special token IDs
+    cls_token_id = tokenizer.cls_token_id or tokenizer.bos_token_id
+    sep_token_id = tokenizer.sep_token_id or tokenizer.eos_token_id
+    all_special_ids = set(tokenizer.all_special_ids)
+
+    # Start with mask that excludes all special tokens
+    is_special = torch.zeros(num_chunks, max_chunk_len, dtype=torch.bool, device=device)
+    for special_id in all_special_ids:
+        is_special |= chunk_token_ids == special_id
+
+    # Find first and last chunk indices for each sequence
+    # We need to identify which chunks are "first" or "last" within their sequence
+    unique_seqs = torch.unique(sequence_idx)
+    is_first_chunk = torch.zeros(num_chunks, dtype=torch.bool, device=device)
+    is_last_chunk = torch.zeros(num_chunks, dtype=torch.bool, device=device)
+
+    for seq in unique_seqs:
+        seq_mask = sequence_idx == seq
+        seq_indices = torch.where(seq_mask)[0]
+        if len(seq_indices) > 0:
+            is_first_chunk[seq_indices[0]] = True
+            is_last_chunk[seq_indices[-1]] = True
+
+    # For first chunks: allow [CLS] token (typically first position)
+    if cls_token_id is not None:
+        is_cls = chunk_token_ids == cls_token_id
+        # Only allow CLS in first chunks
+        allow_cls = is_first_chunk.unsqueeze(1) & is_cls
+        is_special = is_special & ~allow_cls
+
+    # For last chunks: allow [SEP] token (typically last non-pad position)
+    if sep_token_id is not None:
+        is_sep = chunk_token_ids == sep_token_id
+        # Only allow SEP in last chunks
+        allow_sep = is_last_chunk.unsqueeze(1) & is_sep
+        is_special = is_special & ~allow_sep
+
+    # Return mask where 1.0 = include, 0.0 = exclude
+    valid_token_mask = (~is_special).float()
+    return valid_token_mask
+
+
 @torch.no_grad()
 def _compute_chunk_embeds(
     input_ids: torch.Tensor,
@@ -693,6 +790,7 @@ def _compute_chunk_embeds(
     tokenizer,
     num_sents: int | list | tuple = 2,
     chunk_overlap: int | float | list | dict = 0.5,
+    exclude_special_tokens: bool = False,
 ) -> dict[str, torch.Tensor]:
     """
     Compute embeddings for chunks (sentence groups) using token embeddings.
@@ -714,6 +812,10 @@ def _compute_chunk_embeds(
     chunk_overlap : int or float or list or dict, optional
         Overlap between chunks (number or fraction of sentences),
         by default 0.5.
+    exclude_special_tokens : bool, optional
+        If True, exclude all special tokens from mean pooling.
+        If False (default), include [CLS] in first chunk and [SEP] in last chunk
+        of each sequence, per the late chunking paper's recommendation.
     Returns
     -------
     dict[str, torch.Tensor]
@@ -733,12 +835,19 @@ def _compute_chunk_embeds(
         pad_token_id=tokenizer.pad_token_id,
     )
 
-    # Compute the mask for non-special tokens
-    valid_token_mask = torch.isin(
-        chunk_data["chunk_token_ids"],
-        torch.tensor(tokenizer.all_special_ids, device=input_ids.device),
-        invert=True,
-    ).float()
+    # Compute the mask for valid tokens
+    if exclude_special_tokens:
+        # Default behavior: exclude all special tokens
+        valid_token_mask = torch.isin(
+            chunk_data["chunk_token_ids"],
+            torch.tensor(tokenizer.all_special_ids, device=input_ids.device),
+            invert=True,
+        ).float()
+    else:
+        # Paper's approach: include [CLS] in first chunk, [SEP] in last chunk
+        valid_token_mask = _compute_boundary_special_token_mask(
+            chunk_data, tokenizer, input_ids.device
+        )
 
     # -----------------------------------------------------------
     # Use advanced, vectorized indexing to select tokens

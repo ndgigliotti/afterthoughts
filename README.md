@@ -317,6 +317,42 @@ logging.basicConfig()
 - `INFO`: Model loading, compilation, preprocessing time, PCA status
 - `DEBUG`: Batch sizes, token counts, and other diagnostic details
 
+## Differences from the Late Chunking Paper
+
+Afterthoughts implements the core late chunking approach from [Günther et al., 2024](https://arxiv.org/abs/2409.04701) with some implementation choices that differ from the paper's recommendations. These can be toggled via parameters.
+
+### Special Token Handling
+
+**Paper recommendation:** Include `[CLS]` in the first chunk's mean pooling and `[SEP]` in the last chunk's mean pooling.
+
+**Afterthoughts default:** Follows the paper's approach (`exclude_special_tokens=False`).
+
+To exclude all special tokens from mean pooling:
+
+```python
+df, X = model.encode(docs, exclude_special_tokens=True)
+```
+
+### Deduplication of Overlapping Pre-chunks
+
+When documents exceed the model's max sequence length, Afterthoughts splits them into overlapping pre-chunks at sentence boundaries. This can produce duplicate chunk embeddings for the same sentence groups (with different attention contexts from each pre-chunk window).
+
+**Paper recommendation:** Average the embeddings from duplicate chunks.
+
+**Afterthoughts default:** Averages duplicates automatically (`deduplicate=True`).
+
+To keep all duplicates (e.g., for analysis):
+
+```python
+df, X = model.encode(docs, deduplicate=False)
+```
+
+### Chunk Definition
+
+**Paper:** Tests multiple chunking strategies - fixed token counts (256 tokens), fixed sentence counts (5 sentences), and semantic boundaries. Late chunking is agnostic to the chunking method.
+
+**Afterthoughts:** Uses sentence-based chunking exclusively (similar to the paper's "Sentence Boundaries" strategy). Chunks are defined as N consecutive sentences, detected via BlingFire, NLTK, or syntok. This means chunk sizes vary based on sentence length rather than being fixed token counts.
+
 ## Known Limitations
 
 #### Memory Requirements
@@ -332,8 +368,6 @@ Late chunking's contextual benefits are bounded by the model's maximum sequence 
 * Add paragraph segmentation
 * Support for additional chunking strategies (e.g., semantic chunking)
 * Persist `LiteEncoder` with its fitted PCA transformation
-* Include special tokens in chunk embeddings (as in the late chunking paper)
-* Handle duplicate sentence embeddings from overlapping pre-chunks by averaging
 * Support instruct embedding models
 
 ## References

@@ -395,6 +395,117 @@ class _EncoderBase(ABC):
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
         return df, embeds
 
+    @staticmethod
+    def _deduplicate_chunk_embeds(
+        results: dict,
+        method: str = "average",
+    ) -> dict:
+        """
+        Deduplicate chunk embeddings from overlapping pre-chunks.
+
+        When documents exceed max_length, they are split into overlapping pre-chunks.
+        This can create duplicate chunk embeddings for the same sentence groups
+        (with different attention contexts). This function groups by
+        (document_idx, chunk_size, sentence_ids) and either averages embeddings
+        or keeps the first occurrence.
+
+        Parameters
+        ----------
+        results : dict
+            Dictionary containing accumulated batch results with keys:
+            - 'document_idx': tensor of document indices
+            - 'chunk_size': tensor of chunk sizes
+            - 'chunk_sentence_ids': list of sentence ID tensors per chunk
+            - 'chunk_embeds': tensor of chunk embeddings
+            - 'sequence_idx', 'batch_idx', 'chunk_idx', 'chunk_token_ids' (preserved)
+        method : str, optional
+            Deduplication method: 'average' (default) or 'first'.
+            - 'average': compute mean of embeddings in each group
+            - 'first': keep first occurrence only
+
+        Returns
+        -------
+        dict
+            Deduplicated results with same structure, chunk_idx reindexed
+            to be sequential within each document.
+        """
+        if method not in ("average", "first"):
+            raise ValueError(f"method must be 'average' or 'first', got {method!r}")
+
+        document_idx = results["document_idx"]
+        chunk_size = results["chunk_size"]
+        chunk_embeds = results["chunk_embeds"]
+        chunk_sentence_ids = results["chunk_sentence_ids"]
+
+        # Build group keys: (document_idx, chunk_size, tuple(sorted(sentence_ids)))
+        # We use a tuple of unique sentence IDs as the key
+        group_keys = []
+        for i in range(len(document_idx)):
+            doc_idx = document_idx[i].item()
+            size = chunk_size[i].item()
+            # Get unique sentence IDs (excluding -1 padding)
+            sent_ids = chunk_sentence_ids[i]
+            if isinstance(sent_ids, torch.Tensor):
+                unique_sents = tuple(sorted(set(s.item() for s in sent_ids if s.item() != -1)))
+            else:
+                unique_sents = tuple(sorted(set(s for s in sent_ids if s != -1)))
+            group_keys.append((doc_idx, size, unique_sents))
+
+        # Group indices by key
+        from collections import defaultdict
+
+        groups = defaultdict(list)
+        for i, key in enumerate(group_keys):
+            groups[key].append(i)
+
+        # Build deduplicated results
+        dedup_indices = []  # Indices to keep (first of each group)
+        dedup_embeds = []  # Embeddings (averaged if method='average')
+
+        for _key, indices in groups.items():
+            dedup_indices.append(indices[0])  # Keep first occurrence's metadata
+            if method == "average" and len(indices) > 1:
+                # Average embeddings from all occurrences
+                avg_embed = chunk_embeds[indices].mean(dim=0)
+                dedup_embeds.append(avg_embed)
+            else:
+                dedup_embeds.append(chunk_embeds[indices[0]])
+
+        # Sort by original order to maintain document ordering
+        sorted_pairs = sorted(zip(dedup_indices, dedup_embeds, strict=True), key=lambda x: x[0])
+        dedup_indices = [p[0] for p in sorted_pairs]
+        dedup_embeds = torch.stack([p[1] for p in sorted_pairs])
+
+        # Build deduplicated results dict
+        dedup_results = {}
+        for key in results:
+            if key == "chunk_embeds":
+                dedup_results[key] = dedup_embeds
+            elif key == "chunk_sentence_ids":
+                dedup_results[key] = [chunk_sentence_ids[i] for i in dedup_indices]
+            elif key == "chunk_token_ids":
+                dedup_results[key] = [results[key][i] for i in dedup_indices]
+            elif isinstance(results[key], torch.Tensor):
+                dedup_results[key] = results[key][dedup_indices]
+            elif isinstance(results[key], list):
+                dedup_results[key] = [results[key][i] for i in dedup_indices]
+            else:
+                dedup_results[key] = results[key]
+
+        # Reindex chunk_idx to be sequential within each document
+        if "chunk_idx" in dedup_results and "document_idx" in dedup_results:
+            new_chunk_idx = torch.zeros_like(dedup_results["chunk_idx"])
+            doc_counters = {}
+            for i in range(len(dedup_results["document_idx"])):
+                doc_idx = dedup_results["document_idx"][i].item()
+                if doc_idx not in doc_counters:
+                    doc_counters[doc_idx] = 0
+                new_chunk_idx[i] = doc_counters[doc_idx]
+                doc_counters[doc_idx] += 1
+            dedup_results["chunk_idx"] = new_chunk_idx
+
+        return dedup_results
+
     @timer(readout="Finished preprocessing in {time:.4f} seconds.")
     def _tokenize(
         self,
@@ -520,6 +631,7 @@ class _EncoderBase(ABC):
         move_results_to_cpu: bool = False,
         return_tensors: str = "pt",
         truncate_dim: int | None = None,
+        exclude_special_tokens: bool = False,
         show_progress: bool = True,
     ):
         """Obtain the chunk embeddings for a list of documents, one batch at at time.
@@ -538,6 +650,10 @@ class _EncoderBase(ABC):
             Return tensor format, by default "pt".
         truncate_dim : int | None, optional
             Truncate token embeddings to this dimension, by default None.
+        exclude_special_tokens : bool, optional
+            If True, exclude all special tokens from mean pooling.
+            If False (default), include [CLS] in first chunk and [SEP] in last chunk
+            of each sequence, per the late chunking paper's recommendation.
         show_progress : bool, optional
             Show progress bar during encoding, by default True.
         """
@@ -557,6 +673,7 @@ class _EncoderBase(ABC):
                 tokenizer=self.tokenizer,
                 num_sents=num_sents,
                 chunk_overlap=chunk_overlap,
+                exclude_special_tokens=exclude_special_tokens,
             )
             results["batch_idx"] = torch.full(results["sequence_idx"].shape, batch["batch_idx"][0])
             yield move_or_convert_tensors(
@@ -575,6 +692,9 @@ class _EncoderBase(ABC):
         chunk_overlap: int | float | list | dict = 0,
         prechunk: bool = True,
         prechunk_overlap: float | int = 0.5,
+        sent_tokenizer: str = "blingfire",
+        exclude_special_tokens: bool = False,
+        deduplicate: bool = True,
         return_frame: str = "polars",
         as_numpy: bool = True,
         debug: bool = False,
@@ -589,6 +709,7 @@ class _EncoderBase(ABC):
         queries: list[str],
         max_length: int | None = None,
         batch_size: int = 32,
+        exclude_special_tokens: bool = False,
         as_numpy: bool = True,
     ) -> np.ndarray:
         """Obtain the mean-tokens embeddings for a list of query strings.
@@ -605,6 +726,9 @@ class _EncoderBase(ABC):
             Maximum length of the query sequences, by default None.
         batch_size : int, optional
             Batch size for encoding, by default 32.
+        exclude_special_tokens : bool, optional
+            If True, exclude all special tokens from mean pooling.
+            If False (default), include [CLS] and [SEP] tokens in mean pooling for queries.
         as_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
 
@@ -640,11 +764,17 @@ class _EncoderBase(ABC):
         for batch in batches:
             token_embeds = batch["token_embeds"]
             input_ids = batch["input_ids"]
-            valid_token_mask = torch.isin(
-                input_ids,
-                torch.tensor(self.tokenizer.all_special_ids, device=self.device),
-                invert=True,
-            )
+            if exclude_special_tokens:
+                # Default: exclude all special tokens
+                valid_token_mask = torch.isin(
+                    input_ids,
+                    torch.tensor(self.tokenizer.all_special_ids, device=self.device),
+                    invert=True,
+                )
+            else:
+                # Include [CLS] and [SEP] for queries (entire sequence is a single "chunk")
+                # Only exclude padding tokens
+                valid_token_mask = input_ids != self.tokenizer.pad_token_id
             valid_token_weight = valid_token_mask.unsqueeze(2).float()
             mean_tokens = (token_embeds * valid_token_weight).sum(dim=1) / valid_token_weight.sum(
                 dim=1
@@ -725,6 +855,8 @@ class Encoder(_EncoderBase):
         prechunk: bool = True,
         prechunk_overlap: float | int = 0.5,
         sent_tokenizer: str = "blingfire",
+        exclude_special_tokens: bool = False,
+        deduplicate: bool = True,
         return_frame: str = "polars",
         as_numpy: bool = True,
         debug: bool = False,
@@ -760,7 +892,15 @@ class Encoder(_EncoderBase):
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
         sent_tokenizer : str, optional
             Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
-            Options are "blingfire", "nltk", "pysbd", or "syntok".
+            Options are "blingfire", "nltk", or "syntok".
+        exclude_special_tokens : bool, optional
+            If True, exclude all special tokens from mean pooling.
+            If False (default), include [CLS] in first chunk and [SEP] in last chunk
+            of each sequence, per the late chunking paper's recommendation.
+        deduplicate : bool, optional
+            If True (default), average embeddings for duplicate chunks that arise
+            from overlapping pre-chunks. Duplicates are identified by matching
+            (document_idx, chunk_size, sentence_ids). If False, keep all chunks.
         return_frame : str, optional
             The type of DataFrame of chunks and indices to return, by default 'polars'.
             Options are 'pandas' or 'polars'.
@@ -812,6 +952,7 @@ class Encoder(_EncoderBase):
             chunk_overlap=chunk_overlap,
             move_results_to_cpu=False,
             return_tensors="pt",
+            exclude_special_tokens=exclude_special_tokens,
             show_progress=show_progress,
         )
 
@@ -843,7 +984,22 @@ class Encoder(_EncoderBase):
             results["chunk_size"].append(batch["chunk_size"])
             results["chunk_embeds"].append(batch["chunk_embeds"])
 
-        # Build seq_to_doc mapping for text reconstruction
+        # Combine tensor results (excluding chunk_sentence_ids and chunk_token_ids
+        # which need special handling for text reconstruction)
+        keys_to_skip = {"chunk_sentence_ids", "chunk_token_ids"}
+        for key, value in results.items():
+            if key not in keys_to_skip and len(value) and isinstance(value[0], torch.Tensor):
+                results[key] = torch.cat(value, dim=0)
+
+        # Flatten chunk_sentence_ids and chunk_token_ids from batched to per-chunk lists
+        # Original format: list of 2D batch tensors [[c1, c2], [c3, c4], ...]
+        # Flattened format: list of 1D chunk tensors [c1, c2, c3, c4, ...]
+        results["chunk_sentence_ids"] = [
+            sid for batch in results["chunk_sentence_ids"] for sid in batch
+        ]
+        results["chunk_token_ids"] = [tid for batch in results["chunk_token_ids"] for tid in batch]
+
+        # Build seq_to_doc mapping for document index computation and text reconstruction
         seq_to_doc = (
             dict(
                 zip(
@@ -856,12 +1012,24 @@ class Encoder(_EncoderBase):
             else {i: i for i in inputs.data["sequence_idx"]}
         )
 
-        # Reconstruct chunk text from original sentences (or decode if return_text)
+        # Map sequence indices to document indices
+        if prechunk:
+            results["document_idx"] = torch.tensor(
+                [seq_to_doc[s.item()] for s in results["sequence_idx"]]
+            )
+        else:
+            results["document_idx"] = results["sequence_idx"]
+
+        # Deduplicate chunks from overlapping pre-chunks (before text reconstruction)
+        if deduplicate and prechunk:
+            results = self._deduplicate_chunk_embeds(results)
+
+        # Reconstruct chunk text from original sentences
         if return_text:
             results["chunk"] = self._reconstruct_chunk_texts(
-                results.pop("chunk_sentence_ids"),
-                results.pop("chunk_token_ids"),
-                torch.cat(results["sequence_idx"]),
+                [results.pop("chunk_sentence_ids")],  # Wrap in list for batched format
+                [results.pop("chunk_token_ids")],  # Wrap in list for batched format
+                results["sequence_idx"],
                 seq_to_doc,
                 sentence_texts,
                 show_progress=show_progress,
@@ -869,17 +1037,7 @@ class Encoder(_EncoderBase):
         else:
             results.pop("chunk_token_ids")
             results.pop("chunk_sentence_ids")
-        # Combine results
-        for key, value in results.items():
-            if len(value) and isinstance(value[0], torch.Tensor):
-                results[key] = torch.cat(value, dim=0)
-        # Map sequence indices to document indices (reuse seq_to_doc from text reconstruction)
-        if prechunk:
-            results["document_idx"] = torch.tensor(
-                [seq_to_doc[s.item()] for s in results["sequence_idx"]]
-            )
-        else:
-            results["document_idx"] = results["sequence_idx"]
+
         results["embed_idx"] = torch.arange(results["chunk_embeds"].shape[0])
         df, vecs = self._build_results_df(
             results,
@@ -1207,6 +1365,8 @@ class LiteEncoder(_EncoderBase):
         prechunk: bool = True,
         prechunk_overlap: float | int = 0.5,
         sent_tokenizer: str = "blingfire",
+        exclude_special_tokens: bool = False,
+        deduplicate: bool = True,
         return_frame: str = "polars",
         as_numpy: bool = True,
         debug: bool = False,
@@ -1236,7 +1396,15 @@ class LiteEncoder(_EncoderBase):
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
         sent_tokenizer : str, optional
             Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
-            Options are "blingfire", "nltk", "pysbd", or "syntok".
+            Options are "blingfire", "nltk", or "syntok".
+        exclude_special_tokens : bool, optional
+            If True, exclude all special tokens from mean pooling.
+            If False (default), include [CLS] in first chunk and [SEP] in last chunk
+            of each sequence, per the late chunking paper's recommendation.
+        deduplicate : bool, optional
+            If True (default), average embeddings for duplicate chunks that arise
+            from overlapping pre-chunks. Duplicates are identified by matching
+            (document_idx, chunk_size, sentence_ids). If False, keep all chunks.
         return_frame : str, optional
             The type of DataFrame of chunks and indices to return, by default 'polars'.
             Options are 'pandas' or 'polars'.
@@ -1291,6 +1459,7 @@ class LiteEncoder(_EncoderBase):
             move_results_to_cpu=False,
             return_tensors="pt",
             truncate_dim=self.truncate_dims,
+            exclude_special_tokens=exclude_special_tokens,
             show_progress=show_progress,
         )
         # Process batches based on PCA mode
@@ -1307,7 +1476,22 @@ class LiteEncoder(_EncoderBase):
                 logger.info("PCA is already fit and will be applied to all batches.")
             results = self._process_batches_simple(batches)
 
-        # Build seq_to_doc mapping for text reconstruction
+        # Combine tensor results (excluding chunk_sentence_ids and chunk_token_ids
+        # which need special handling for text reconstruction)
+        keys_to_skip = {"chunk_sentence_ids", "chunk_token_ids"}
+        for key, value in results.items():
+            if key not in keys_to_skip and len(value) and isinstance(value[0], torch.Tensor):
+                results[key] = torch.cat(value, dim=0)
+
+        # Flatten chunk_sentence_ids and chunk_token_ids from batched to per-chunk lists
+        # Original format: list of 2D batch tensors [[c1, c2], [c3, c4], ...]
+        # Flattened format: list of 1D chunk tensors [c1, c2, c3, c4, ...]
+        results["chunk_sentence_ids"] = [
+            sid for batch in results["chunk_sentence_ids"] for sid in batch
+        ]
+        results["chunk_token_ids"] = [tid for batch in results["chunk_token_ids"] for tid in batch]
+
+        # Build seq_to_doc mapping for document index computation and text reconstruction
         seq_to_doc = (
             dict(
                 zip(
@@ -1320,12 +1504,24 @@ class LiteEncoder(_EncoderBase):
             else {i: i for i in inputs.data["sequence_idx"]}
         )
 
-        # Reconstruct chunk text from original sentences (or decode if return_text)
+        # Map sequence indices to document indices
+        if prechunk:
+            results["document_idx"] = torch.tensor(
+                [seq_to_doc[s.item()] for s in results["sequence_idx"]]
+            )
+        else:
+            results["document_idx"] = results["sequence_idx"]
+
+        # Deduplicate chunks from overlapping pre-chunks (before text reconstruction)
+        if deduplicate and prechunk:
+            results = self._deduplicate_chunk_embeds(results)
+
+        # Reconstruct chunk text from original sentences
         if return_text:
             results["chunk"] = self._reconstruct_chunk_texts(
-                results.pop("chunk_sentence_ids"),
-                results.pop("chunk_token_ids"),
-                torch.cat(results["sequence_idx"]),
+                [results.pop("chunk_sentence_ids")],  # Wrap in list for batched format
+                [results.pop("chunk_token_ids")],  # Wrap in list for batched format
+                results["sequence_idx"],
                 seq_to_doc,
                 sentence_texts,
                 show_progress=show_progress,
@@ -1333,17 +1529,7 @@ class LiteEncoder(_EncoderBase):
         else:
             results.pop("chunk_token_ids")
             results.pop("chunk_sentence_ids")
-        # Combine results
-        for key, value in results.items():
-            if len(value) and isinstance(value[0], torch.Tensor):
-                results[key] = torch.cat(value, dim=0)
-        # Map sequence indices to document indices (reuse seq_to_doc from text reconstruction)
-        if prechunk:
-            results["document_idx"] = torch.tensor(
-                [seq_to_doc[s.item()] for s in results["sequence_idx"]]
-            )
-        else:
-            results["document_idx"] = results["sequence_idx"]
+
         results["embed_idx"] = torch.arange(results["chunk_embeds"].shape[0])
         df, vecs = self._build_results_df(
             results,
@@ -1378,6 +1564,7 @@ class LiteEncoder(_EncoderBase):
         queries: list[str],
         max_length: int | None = None,
         batch_size: int = 32,
+        exclude_special_tokens: bool = False,
         as_numpy: bool = True,
     ) -> np.ndarray:
         """Obtain the mean-tokens embeddings for a list of query strings.
@@ -1394,6 +1581,9 @@ class LiteEncoder(_EncoderBase):
             Maximum length of the query sequences, by default None.
         batch_size : int, optional
             Batch size for encoding, by default 32.
+        exclude_special_tokens : bool, optional
+            If True, exclude all special tokens from mean pooling.
+            If False (default), include [CLS] and [SEP] tokens in mean pooling for queries.
         as_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
 
@@ -1407,7 +1597,11 @@ class LiteEncoder(_EncoderBase):
         if self.quantize == "binary" and not as_numpy:
             raise ValueError("`quantize='binary'` requires `as_numpy=True`.")
         query_embeds = super().encode_queries(
-            queries, max_length=max_length, batch_size=batch_size, as_numpy=as_numpy
+            queries,
+            max_length=max_length,
+            batch_size=batch_size,
+            exclude_special_tokens=exclude_special_tokens,
+            as_numpy=as_numpy,
         )
         # Apply int8/binary quantization at the end (returns different types)
         if self.quantize == "int8":
