@@ -335,13 +335,13 @@ df, X = model.encode(docs, exclude_special_tokens=True)
 
 ### Deduplication of Overlapping Pre-chunks
 
-When documents exceed the model's max sequence length, Afterthoughts splits them into overlapping pre-chunks at sentence boundaries. This can produce duplicate chunk embeddings for the same sentence groups (with different attention contexts from each pre-chunk window).
+When documents exceed the model's max sequence length, both approaches split them into overlapping macro chunks. The key difference is how overlapping regions are handled:
 
-**Paper recommendation:** Average the embeddings from duplicate chunks.
+**Paper approach (Algorithm 2):** Performs token-level deduplication by keeping only the first occurrence of overlapping token embeddings. After processing each macro chunk, the overlap tokens are dropped before concatenating with subsequent chunks. This creates a single unified token embedding sequence with a bias toward earlier context.
 
-**Afterthoughts default:** Averages duplicates automatically (`deduplicate=True`).
+**Afterthoughts approach:** Computes chunk embeddings from each pre-chunk separately, then deduplicates at the embedding level by averaging embeddings for chunks covering the same sentences. This is more bidirectionally neutral, incorporating context from both preceding and following macro chunks.
 
-To keep all duplicates (e.g., for analysis):
+To disable deduplication and keep all duplicate embeddings:
 
 ```python
 df, X = model.encode(docs, deduplicate=False)
