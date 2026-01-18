@@ -967,11 +967,11 @@ class LiteEncoder(_EncoderBase):
         if truncate_dims is not None and pca is not None and truncate_dims < pca:
             raise ValueError("`truncate_dims` must be greater than `pca`.")
         match quantize:
-            case None | "float16" | "int8":
+            case None | "float16":
                 pass
-            case "binary" if normalize:
-                raise ValueError("`quantize='binary'` is incompatible with `normalize=True`.")
-            case "binary":
+            case "int8" | "binary" if normalize:
+                raise ValueError(f"`quantize={quantize!r}` is incompatible with `normalize=True`.")
+            case "int8" | "binary":
                 pass
             case _:
                 raise ValueError(
