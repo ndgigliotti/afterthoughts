@@ -13,9 +13,7 @@ authors = [
 maintainers = [
   {name = "Nicholas Gigliotti", email = "ndgigliotti@gmail.com"}
 ]
-classifiers = [
-
-]
+classifiers = []
 license = {text = "Apache-2.0"}
 dependencies = [
     "blingfire",
@@ -40,7 +38,6 @@ dev = [
 ]
 
 [project.urls]
-
 bugs = "https://github.com/ndgigliotti/finephrase/issues"
 changelog = "https://github.com/ndgigliotti/finephrase/blob/master/changelog.md"
 homepage = "https://github.com/ndgigliotti/finephrase"
@@ -50,9 +47,6 @@ packages = ["afterthoughts"]
 
 [tool.setuptools.package-data]
 "*" = ["*.*"]
-
-
-
 
 # Pyright
 # -------
