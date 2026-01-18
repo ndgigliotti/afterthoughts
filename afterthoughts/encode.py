@@ -236,6 +236,87 @@ class _EncoderBase(ABC):
             )
         return pl.Series([y for x in chunks for y in x])
 
+    def _reconstruct_chunk_texts(
+        self,
+        chunk_sentence_ids: list[torch.Tensor],
+        chunk_token_ids: list[torch.Tensor],
+        sequence_idx: torch.Tensor,
+        seq_to_doc: dict[int, int],
+        sentence_texts: list[list[str]],
+        separator: str = " ",
+        show_progress: bool = True,
+    ) -> pl.Series:
+        """Join original sentence texts by sentence ID instead of detokenizing.
+
+        Parameters
+        ----------
+        chunk_sentence_ids : list[torch.Tensor]
+            List of sentence ID tensors for each chunk (batched).
+        chunk_token_ids : list[torch.Tensor]
+            List of token ID tensors for each chunk (used for fallback).
+        sequence_idx : torch.Tensor
+            Tensor mapping each chunk to its sequence index.
+        seq_to_doc : dict[int, int]
+            Mapping from sequence index to document index.
+        sentence_texts : list[list[str]]
+            Per-document list of sentence texts.
+        separator : str, optional
+            String to join sentences with, by default " ".
+        show_progress : bool, optional
+            Show progress bar during reconstruction, by default True.
+
+        Returns
+        -------
+        pl.Series
+            Polars Series containing the reconstructed chunk texts.
+        """
+        chunks = []
+        fallback_indices = []
+        fallback_token_ids = []
+
+        # Flatten batched sentence_ids and pair with sequence indices
+        flat_sent_ids = [sid for batch in chunk_sentence_ids for sid in batch]
+        flat_token_ids = [tid for batch in chunk_token_ids for tid in batch]
+
+        for i, (sent_ids, token_ids) in enumerate(
+            tqdm(
+                zip(flat_sent_ids, flat_token_ids, strict=True),
+                desc="Reconstructing",
+                disable=not show_progress,
+                total=len(flat_sent_ids),
+            )
+        ):
+            doc_idx = seq_to_doc[sequence_idx[i].item()]
+            doc_sentences = sentence_texts[doc_idx]
+            # Sentence IDs are contiguous, so just get min/max instead of unique
+            valid_mask = sent_ids != -1
+            if not valid_mask.any():
+                chunks.append("")
+                continue
+            valid_ids = sent_ids[valid_mask]
+            min_id, max_id = valid_ids[0].item(), valid_ids[-1].item()
+            # Handle edge case: sentence was split (ID exceeds original count)
+            if max_id >= len(doc_sentences):
+                chunks.append(None)  # Placeholder for fallback
+                fallback_indices.append(i)
+                fallback_token_ids.append(token_ids)
+            else:
+                chunks.append(
+                    separator.join(doc_sentences[sid] for sid in range(min_id, max_id + 1))
+                )
+
+        # Fall back to detokenization for chunks with split sentences
+        if fallback_token_ids:
+            decoded = self.tokenizer.batch_decode(
+                fallback_token_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True,
+            )
+            for idx, text in zip(fallback_indices, decoded, strict=True):
+                chunks[idx] = text
+
+        return pl.Series(chunks)
+
     @staticmethod
     def _build_results_df(
         results: dict,
@@ -304,7 +385,7 @@ class _EncoderBase(ABC):
         batch_size: int = 10,
         num_jobs: int | None = None,
         show_progress: bool = True,
-    ) -> TokenizedDataset:
+    ) -> tuple[TokenizedDataset, list[list[str]]]:
         """Tokenize a list of documents into input sequences for the model.
 
         Tokenization preserves sentence boundaries using BlingFire sentence detection.
@@ -333,8 +414,8 @@ class _EncoderBase(ABC):
 
         Returns
         -------
-        TokenizedDataset
-            Dataset containing the tokenized input sequences.
+        tuple[TokenizedDataset, list[list[str]]]
+            Tuple of (dataset containing tokenized input sequences, per-document sentence texts).
 
         Raises
         ------
@@ -343,7 +424,7 @@ class _EncoderBase(ABC):
         """
         if num_jobs is None:
             num_jobs = self.__num_token_jobs
-        inputs = tokenize_with_sentence_boundaries(
+        inputs, sentence_texts = tokenize_with_sentence_boundaries(
             docs,
             self.tokenizer,
             max_length=max_length,
@@ -354,7 +435,7 @@ class _EncoderBase(ABC):
             return_tokenized_dataset=True,
             show_progress=show_progress,
         )
-        return inputs
+        return inputs, sentence_texts
 
     @torch.no_grad()
     def _generate_token_embeds(
@@ -513,7 +594,7 @@ class _EncoderBase(ABC):
         """
         token_batch_size = _get_tokenization_batch_size(queries)
         num_token_batches = math.ceil(len(queries) / token_batch_size)
-        inputs = self._tokenize(
+        inputs, _ = self._tokenize(
             queries,
             max_length=max_length,
             prechunk=False,
@@ -677,7 +758,7 @@ class Encoder(_EncoderBase):
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
 
-        inputs = self._tokenize(
+        inputs, sentence_texts = self._tokenize(
             docs,
             max_length=max_length,
             prechunk=prechunk,
@@ -710,6 +791,7 @@ class Encoder(_EncoderBase):
             "sequence_idx": [],
             "chunk_idx": [],
             "chunk_token_ids": [],
+            "chunk_sentence_ids": [],
             "chunk_size": [],
             "chunk_embeds": [],
         }
@@ -725,28 +807,47 @@ class Encoder(_EncoderBase):
                 results["chunk_token_ids"].extend(batch["chunk_token_ids"])
             else:
                 results["chunk_token_ids"].append(batch["chunk_token_ids"])
+            if isinstance(batch["sentence_ids"], list):
+                results["chunk_sentence_ids"].extend(batch["sentence_ids"])
+            else:
+                results["chunk_sentence_ids"].append(batch["sentence_ids"])
             results["chunk_size"].append(batch["chunk_size"])
             results["chunk_embeds"].append(batch["chunk_embeds"])
 
-        # Decode chunks in existing batches
-        if return_text:
-            results["chunk"] = self._decode_chunks(results.pop("chunk_token_ids"), show_progress)
-        else:
-            results.pop("chunk_token_ids")
-        # Combine results
-        for key, value in results.items():
-            if len(value) and isinstance(value[0], torch.Tensor):
-                results[key] = torch.cat(value, dim=0)
-        if prechunk:
-            seq_to_sample = dict(
+        # Build seq_to_doc mapping for text reconstruction
+        seq_to_doc = (
+            dict(
                 zip(
                     inputs.data["sequence_idx"],
                     inputs.data["overflow_to_sample_mapping"],
                     strict=False,
                 )
             )
+            if prechunk
+            else {i: i for i in inputs.data["sequence_idx"]}
+        )
+
+        # Reconstruct chunk text from original sentences (or decode if return_text)
+        if return_text:
+            results["chunk"] = self._reconstruct_chunk_texts(
+                results.pop("chunk_sentence_ids"),
+                results.pop("chunk_token_ids"),
+                torch.cat(results["sequence_idx"]),
+                seq_to_doc,
+                sentence_texts,
+                show_progress=show_progress,
+            )
+        else:
+            results.pop("chunk_token_ids")
+            results.pop("chunk_sentence_ids")
+        # Combine results
+        for key, value in results.items():
+            if len(value) and isinstance(value[0], torch.Tensor):
+                results[key] = torch.cat(value, dim=0)
+        # Map sequence indices to document indices (reuse seq_to_doc from text reconstruction)
+        if prechunk:
             results["document_idx"] = torch.tensor(
-                [seq_to_sample[s.item()] for s in results["sequence_idx"]]
+                [seq_to_doc[s.item()] for s in results["sequence_idx"]]
             )
         else:
             results["document_idx"] = results["sequence_idx"]
@@ -788,7 +889,7 @@ class LiteEncoder(_EncoderBase):
         self,
         model_name: str,
         model_dtype: torch.dtype = torch.float32,
-        amp: bool = True,
+        amp: bool = False,
         amp_dtype: torch.dtype = torch.float16,
         attn_implementation: str | None = None,
         half_embeds: bool = True,
@@ -992,6 +1093,7 @@ class LiteEncoder(_EncoderBase):
             "sequence_idx": [],
             "chunk_idx": [],
             "chunk_token_ids": [],
+            "chunk_sentence_ids": [],
             "chunk_size": [],
             "chunk_embeds": [],
         }
@@ -1006,6 +1108,10 @@ class LiteEncoder(_EncoderBase):
             results["chunk_token_ids"].extend(batch["chunk_token_ids"])
         else:
             results["chunk_token_ids"].append(batch["chunk_token_ids"])
+        if isinstance(batch["sentence_ids"], list):
+            results["chunk_sentence_ids"].extend(batch["sentence_ids"])
+        else:
+            results["chunk_sentence_ids"].append(batch["sentence_ids"])
         results["chunk_size"].append(batch["chunk_size"])
         results["chunk_embeds"].append(batch["chunk_embeds"])
 
@@ -1098,7 +1204,7 @@ class LiteEncoder(_EncoderBase):
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
 
-        inputs = self._tokenize(
+        inputs, sentence_texts = self._tokenize(
             docs,
             max_length=max_length,
             prechunk=prechunk,
@@ -1139,27 +1245,41 @@ class LiteEncoder(_EncoderBase):
             if self.pca_mode:
                 logger.info("PCA is already fit and will be applied to all batches.")
             results = self._process_batches_simple(batches)
-        # Decode chunks in existing batches
-        if return_text:
-            results["chunk"] = self._decode_chunks(results.pop("chunk_token_ids"), show_progress)
-        else:
-            results.pop("chunk_token_ids")
-        # Combine results
-        for key, value in results.items():
-            if len(value) and isinstance(value[0], torch.Tensor):
-                results[key] = torch.cat(value, dim=0)
-        if prechunk:
-            # Both sequence_idx and overflow_to_sample_mapping are sorted together,
-            # so create a mapping from original sequence index to sample index
-            seq_to_sample = dict(
+
+        # Build seq_to_doc mapping for text reconstruction
+        seq_to_doc = (
+            dict(
                 zip(
                     inputs.data["sequence_idx"],
                     inputs.data["overflow_to_sample_mapping"],
                     strict=False,
                 )
             )
+            if prechunk
+            else {i: i for i in inputs.data["sequence_idx"]}
+        )
+
+        # Reconstruct chunk text from original sentences (or decode if return_text)
+        if return_text:
+            results["chunk"] = self._reconstruct_chunk_texts(
+                results.pop("chunk_sentence_ids"),
+                results.pop("chunk_token_ids"),
+                torch.cat(results["sequence_idx"]),
+                seq_to_doc,
+                sentence_texts,
+                show_progress=show_progress,
+            )
+        else:
+            results.pop("chunk_token_ids")
+            results.pop("chunk_sentence_ids")
+        # Combine results
+        for key, value in results.items():
+            if len(value) and isinstance(value[0], torch.Tensor):
+                results[key] = torch.cat(value, dim=0)
+        # Map sequence indices to document indices (reuse seq_to_doc from text reconstruction)
+        if prechunk:
             results["document_idx"] = torch.tensor(
-                [seq_to_sample[s.item()] for s in results["sequence_idx"]]
+                [seq_to_doc[s.item()] for s in results["sequence_idx"]]
             )
         else:
             results["document_idx"] = results["sequence_idx"]

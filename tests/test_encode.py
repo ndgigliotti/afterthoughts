@@ -340,3 +340,101 @@ def test_build_results_dataframe_pandas():
     assert isinstance(df, expected_df_type)
     assert isinstance(embeds, expected_embeds_type)
     assert len(df) == len(embeds) == expected_length
+
+
+def test_encoder_preserves_sentence_text(model):
+    """Test that chunk text is reconstructed from original sentences without detokenization."""
+    docs = [
+        "This is the first sentence. Here's the second one!",
+        "Another document starts here. And continues with this.",
+    ]
+    df, X = model.encode(docs, num_sents=1, max_length=64, batch_tokens=256, show_progress=False)
+    assert isinstance(df, pl.DataFrame)
+    assert "chunk" in df.columns
+
+    # Verify text comes from original document (not detokenized)
+    chunks = df["chunk"].to_list()
+    # Each chunk should match a sentence from the original document exactly
+    for chunk in chunks:
+        assert any(chunk in doc for doc in docs), f"Chunk '{chunk}' not found in original docs"
+
+
+def test_encoder_text_preservation_with_overlap(model):
+    """Test text preservation with overlapping chunks."""
+    docs = [
+        "First sentence here. Second sentence follows. Third sentence ends.",
+    ]
+    df, X = model.encode(
+        docs,
+        num_sents=2,
+        chunk_overlap=1,  # One sentence overlap
+        max_length=64,
+        batch_tokens=256,
+        show_progress=False,
+    )
+    assert isinstance(df, pl.DataFrame)
+    chunks = df["chunk"].to_list()
+
+    # Check that overlapping chunks contain correct sentence combinations
+    # With num_sents=2 and overlap=1, we should get chunks like:
+    # [sent0, sent1], [sent1, sent2]
+    for chunk in chunks:
+        # Each chunk should be a substring or contiguous part of the original doc
+        assert any(
+            sent in chunk
+            for sent in [
+                "First sentence",
+                "Second sentence",
+                "Third sentence",
+            ]
+        )
+
+
+def test_encoder_text_preservation_multiple_docs(model):
+    """Test text preservation with multiple documents."""
+    docs = [
+        "Doc one sentence one. Doc one sentence two.",
+        "Doc two sentence one. Doc two sentence two.",
+        "Doc three has a single sentence.",
+    ]
+    df, X = model.encode(docs, num_sents=1, max_length=64, batch_tokens=256, show_progress=False)
+
+    # Verify correct document mapping
+    assert "document_idx" in df.columns
+    doc_indices = df["document_idx"].unique().sort().to_list()
+    assert doc_indices == [0, 1, 2]
+
+    # Each chunk should match its document
+    for row in df.iter_rows(named=True):
+        doc_idx = row["document_idx"]
+        chunk = row["chunk"]
+        assert chunk in docs[doc_idx], f"Chunk '{chunk}' not in doc {doc_idx}"
+
+
+def test_encoder_return_text_false(model):
+    """Test that return_text=False skips text reconstruction."""
+    docs = ["Simple test document. With two sentences."]
+    df, X = model.encode(
+        docs, num_sents=1, max_length=64, batch_tokens=256, return_text=False, show_progress=False
+    )
+    assert "chunk" not in df.columns
+
+
+def test_encoder_text_reconstruction_fallback(model):
+    """Test fallback to decoding when sentence is split due to exceeding max_length."""
+    # Create a document with a very long sentence that will exceed max_length
+    # and trigger _split_long_sentences(), causing sentence IDs to exceed original count
+    long_sentence = (
+        "This is a very long sentence " + "with many repeated words " * 50 + "that ends here."
+    )
+    docs = [f"Short intro. {long_sentence} Short outro."]
+
+    # Use a small max_length to force the long sentence to be split
+    df, X = model.encode(docs, num_sents=1, max_length=32, batch_tokens=256, show_progress=False)
+
+    assert isinstance(df, pl.DataFrame)
+    assert "chunk" in df.columns
+    # Should have chunks - the exact number depends on how the sentence is split
+    assert len(df) > 0
+    # All chunks should have non-empty text (either reconstructed or decoded fallback)
+    assert all(len(chunk) > 0 for chunk in df["chunk"].to_list())

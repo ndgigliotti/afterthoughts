@@ -801,7 +801,7 @@ def tokenize_with_sentence_boundaries(
     batch_size: int = 10,
     n_jobs: int | None = None,
     show_progress: bool = True,
-) -> dict | TokenizedDataset:
+) -> dict | tuple[TokenizedDataset, list[list[str]]]:
     """Tokenizes documents while preserving sentence boundaries.
     This function takes a list of documents, a tokenizer, and optional parameters
     to tokenize the documents into chunks, ensuring that sentence boundaries are
@@ -867,6 +867,13 @@ def tokenize_with_sentence_boundaries(
     # Get sentence offsets for each document using the specified method.
     sent_offsets = get_sentence_offsets(docs, method=method)
     token_offsets = [torch.as_tensor(x) for x in inputs["offset_mapping"]]
+
+    # Extract original sentence texts using character offsets (per-document, not per-sequence).
+    # This allows reconstructing chunk text without detokenization later.
+    sentence_texts = [
+        [doc[start:end] for start, end in offsets.tolist()]
+        for doc, offsets in zip(docs, sent_offsets, strict=False)
+    ]
 
     # Initialize a dictionary to store the results.
     results = {
@@ -944,8 +951,15 @@ def tokenize_with_sentence_boundaries(
             results["overflow_to_sample_mapping"].append(i)
 
     results["sequence_idx"] = list(range(len(results["input_ids"])))
+    # Add sentence_texts for text reconstruction without detokenization.
+    # This is per-document, not per-sequence, so must be extracted before creating TokenizedDataset.
+    results["sentence_texts"] = sentence_texts
     # Return the results dictionary.
-    return TokenizedDataset(results) if return_tokenized_dataset else results
+    if return_tokenized_dataset:
+        # Extract sentence_texts before creating TokenizedDataset (different length)
+        sentence_texts = results.pop("sentence_texts")
+        return TokenizedDataset(results), sentence_texts
+    return results
 
 
 @delayed
