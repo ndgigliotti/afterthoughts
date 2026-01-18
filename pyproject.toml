@@ -33,8 +33,8 @@ pandas = [
 ]
 dev = [
     "coverage",  # testing
-    "mypy",  # linting
     "pre-commit",  # git hooks
+    "pyright",  # type checking
     "pytest",  # testing
     "ruff",  # linting & formatting
 ]
@@ -54,34 +54,24 @@ packages = ["afterthoughts"]
 
 
 
-# Mypy
-# ----
+# Pyright
+# -------
 
-[tool.mypy]
-files = "."
-
-# Use strict defaults
-strict = true
-warn_unreachable = true
-warn_no_return = true
-
-[[tool.mypy.overrides]]
-# Don't require test functions to include types
-module = "tests.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-# Ignore missing imports for packages without type stubs
-module = [
-    "joblib",
-    "blingfire",
-    "nltk",
-    "pandas",
-    "pysbd",
-    "syntok.*",
-    "tqdm.*",
-]
-ignore_missing_imports = true
+[tool.pyright]
+include = ["afterthoughts"]
+exclude = ["tests", "benchmarks"]
+typeCheckingMode = "basic"
+reportMissingTypeStubs = false
+# Disable checks that are primarily triggered by incorrect transformers/tokenizers stubs
+reportArgumentType = false
+reportReturnType = false
+reportGeneralTypeIssues = false
+reportCallIssue = false
+reportOperatorIssue = false
+reportIndexIssue = false
+reportOptionalMemberAccess = false
+reportOptionalSubscript = false
+reportOptionalIterable = false
 
 [tool.ruff]
 target-version = "py310"
