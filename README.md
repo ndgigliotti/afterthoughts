@@ -339,7 +339,7 @@ When documents exceed the model's max sequence length, both approaches split the
 
 **Paper approach (Algorithm 2):** Performs token-level deduplication by keeping only the first occurrence of overlapping token embeddings. After processing each macro chunk, the overlap tokens are dropped before concatenating with subsequent chunks. This creates a single unified token embedding sequence with a bias toward earlier context.
 
-**Afterthoughts approach:** Computes chunk embeddings from each macro chunk separately, then deduplicates at the embedding level by averaging embeddings for chunks covering the exact same sentence IDs. This is more bidirectional, incorporating context from both preceding and following macro chunks.
+**Afterthoughts approach:** Computes chunk embeddings from each macro chunk separately, then deduplicates at the embedding level by averaging embeddings for chunks covering the exact same sentence IDs. This is more bidirectional, incorporating context from both preceding and following macro chunks. It also enables fast vectorized pooling operations on tensors rather than requiring concatenation of ragged token embedding matrices.
 
 Note that only chunks with identical sentence ID sets are averaged. Chunks in the overlap region that cover different (even partially overlapping) sentence groups are kept as distinct embeddings. The deduplication step uses Python loops rather than vectorized operations, but this is typically fast since it only processes chunks from documents exceeding max_length.
 
