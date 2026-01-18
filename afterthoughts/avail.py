@@ -14,8 +14,10 @@
 
 """Lazy imports for optional dependencies."""
 
+from typing import Any
 
-def get_pandas():
+
+def get_pandas() -> Any | None:
     """Return pandas module or None if not available."""
     try:
         import pandas
@@ -25,17 +27,17 @@ def get_pandas():
         return None
 
 
-def require_pandas():
+def require_pandas() -> Any:
     """Return pandas module or raise ImportError if not available."""
     pd = get_pandas()
     if pd is None:
         raise ImportError(
-            "pandas is required for return_frame='pandas'. " "Install it with: pip install pandas"
+            "pandas is required for return_frame='pandas'. Install it with: pip install pandas"
         )
     return pd
 
 
-def require_syntok():
+def require_syntok() -> Any:
     """Return syntok.segmenter.analyze or raise ImportError if not available."""
     try:
         from syntok.segmenter import analyze
@@ -43,11 +45,11 @@ def require_syntok():
         return analyze
     except ImportError:
         raise ImportError(
-            "syntok is required for method='syntok'. " "Install it with: pip install syntok"
+            "syntok is required for method='syntok'. Install it with: pip install syntok"
         ) from None
 
 
-def require_nltk():
+def require_nltk() -> Any:
     """Return nltk module or raise ImportError if not available.
 
     Also ensures punkt tokenizer data is downloaded.
@@ -56,7 +58,7 @@ def require_nltk():
         import nltk
     except ImportError:
         raise ImportError(
-            "nltk is required for method='nltk'. " "Install it with: pip install nltk"
+            "nltk is required for method='nltk'. Install it with: pip install nltk"
         ) from None
 
     # Check if punkt is installed, download if needed
@@ -68,7 +70,7 @@ def require_nltk():
     return nltk
 
 
-def require_pysbd():
+def require_pysbd() -> Any:
     """Return pysbd.Segmenter class or raise ImportError if not available."""
     try:
         from pysbd import Segmenter
@@ -76,5 +78,5 @@ def require_pysbd():
         return Segmenter
     except ImportError:
         raise ImportError(
-            "pysbd is required for method='pysbd'. " "Install it with: pip install pysbd"
+            "pysbd is required for method='pysbd'. Install it with: pip install pysbd"
         ) from None

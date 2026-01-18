@@ -16,7 +16,9 @@
 
 import logging
 import math
+from collections.abc import Iterator
 from functools import partial
+from typing import Any
 
 import numpy as np
 import polars as pl
@@ -111,7 +113,7 @@ class Encoder:
         """
         self.model_name = model_name
         self.model_dtype = model_dtype
-        self.tokenizer = AutoTokenizer.from_pretrained(
+        self.tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
             model_name,
             clean_up_tokenization_spaces=True,
         )
@@ -131,7 +133,9 @@ class Encoder:
     @property
     def device(self) -> torch.device:
         """Returns the device the model is on."""
-        return self.model.device
+        device = self.model.device
+        assert isinstance(device, torch.device)
+        return device
 
     def to(self, device: torch.device | str | int) -> "Encoder":
         """Move the model to a new device.
@@ -329,7 +333,7 @@ class Encoder:
                 total=len(flat_sent_ids),
             )
         ):
-            doc_idx = seq_to_doc[sequence_idx[i].item()]
+            doc_idx = seq_to_doc[int(sequence_idx[i].item())]
             doc_sentences = sentence_texts[doc_idx]
             # Sentence IDs are contiguous, so just get min/max instead of unique
             valid_mask = sent_ids != -1
@@ -337,10 +341,10 @@ class Encoder:
                 chunks.append("")
                 continue
             valid_ids = sent_ids[valid_mask]
-            min_id, max_id = valid_ids[0].item(), valid_ids[-1].item()
+            min_id, max_id = int(valid_ids[0].item()), int(valid_ids[-1].item())
             # Handle edge case: sentence was split (ID exceeds original count)
             if max_id >= len(doc_sentences):
-                chunks.append(None)  # Placeholder for fallback
+                chunks.append("")  # Placeholder for fallback (will be replaced)
                 fallback_indices.append(i)
                 fallback_token_ids.append(token_ids)
             else:
@@ -362,7 +366,7 @@ class Encoder:
 
     @staticmethod
     def _build_results_df(
-        results: dict,
+        results: dict[str, Any],
         return_frame: str = "polars",
         as_numpy: bool = True,
         debug: bool = False,
@@ -386,7 +390,7 @@ class Encoder:
         tuple
             (DataFrame of chunk metadata, embeddings array)
         """
-        df = {}
+        df_dict: dict[str, Any] = {}
         base_keys = [
             "embed_idx",
             "sequence_idx",
@@ -400,29 +404,31 @@ class Encoder:
             keys = base_keys + ["chunk"]
         for key in keys:
             if key in results:
-                df[key] = results[key]
-        df = move_or_convert_tensors(df, return_tensors="np", move_to_cpu=True)
+                df_dict[key] = results[key]
+        df_dict = move_or_convert_tensors(df_dict, return_tensors="np", move_to_cpu=True)
         embeds = results["chunk_embeds"]
         if not isinstance(embeds, torch.Tensor):
             raise TypeError("Chunk embeddings must be torch.Tensor.")
+        embeds_result: np.ndarray[Any, Any] | torch.Tensor
         if as_numpy:
-            embeds = embeds.cpu().numpy()
+            embeds_result = embeds.cpu().numpy()
         else:
-            embeds = embeds.cpu()
+            embeds_result = embeds.cpu()
+        df: pl.DataFrame | Any
         if return_frame == "polars":
-            df = pl.DataFrame(df)
+            df = pl.DataFrame(df_dict)
         elif return_frame == "pandas":
             pd = require_pandas()
-            df = pd.DataFrame(df)
+            df = pd.DataFrame(df_dict)
         else:
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
-        return df, embeds
+        return df, embeds_result
 
     @staticmethod
     def _deduplicate_chunk_embeds(
-        results: dict,
+        results: dict[str, Any],
         method: str = "average",
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Deduplicate chunk embeddings from overlapping pre-chunks.
 
@@ -474,14 +480,14 @@ class Encoder:
             if isinstance(sent_ids, torch.Tensor):
                 valid_mask = sent_ids != -1
                 if valid_mask.any():
-                    valid_ids = sent_ids[valid_mask]
-                    first_sent[i] = valid_ids[0]
-                    last_sent[i] = valid_ids[-1]
+                    valid_ids_tensor = sent_ids[valid_mask]
+                    first_sent[i] = valid_ids_tensor[0]
+                    last_sent[i] = valid_ids_tensor[-1]
             else:
-                valid_ids = [s for s in sent_ids if s != -1]
-                if valid_ids:
-                    first_sent[i] = valid_ids[0]
-                    last_sent[i] = valid_ids[-1]
+                valid_ids_list = [s for s in sent_ids if s != -1]
+                if valid_ids_list:
+                    first_sent[i] = valid_ids_list[0]
+                    last_sent[i] = valid_ids_list[-1]
 
         # Build compound key and use np.unique for fast grouping
         keys = torch.stack([document_idx, chunk_size, first_sent, last_sent], dim=1).numpy()
@@ -496,7 +502,7 @@ class Encoder:
         first_occurrence = torch.zeros(n_groups, dtype=torch.long)
         seen = torch.zeros(n_groups, dtype=torch.bool)
         for i in range(n_chunks):
-            g = group_indices[i].item()
+            g = int(group_indices[i].item())
             if not seen[g]:
                 first_occurrence[g] = i
                 seen[g] = True
@@ -605,7 +611,7 @@ class Encoder:
         """
         if num_jobs is None:
             num_jobs = self.__num_token_jobs
-        inputs, sentence_texts = tokenize_with_sentence_boundaries(
+        result = tokenize_with_sentence_boundaries(
             docs,
             self.tokenizer,
             method=sent_tokenizer,
@@ -617,17 +623,20 @@ class Encoder:
             return_tokenized_dataset=True,
             show_progress=show_progress,
         )
+        if not isinstance(result, tuple):
+            raise TypeError("Expected tokenize_with_sentence_boundaries to return a tuple")
+        inputs, sentence_texts = result
         return inputs, sentence_texts
 
     @torch.no_grad()
     def _generate_token_embeds(
         self,
-        loader: DataLoader,
+        loader: DataLoader[dict[str, Any]],
         move_results_to_cpu: bool = False,
         return_tensors: str = "pt",
         truncate_dim: int | None = None,
         show_progress: bool = True,
-    ):
+    ) -> Iterator[dict[str, Any]]:
         """Obtain the token embeddings for a list of documents, one batch at at time.
 
         Parameters
@@ -671,15 +680,15 @@ class Encoder:
 
     def _generate_chunk_embeds(
         self,
-        loader: DataLoader,
-        num_sents: int | list | tuple,
-        chunk_overlap: int | float | list | dict,
+        loader: DataLoader[dict[str, Any]],
+        num_sents: int | list[int] | tuple[int, ...],
+        chunk_overlap: int | float | list[int] | dict[int, int],
         move_results_to_cpu: bool = False,
         return_tensors: str = "pt",
         truncate_dim: int | None = None,
         exclude_special_tokens: bool = False,
         show_progress: bool = True,
-    ):
+    ) -> Iterator[dict[str, Any]]:
         """Obtain the chunk embeddings for a list of documents, one batch at at time.
 
         Parameters
@@ -733,8 +742,8 @@ class Encoder:
         docs: list[str],
         max_length: int | None = None,
         batch_tokens: int = 16384,
-        num_sents: int | list | tuple = 1,
-        chunk_overlap: int | float | list | dict = 0,
+        num_sents: int | list[int] | tuple[int, ...] = 1,
+        chunk_overlap: int | float | list[int] | dict[int, int] = 0,
         prechunk: bool = True,
         prechunk_overlap: float | int = 0.5,
         sent_tokenizer: str = "blingfire",
@@ -745,7 +754,7 @@ class Encoder:
         debug: bool = False,
         return_text: bool = True,
         show_progress: bool = True,
-    ) -> dict[str, np.ndarray | torch.Tensor]:
+    ) -> tuple[pl.DataFrame | Any, np.ndarray[Any, Any] | torch.Tensor]:
         """Obtain the chunks and chunk embeddings from a list of documents.
 
         This first encodes the input documents, then extracts chunk embeddings
@@ -840,7 +849,7 @@ class Encoder:
             show_progress=show_progress,
         )
 
-        results = {
+        results: dict[str, Any] = {
             "batch_idx": [],
             "sequence_idx": [],
             "chunk_idx": [],
@@ -931,7 +940,7 @@ class Encoder:
         )
         if inputs.sort_by_token_count:
             df = df.sort("sequence_idx", "chunk_idx", descending=False)
-            vecs = vecs[df["embed_idx"]]
+            vecs = vecs[df["embed_idx"].to_list()]
         # Handle internal columns
         if debug:
             df = df.rename({"embed_idx": "orig_embed_idx"})
@@ -951,7 +960,7 @@ class Encoder:
         batch_size: int = 32,
         exclude_special_tokens: bool = False,
         as_numpy: bool = True,
-    ) -> np.ndarray:
+    ) -> np.ndarray[Any, Any] | torch.Tensor:
         """Obtain the mean-tokens embeddings for a list of query strings.
 
         This is a convenient method for embedding query strings into the same space
@@ -1000,7 +1009,7 @@ class Encoder:
             return_tensors="pt",
             truncate_dim=self.truncate_dims,
         )
-        query_embeds = []
+        query_embeds_list: list[torch.Tensor] = []
         for batch in batches:
             token_embeds = batch["token_embeds"]
             input_ids = batch["input_ids"]
@@ -1019,12 +1028,14 @@ class Encoder:
             mean_tokens = (token_embeds * valid_token_weight).sum(dim=1) / valid_token_weight.sum(
                 dim=1
             )
-            mean_tokens = self.postprocess(mean_tokens)
-            query_embeds.append(mean_tokens.cpu())
-        query_embeds = torch.vstack(query_embeds)
+            mean_tokens_processed = self.postprocess(mean_tokens)
+            if isinstance(mean_tokens_processed, np.ndarray):
+                mean_tokens_processed = torch.from_numpy(mean_tokens_processed)
+            query_embeds_list.append(mean_tokens_processed.cpu())
+        query_embeds = torch.vstack(query_embeds_list)
         # Restore original order (TokenizedDataset sorts by token count for efficiency)
         if inputs.sort_by_token_count:
-            query_embeds = query_embeds[inputs.unsort_idx]
+            query_embeds = query_embeds[torch.tensor(inputs.unsort_idx)]
         if as_numpy:
-            query_embeds = query_embeds.numpy()
+            return query_embeds.numpy()
         return query_embeds

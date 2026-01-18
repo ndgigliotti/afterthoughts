@@ -5,6 +5,7 @@ import warnings
 from collections.abc import Iterator
 from functools import cached_property
 from types import MappingProxyType
+from typing import Any
 
 import numpy as np
 import polars as pl
@@ -14,7 +15,7 @@ from joblib import Parallel, delayed
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset, Sampler
 from tqdm.auto import tqdm
-from transformers import PreTrainedTokenizerFast
+from transformers import PreTrainedTokenizerBase, PreTrainedTokenizerFast
 
 from afterthoughts.utils import (
     disable_tokenizer_parallelism,
@@ -75,12 +76,10 @@ def _get_tokenization_batch_size(docs: list[str], sample_size: int = 100) -> int
         return 10
 
 
-class TokenizedDataset(Dataset):
+class TokenizedDataset(Dataset[dict[str, Any]]):
     """A dataset class for tokenized data."""
 
-    def __init__(
-        self, data: dict[str, list[torch.Tensor]], sort_by_token_count: bool = True
-    ) -> None:
+    def __init__(self, data: dict[str, list[Any]], sort_by_token_count: bool = True) -> None:
         """
         Initialize the TokenizedDataset.
 
@@ -94,7 +93,7 @@ class TokenizedDataset(Dataset):
         self.sort_by_token_count = sort_by_token_count
         self.sort_data()
 
-    def validate_data(self):
+    def validate_data(self) -> None:
         """Validate the data in the dataset.
 
         Raises
@@ -133,7 +132,7 @@ class TokenizedDataset(Dataset):
         ):
             raise ValueError("'sentence_ids' must be a list of ragged lists.")
 
-    def sort_data(self):
+    def sort_data(self) -> None:
         """Sort the data by token count."""
         for key in self.data:
             if len(self.data[key]):
@@ -181,18 +180,26 @@ class TokenizedDataset(Dataset):
         """Return a single item from the sorted dataset."""
         return {key: self.data[key][idx] for key in self.keys()}
 
-    def unsort_results(self, results: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def unsort_results(
+        self, results: dict[str, torch.Tensor | np.ndarray[Any, Any] | list[Any]]
+    ) -> dict[str, torch.Tensor | np.ndarray[Any, Any] | list[Any]]:
         """Unsort the results of the dataset."""
-        unsorted = {}
+        unsorted: dict[str, torch.Tensor | np.ndarray[Any, Any] | list[Any]] = {}
         for key in results:
-            if isinstance(results[key], list):
-                if len(results[key]):
-                    unsorted[key] = order_by_indices(results[key], self.unsort_idx)
+            val = results[key]
+            if isinstance(val, list):
+                if len(val):
+                    unsorted[key] = order_by_indices(val, self.unsort_idx)
                 else:
                     unsorted[key] = []
-            elif isinstance(results[key], (torch.Tensor, np.ndarray)):
-                if len(results[key]):
-                    unsorted[key] = results[key][self.unsort_idx]
+            elif isinstance(val, torch.Tensor):
+                if len(val):
+                    unsorted[key] = val[torch.tensor(self.unsort_idx)]
+                else:
+                    unsorted[key] = torch.empty(0)
+            elif isinstance(val, np.ndarray):
+                if len(val):
+                    unsorted[key] = val[np.array(self.unsort_idx)]
                 else:
                     unsorted[key] = torch.empty(0)
         return unsorted
@@ -238,8 +245,8 @@ class DynamicTokenSampler(Sampler[list[int]]):
     @cached_property
     def batches(self) -> list[list[int]]:
         """Return the list of batches of indices."""
-        batch_list = []
-        current_batch = []
+        batch_list: list[list[int]] = []
+        current_batch: list[int] = []
         current_longest = 0
         batch_token_counts = []  # Keep track of token counts for debugging
 
@@ -275,7 +282,7 @@ class DynamicTokenSampler(Sampler[list[int]]):
 
 
 def get_max_length(
-    max_length: int | None, tokenizer: PreTrainedTokenizerFast, required: bool = False
+    max_length: int | None, tokenizer: PreTrainedTokenizerBase, required: bool = False
 ) -> int:
     """
     Get the maximum length for tokenization.
@@ -316,9 +323,9 @@ def get_max_length(
 def _tokenize_batch(
     docs: list[str],
     sample_idx: list[int],
-    tokenizer: PreTrainedTokenizerFast,
+    tokenizer: PreTrainedTokenizerBase,
     max_length: int | None = None,
-    padding: str = False,
+    padding: bool | str = False,
     truncation: bool = True,
     return_overflowing_tokens: bool = True,
     stride: int = 0,
@@ -326,8 +333,8 @@ def _tokenize_batch(
     add_special_tokens: bool = True,
     return_attention_mask: bool = True,
     return_offsets_mapping: bool = False,
-    **kwargs,
-) -> dict[str, torch.Tensor]:
+    **kwargs: Any,
+) -> dict[str, Any]:
     """
     Tokenize a list of documents into input sequences for the model.
 
@@ -366,12 +373,13 @@ def _tokenize_batch(
         Dictionary containing the tokenized inputs and other relevant information.
     """
     max_length = get_max_length(max_length, tokenizer, required=padding == "max_length")
+    idx_arr: list[int] | np.ndarray[Any, np.dtype[np.int64]] | torch.Tensor
     if return_tensors == "np":
-        sample_idx = np.array(sample_idx)
+        idx_arr = np.array(sample_idx)
     elif return_tensors == "pt":
-        sample_idx = torch.tensor(sample_idx)
+        idx_arr = torch.tensor(sample_idx)
     else:
-        sample_idx = list(sample_idx)
+        idx_arr = list(sample_idx)
     inputs = tokenizer(
         docs,
         max_length=max_length,
@@ -387,27 +395,27 @@ def _tokenize_batch(
     )
     # Globalize overflow_to_sample_mapping
     if "overflow_to_sample_mapping" in inputs:
-        if isinstance(sample_idx, list):
+        if isinstance(idx_arr, list):
             inputs["overflow_to_sample_mapping"] = [
-                sample_idx[i] for i in inputs["overflow_to_sample_mapping"]
+                idx_arr[i] for i in inputs["overflow_to_sample_mapping"]
             ]
         else:
-            inputs["overflow_to_sample_mapping"] = sample_idx[inputs["overflow_to_sample_mapping"]]
+            inputs["overflow_to_sample_mapping"] = idx_arr[inputs["overflow_to_sample_mapping"]]
     # Flatten offset mapping
     if "offset_mapping" in inputs:
         inputs["offset_mapping"] = [
             [tuple(offset) for offset in offsets] for offsets in inputs["offset_mapping"]
         ]
-    return inputs
+    return dict(inputs)
 
 
 @torch.no_grad()
 def pad(
-    sequences: list[torch.Tensor],
+    sequences: list[torch.Tensor] | list[np.ndarray[Any, Any]] | list[list[int]],
     pad_value: int,
-    strategy: str = "longest",
+    strategy: str | None = "longest",
     max_length: int | None = None,
-) -> torch.Tensor | list[torch.Tensor]:
+) -> torch.Tensor | np.ndarray[Any, Any] | list[torch.Tensor]:
     """Pads a list of sequences to a uniform length.
 
     Parameters
@@ -446,35 +454,41 @@ def pad(
     if not len(sequences):
         raise ValueError("Input list must not be empty.")
     input_is_numpy = isinstance(sequences[0], np.ndarray)
+    tensor_sequences: list[torch.Tensor]
     if input_is_numpy or isinstance(sequences[0], list):
-        sequences = [torch.tensor(seq) for seq in sequences]
+        tensor_sequences = [torch.tensor(seq) for seq in sequences]
+    else:
+        tensor_sequences = sequences  # type: ignore[assignment]
+    padded_sequences: torch.Tensor | np.ndarray[Any, Any] | list[torch.Tensor]
     if strategy == "max_length":
         if max_length is None:
             raise ValueError("max_length must be specified when strategy='max_length'.")
-        seq_lengths = torch.tensor([len(seq) for seq in sequences])
+        seq_lengths = torch.tensor([len(seq) for seq in tensor_sequences])
         if any(seq_lengths > max_length):
             raise ValueError(f"Input sequence length {seq_lengths.max()} exceeds `max_length`.")
         # Pad the first sequence to `max_length`
-        sequences[0] = F.pad(sequences[0], (0, max_length - len(sequences[0])), value=pad_value)
+        tensor_sequences[0] = F.pad(
+            tensor_sequences[0], (0, max_length - len(tensor_sequences[0])), value=pad_value
+        )
         # Pad the remaining sequences to the length of the first sequence
-        padded_sequences = pad_sequence(sequences, batch_first=True, padding_value=pad_value)
+        padded_sequences = pad_sequence(tensor_sequences, batch_first=True, padding_value=pad_value)
     elif strategy == "longest":
-        padded_sequences = pad_sequence(sequences, batch_first=True, padding_value=pad_value)
+        padded_sequences = pad_sequence(tensor_sequences, batch_first=True, padding_value=pad_value)
     elif strategy is None:
-        padded_sequences = sequences
+        padded_sequences = tensor_sequences
     else:
         raise ValueError(f"Invalid value '{strategy}' for `strategy`.")
-    if input_is_numpy:
+    if input_is_numpy and isinstance(padded_sequences, torch.Tensor):
         # Convert the padded tensor back to NumPy
-        padded_sequences = padded_sequences.numpy()
+        return padded_sequences.numpy()
     return padded_sequences
 
 
 def dynamic_pad_collate(
-    batch: list[dict[str, torch.Tensor]],
+    batch: list[dict[str, Any]],
     pad_token_id: int = 0,
     standardize: bool = True,
-) -> dict[str, torch.Tensor]:
+) -> dict[str, Any]:
     """
     Collate function for tokenized data which dynamically pads.
 
@@ -497,10 +511,10 @@ def dynamic_pad_collate(
         A dictionary containing the collated data. The keys are the
         same as the input batch, and the values are PyTorch tensors.
     """
-    collated = {}
+    collated: dict[str, Any] = {}
     if batch:
         # Pad and concatenate the arrays at each key in the batch
-        pad_values = {"input_ids": pad_token_id} | DEFAULT_PAD_VALUES
+        pad_values = {"input_ids": pad_token_id} | dict(DEFAULT_PAD_VALUES)
         first_batch = batch[0]
         for key in first_batch:
             first_val = first_batch[key]
@@ -526,7 +540,9 @@ def dynamic_pad_collate(
                 collated[key] = batch_vals
                 if isinstance(collated[key][0], (int, float)):
                     collated[key] = torch.tensor(collated[key])
-        collated["attention_mask"] = collated["input_ids"].ne(pad_token_id).long()
+        input_ids = collated["input_ids"]
+        if isinstance(input_ids, torch.Tensor):
+            collated["attention_mask"] = input_ids.ne(pad_token_id).long()
     return collated
 
 
@@ -544,7 +560,7 @@ def tokenize_docs(
     batch_size: int = 10,
     n_jobs: int | None = None,
     show_progress: bool = True,
-) -> dict | TokenizedDataset:
+) -> dict[str, Any] | TokenizedDataset:
     """
     Tokenize documents in a dataset using a tokenizer.
 

@@ -18,10 +18,11 @@ import math
 import os
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from functools import singledispatch
+from functools import singledispatch, wraps
 from operator import itemgetter
+from typing import Any, ParamSpec, TypeVar
 
 import numpy as np
 import polars as pl
@@ -67,7 +68,7 @@ def configure_logging(
     datefmt : str
         Date format for log messages. Default is "%Y-%m-%d %H:%M:%S".
     """
-    handlers = []
+    handlers: list[logging.Handler] = []
     if stream:
         handlers.append(logging.StreamHandler())
     if log_file:
@@ -77,7 +78,7 @@ def configure_logging(
 
 
 @contextmanager
-def disable_tokenizer_parallelism():
+def disable_tokenizer_parallelism() -> Iterator[None]:
     """Context manager to temporarily disable HuggingFace tokenizer parallelism.
 
     This is necessary when using external parallelization (joblib, multiprocessing)
@@ -95,7 +96,7 @@ def disable_tokenizer_parallelism():
 
 
 def get_overlap_count(
-    overlap: float | int | list | tuple | dict,
+    overlap: float | int | list[int] | tuple[int, ...] | dict[int, int],
     length: int,
     length_idx: int | None = None,
 ) -> int:
@@ -135,6 +136,8 @@ def get_overlap_count(
         if overlap_count == length:
             overlap_count -= 1
     elif isinstance(overlap, (list, tuple)):
+        if length_idx is None:
+            raise ValueError("`length_idx` is required when `overlap` is a list or tuple.")
         overlap_count = overlap[length_idx]
     elif isinstance(overlap, dict):
         overlap_count = overlap[length]
@@ -163,24 +166,30 @@ def normalize_num_jobs(num_jobs: int | None) -> int:
     int
         Absolute number of jobs.
     """
-    true_num_jobs = num_jobs
     num_cpus = cpu_count()
-    if num_jobs is None:
-        true_num_jobs = 1
-    elif num_jobs == 0:
-        warnings.warn("`num_jobs` cannot be 0. Setting `num_jobs` to 1.", stacklevel=2)
+    if num_jobs is None or num_jobs == 0:
+        if num_jobs == 0:
+            warnings.warn("`num_jobs` cannot be 0. Setting `num_jobs` to 1.", stacklevel=2)
         true_num_jobs = 1
     elif num_jobs < 0:
         true_num_jobs = num_cpus + 1 + num_jobs
+    else:
+        true_num_jobs = num_jobs
     if true_num_jobs > num_cpus:
         warnings.warn(
             f"`num_jobs` ({num_jobs}) exceeds the number of CPU cores ({num_cpus}).", stacklevel=2
         )
-        true_num_jobs = min(num_jobs, num_cpus)
+        true_num_jobs = min(true_num_jobs, num_cpus)
     return true_num_jobs
 
 
-def timer(readout: str = "Execution time: {time:.4f} seconds") -> Callable:
+P = ParamSpec("P")
+T = TypeVar("T")
+
+
+def timer(
+    readout: str = "Execution time: {time:.4f} seconds",
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """Decorator to time a function execution and log the result.
 
     Parameters
@@ -194,8 +203,9 @@ def timer(readout: str = "Execution time: {time:.4f} seconds") -> Callable:
         Decorated function.
     """
 
-    def decorator(func: Callable) -> Callable:
-        def wrapper(*args, **kwargs):
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
+        @wraps(func)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
             start_time = time.perf_counter()
             result = func(*args, **kwargs)
             end_time = time.perf_counter()
@@ -233,22 +243,23 @@ def get_memory_size(
     elif isinstance(a, torch.Tensor):
         return a.element_size() * a.numel()
     elif isinstance(a, (pl.Series, pl.DataFrame)):
-        return a.estimated_size()
-    pd = get_pandas()
+        return int(a.estimated_size())
+    # Check for optional pandas types (dynamic import)
+    pd = get_pandas()  # type: ignore[unreachable]
     if pd is not None:
         if isinstance(a, pd.Series):
-            return a.memory_usage(index=True, deep=True)
+            return int(a.memory_usage(index=True, deep=True))
         elif isinstance(a, pd.DataFrame):
-            return a.memory_usage(index=True, deep=True).sum()
+            return int(a.memory_usage(index=True, deep=True).sum())
     raise TypeError(f"Invalid input type {type(a).__name__}.")
 
 
-def format_memory_size(n_bytes: int) -> str:
+def format_memory_size(n_bytes: int | float) -> str:
     """Format the size of an array in bytes.
 
     Parameters
     ----------
-    n_bytes : int
+    n_bytes : int or float
         Size in bytes.
 
     Returns
@@ -256,17 +267,18 @@ def format_memory_size(n_bytes: int) -> str:
     str
         Formatted size.
     """
+    size: float = float(n_bytes)
     for unit in ["B", "KB", "MB", "GB", "TB", "PB"]:
-        if n_bytes < 1024:
-            return f"{n_bytes:.2f} {unit}"
-        n_bytes /= 1024
-    return f"{n_bytes:.2f} PB"
+        if size < 1024:
+            return f"{size:.2f} {unit}"
+        size /= 1024
+    return f"{size:.2f} PB"
 
 
 def get_memory_report(
     data: dict[str, torch.Tensor | np.ndarray | pl.Series | pl.DataFrame],
     readable: bool = True,
-) -> dict[str, str]:
+) -> dict[str, str] | dict[str, int]:
     """Get the size of the arrays in data.
 
     Parameters
@@ -284,7 +296,7 @@ def get_memory_report(
     dict[str, str]
         Dictionary of array sizes in human-readable format.
     """
-    report = {}
+    report: dict[str, int] = {}
     for name, arr in data.items():
         valid_types: tuple[type, ...] = (
             torch.Tensor,
@@ -303,7 +315,7 @@ def get_memory_report(
             report[name] = n_bytes
     report["_total_"] = sum(report.values())
     if readable:
-        report = {name: format_memory_size(size) for name, size in report.items()}
+        return {name: format_memory_size(size) for name, size in report.items()}
     return report
 
 
@@ -329,9 +341,12 @@ def normalize(embeds: torch.Tensor | np.ndarray, dim: int = 1) -> torch.Tensor |
     """
     eps = 1e-12
     if isinstance(embeds, np.ndarray):
-        norms = np.linalg.norm(embeds, axis=dim, keepdims=True)
+        norms: np.ndarray[Any, np.dtype[np.floating[Any]]] = np.linalg.norm(
+            embeds, axis=dim, keepdims=True
+        )
         norms[norms == 0] = eps
-        return embeds / norms
+        normalized: np.ndarray[Any, Any] = embeds / norms
+        return normalized
     elif isinstance(embeds, torch.Tensor):
         return F.normalize(embeds, p=2, dim=dim, eps=eps)
     else:
@@ -383,8 +398,7 @@ def half_embeds(a: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
     TypeError
         If the input is not a Torch tensor or NumPy array.
     """
-    if not isinstance(a, (torch.Tensor, np.ndarray)):
-        raise TypeError(f"Invalid input type {type(a).__name__}.")
+    raise TypeError(f"Invalid input type {type(a).__name__}.")
 
 
 @half_embeds.register
@@ -424,8 +438,7 @@ def truncate_dims(embeds: torch.Tensor | np.ndarray, dim: int) -> torch.Tensor |
     TypeError
         If the input is not a Torch tensor or NumPy array.
     """
-    if not isinstance(embeds, (torch.Tensor, np.ndarray)):
-        raise TypeError(f"Invalid input type {type(embeds).__name__}.")
+    raise TypeError(f"Invalid input type {type(embeds).__name__}.")
 
 
 @truncate_dims.register
@@ -478,7 +491,9 @@ def _(embeds: np.ndarray, dim: int) -> np.ndarray:
     return embeds
 
 
-def move_or_convert_tensors(data: dict, return_tensors: str = "pt", move_to_cpu: bool = False):
+def move_or_convert_tensors(
+    data: dict[str, Any], return_tensors: str = "pt", move_to_cpu: bool = False
+) -> dict[str, Any]:
     """Move or convert the results to the specified format.
 
     Parameters
@@ -523,7 +538,7 @@ def move_or_convert_tensors(data: dict, return_tensors: str = "pt", move_to_cpu:
     return data
 
 
-def order_by_indices(elements: list, indices: list[int]) -> list:
+def order_by_indices(elements: list[Any], indices: list[int]) -> list[Any]:
     """Order a Python list by the given indices."""
     if len(elements) != len(indices):
         raise ValueError(
@@ -541,4 +556,4 @@ def order_by_indices(elements: list, indices: list[int]) -> list:
 
 def round_up_to_power_of_2(x: int) -> int:
     """Round up to the nearest power of 2."""
-    return 2 ** math.ceil(math.log2(x))
+    return int(2 ** math.ceil(math.log2(x)))
