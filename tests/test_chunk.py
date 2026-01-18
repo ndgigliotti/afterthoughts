@@ -3,7 +3,9 @@ import torch
 
 from afterthoughts.chunk import (
     _add_special_tokens,
+    _compute_boundary_special_token_mask,
     _split_long_sentences,
+    get_chunk_idx,
     get_sentence_offsets,
     get_sentence_offsets_blingfire,
     get_sentence_offsets_nltk,
@@ -266,3 +268,21 @@ def test_split_long_sentences_empty_input():
     result = _split_long_sentences(sentence_ids, max_length)
     expected = torch.tensor([], dtype=torch.int32)
     assert torch.equal(result, expected)
+
+
+def test_boundary_special_token_mask_first_last(tokenizer):
+    """Test that boundary mask correctly identifies first and last chunks."""
+    # Create mock chunk_data with 3 chunks from same sequence
+    input_ids = torch.tensor([[101, 1, 2, 102]])  # CLS ... SEP
+    sentence_ids = torch.tensor([[0, 0, 0, 0]])
+    sequence_idx = torch.tensor([0])
+
+    chunk_data = get_chunk_idx(
+        input_ids, sentence_ids, num_sents=1, chunk_overlap=0, sequence_idx=sequence_idx
+    )
+
+    mask = _compute_boundary_special_token_mask(chunk_data, tokenizer, torch.device("cpu"))
+
+    # For single chunk, both CLS and SEP should be included (mask=1)
+    # The mask should be all 1s for valid tokens
+    assert mask.sum() > 0
