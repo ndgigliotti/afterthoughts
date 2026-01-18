@@ -1,50 +1,72 @@
-<div align="center"><img src="./images/writing_pen.webp" height=150></div>
-
 # Afterthoughts
 
-Generate fine-grained, sentence-based chunk embeddings with state-of-the-art transformers.
+A Python implementation of **Late Chunking** for generating fine-grained, context-aware sentence-chunk embeddings with transformer models.
 
-This is a new project that is heavily under development. Please check back soon for updates.
+This library implements **late chunking** ([Günther et al., 2024](https://arxiv.org/abs/2409.04701)), a technique that preserves contextual information by embedding documents first and chunking second—ensuring each chunk retains context from the full document.
 
-## Concept
+> **Note:** I began developing Afterthoughts in early 2024, independently exploring ways to derive context-aware chunk embeddings from transformer models. After much iteration, I arrived at essentially the same method that Günther et al. later formalized as "late chunking" in their September 2024 paper. I've since adopted their terminology, as it neatly captures the core idea: chunking happens *late*, after the model has contextualized all tokens.
 
-Afterthoughts provides a fast, memory efficient, and context-aware method of generating embeddings for sentence-based chunks using transformers. It can be used for a variety of tasks, including semantic search, rules-based classification, clustering, and more. Its primary feature is the ability to efficiently combine the transformer's contextually enriched token embeddings to derive chunk embeddings. This is done by detecting sentence boundaries using BlingFire, then extracting overlapping groups of consecutive sentences and averaging the corresponding token embeddings from the model's final hidden state. The result is a set of contextually enriched chunk embeddings.
+## What is Late Chunking?
 
-The purpose of Afterthoughts is to extract embeddings for groups of sentences (chunks) to facilitate fine-grained analysis. Afterthoughts is designed to be highly memory efficient, allowing you to generate chunk embeddings for tens of thousands of documents without running out of memory. That means holding tens of millions of chunk embeddings in memory at once, depending on the configuration.
+Traditional RAG pipelines split documents into chunks *before* embedding, which loses contextual information. Consider a Wikipedia article about Berlin where the first sentence mentions "Berlin" and later sentences refer to "its population" or "the city"—when embedded separately, these chunks lose the connection to Berlin.
 
-### Motivation
+**Late chunking inverts this process:**
 
-Typically data scientists opt to use document-level embeddings for tasks like semantic search, clustering, and classification. This works well for a wide range of use cases, especially those which involve shorter documents. However, these embeddings can be too coarse to capture the nuances of the data, representing the overall meaning at the expense of the details. This is particularly true when working with long or complex documents, where multiple topics are discussed in different sections. By using chunk embeddings, you can capture the meaning of the data at a much finer level of granularity.
+1. **Embed first**: Pass the entire document through the transformer model to get contextually-enriched token embeddings
+2. **Chunk second**: Pool token embeddings into chunks *after* the model has established cross-chunk context
 
-One example use case would be searching through legal contracts to find certain clauses (e.g. a non-compete clause). If you use document-level embeddings, you may find that you miss contracts where the clause is buried in one small section of the document. However, if you use chunk embeddings, you can find any part of the contract where the clause is mentioned. Furthermore, the chunk embeddings are enriched with meaning from the surrounding context, allowing you to find chunks which semantically match but do not lexically match your query.
+This approach ensures that pronouns, references, and contextual cues in each chunk are informed by the full document context.
 
-Another example use case would be looking for a particular claim of interest in a dataset of lengthy movie reviews. For example, suppose that you are looking for any mention of one-dimensional characters. If you use document-level embeddings, you may find that you miss reviews where character development is a minor concern and not the central topic of the review. However, if you use chunk embeddings, you can find any part of the review where one-dimensional characters are mentioned.
+## How Afterthoughts Implements Late Chunking
 
-### Advantages
+Afterthoughts provides a fast, memory-efficient implementation of late chunking optimized for production use:
 
-One of the key advantages of this approach is the efficiency of deriving chunk embeddings downstream of the model. Rather than finding chunks first and running each chunk through the model as a separate sequence, the entire document is run through the model at once. Since running sequences through the model is computationally intensive, it is much faster to run a small number of documents through than a massive number of short sequences.
+1. **Sentence boundary detection** using BlingFire for accurate, linguistically-aware chunking
+2. **Full document embedding** through transformer models to capture cross-sentence context
+3. **Sentence-based pooling** of token embeddings from the model's final hidden state
+4. **Overlapping chunk extraction** with configurable sentence counts and overlap ratios
 
-Another key advantage of this approach is that the chunk embeddings are enriched with meaning from the surrounding context. For example, the embedding of "the characters were really something" from a movie review would be enriched with meaning from the surrounding context, allowing it to capture either a positive or negative attitude towards the characters. Even though the chunk does not contain any explicit positive or negative tokens, the model will have shifted the constituent token vectors according to the surrounding context, resulting in a chunk embedding that accurately captures the sentiment.
+The result is a set of chunk embeddings where each chunk's representation is enriched by the surrounding document context—even if the chunk itself contains ambiguous references or pronouns.
+
+## Why Use Chunk Embeddings?
+
+Document-level embeddings work well for shorter texts but can be too coarse for long or complex documents where multiple topics appear in different sections.
+
+**Example use cases:**
+
+- **Legal document search**: Find specific clauses (e.g., non-compete provisions) buried within lengthy contracts, rather than matching on overall document similarity
+- **Review analysis**: Locate specific claims in lengthy reviews (e.g., mentions of "one-dimensional characters") even when they're a minor point rather than the main topic
+- **Research paper search**: Find relevant paragraphs discussing specific methods or results within long academic papers
+
+## Key Advantages
+
+### Computational Efficiency
+
+Rather than running each chunk through the model separately, late chunking runs the full document once and derives all chunk embeddings from the resulting token embeddings. This is significantly faster than embedding thousands of short chunks individually.
+
+### Contextual Enrichment
+
+Chunk embeddings capture meaning from surrounding context. For example, "the characters were really something" from a movie review will have different embeddings depending on whether the surrounding text is positive or negative—the model shifts token vectors based on context, producing embeddings that accurately reflect sentiment even without explicit sentiment words in the chunk.
 
 
 ## Features
 
-* Efficiently derive sentence-based chunk embeddings from state-of-the-art transformer models
-* Customize the number of sentences per chunk and overlap between chunks
-* Sentence boundary detection using BlingFire for accurate sentence segmentation
-* Two classes: `Encoder` for simple usage, `LiteEncoder` for memory-efficient workflows
-* Dynamically fit PCA (using GPU) to reduce the dimensionality of the embeddings
-* Custom PyTorch implementation of incremental PCA (derived from `sklearn`)
-* Easily embed queries or other strings in the same space as the chunks
-* Uses the `transformers` library for easy integration with the Hugging Face model hub
-* Built in support for automatic mixed precision (AMP)
-* Outputs the chunks and indices as a pandas DataFrame for easy, scalable, manipulation
+* **Late chunking implementation**: Embed documents first, then pool into chunks for context-aware embeddings
+* **Flexible chunk configuration**: Customize sentences per chunk and overlap between chunks
+* **Sentence boundary detection**: BlingFire integration for accurate, fast sentence segmentation
+* **Two encoder classes**: `Encoder` for simple usage, `LiteEncoder` for memory-efficient workflows with large datasets
+* **GPU-accelerated PCA**: Incremental PCA for dimensionality reduction on massive embedding sets
+* **Query embedding**: Embed queries in the same space as chunks for semantic search
+* **HuggingFace integration**: Works with any transformer model from the HuggingFace Hub
+* **Automatic mixed precision (AMP)**: Faster inference with reduced memory footprint
+* **Dynamic batching**: Batches by total token count (not sequence count) for optimal GPU utilization
+* **Structured output**: Returns chunks and metadata as Polars/pandas DataFrame for easy manipulation
 
 ## Usage Guide
 
 Afterthoughts provides two classes:
 - **`Encoder`**: Simple API for most use cases
-- **`LiteEncoder`**: Advanced API with memory optimizations (PCA, precision reduction, dimension truncation)
+- **`LiteEncoder`**: Advanced API with memory optimizations (PCA, precision reduction, dimension truncation), enabling in-memory exploration of large datasets that would otherwise exceed available RAM
 
 ### Basic Usage
 
@@ -257,16 +279,22 @@ logging.basicConfig()
 
 #### Memory Requirements
 
-Since each document can contain many chunks, the memory requirements for this approach can be quite high.
+Since each document can contain many chunks, the memory requirements for this approach can be quite high. Use `LiteEncoder` with PCA and precision reduction for large-scale processing.
 
 #### Sequence Length
 
-The context-awareness is limited by the maximum sequence length of the model. Currently, documents that exceed the maximum sequence length are handled by chunking the sequence into smaller overlapping sequences while preserving sentence boundaries. This can lead to a loss of context at the boundaries of the chunks and also results in duplicate chunks.
+Late chunking's contextual benefits are bounded by the model's maximum sequence length. Documents exceeding this limit are split into overlapping sequences at sentence boundaries, which can reduce cross-chunk context at the boundaries. For best results, use long-context embedding models (e.g., models supporting 8K+ tokens) with documents that fit within the context window.
 
 ## Future Work
 
 * Add paragraph segmentation
-* Decouple tokenization from sentence alignment and chunking
+* Support for additional chunking strategies (e.g., semantic chunking)
+
+## References
+
+Late chunking technique:
+
+> Günther, M., Milliken, I., Geuter, J., Mastrapas, G., Wang, B., & Xiao, H. (2024). *Late Chunking: Contextual Chunk Embeddings Using Long-Context Embedding Models*. arXiv:2409.04701. https://arxiv.org/abs/2409.04701
 
 ## License
 
