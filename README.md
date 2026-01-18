@@ -19,7 +19,7 @@ This approach ensures that pronouns, references, and contextual cues in each chu
 
 Afterthoughts provides a fast, memory-efficient implementation of late chunking optimized for production use:
 
-1. **Sentence boundary detection** using BlingFire, NLTK, or syntok for accurate, linguistically-aware chunking
+1. **Sentence boundary detection** using BlingFire, NLTK, pysbd, or syntok for accurate, linguistically-aware chunking
 2. **Full document embedding** through transformer models to capture cross-sentence context
 3. **Sentence-based pooling** of token embeddings from the model's final hidden state
 4. **Overlapping chunk extraction** with configurable sentence counts and overlap ratios
@@ -51,7 +51,7 @@ Chunk embeddings capture meaning from surrounding context. For example, "the cha
 
 * **Late chunking implementation**: Embed documents first, then pool into chunks for context-aware embeddings
 * **Flexible chunk configuration**: Customize sentences per chunk and overlap between chunks
-* **Sentence boundary detection**: Choice of BlingFire (default), NLTK, or syntok for accurate sentence segmentation
+* **Sentence boundary detection**: Choice of BlingFire (default), NLTK, pysbd, or syntok for accurate sentence segmentation
 * **Two encoder classes**: `Encoder` for simple usage, `LiteEncoder` for memory-efficient workflows with large datasets
 * **GPU-accelerated PCA**: Incremental PCA for dimensionality reduction on massive embedding sets
 * **Query embedding**: Embed queries in the same space as chunks for semantic search
@@ -111,7 +111,7 @@ Afterthoughts provides two classes:
     df, X = model.encode(
         docs,
         num_sents=2,
-        sent_tokenizer="nltk",  # Options: "blingfire" (default), "nltk", "syntok"
+        sent_tokenizer="pysbd",  # Options: "blingfire" (default), "nltk", "pysbd", "syntok"
     )
     ```
 

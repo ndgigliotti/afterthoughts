@@ -66,3 +66,15 @@ def require_nltk():
         nltk.download("punkt")
 
     return nltk
+
+
+def require_pysbd():
+    """Return pysbd.Segmenter class or raise ImportError if not available."""
+    try:
+        from pysbd import Segmenter
+
+        return Segmenter
+    except ImportError:
+        raise ImportError(
+            "pysbd is required for method='pysbd'. " "Install it with: pip install pysbd"
+        ) from None

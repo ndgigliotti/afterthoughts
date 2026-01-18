@@ -412,7 +412,7 @@ class _EncoderBase(ABC):
             If None, will default to `self._num_token_jobs`.
         sent_tokenizer : str, optional
             Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
-            Options are "blingfire", "nltk", or "syntok".
+            Options are "blingfire", "nltk", "pysbd", or "syntok".
         show_progress : bool, optional
             Show progress bar during tokenization, by default True.
 
@@ -741,7 +741,7 @@ class Encoder(_EncoderBase):
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
         sent_tokenizer : str, optional
             Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
-            Options are "blingfire", "nltk", or "syntok".
+            Options are "blingfire", "nltk", "pysbd", or "syntok".
         return_frame : str, optional
             The type of DataFrame of chunks and indices to return, by default 'polars'.
             Options are 'pandas' or 'polars'.
@@ -1192,7 +1192,7 @@ class LiteEncoder(_EncoderBase):
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
         sent_tokenizer : str, optional
             Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
-            Options are "blingfire", "nltk", or "syntok".
+            Options are "blingfire", "nltk", "pysbd", or "syntok".
         return_frame : str, optional
             The type of DataFrame of chunks and indices to return, by default 'polars'.
             Options are 'pandas' or 'polars'.

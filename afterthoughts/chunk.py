@@ -22,7 +22,7 @@ from joblib import Parallel, delayed
 from torch.nn.utils.rnn import pad_sequence
 from tqdm.auto import tqdm
 
-from afterthoughts.avail import require_nltk, require_syntok
+from afterthoughts.avail import require_nltk, require_pysbd, require_syntok
 from afterthoughts.tokenize import TokenizedDataset, get_max_length, pad, tokenize_docs
 from afterthoughts.utils import get_overlap_count
 
@@ -105,6 +105,50 @@ def get_sentence_offsets_blingfire(text: str) -> torch.Tensor:
     return offsets
 
 
+def get_sentence_offsets_pysbd(text: str) -> torch.Tensor:
+    """
+    Get the sentence offsets from the given text using pysbd.
+
+    pysbd (Python Sentence Boundary Disambiguation) is designed to handle
+    edge cases like abbreviations (Dr., U.S., etc.) more accurately than
+    simpler tokenizers.
+
+    Parameters
+    ----------
+    text : str
+        The input text to be processed.
+
+    Returns
+    -------
+    torch.Tensor
+        A tensor containing the offsets of each sentence in the input text.
+
+    Raises
+    ------
+    ImportError
+        If pysbd is not installed.
+    """
+    Segmenter = require_pysbd()
+    if len(text) == 0:
+        offsets = torch.tensor([]).reshape(0, 2)
+    else:
+        segmenter = Segmenter(language="en", clean=False)
+        sentences = segmenter.segment(text)
+        # Build offsets by finding each sentence in the original text
+        offset_list = []
+        pos = 0
+        for sent in sentences:
+            start = text.find(sent, pos)
+            if start == -1:
+                # Fallback: use current position if exact match fails
+                start = pos
+            end = start + len(sent)
+            offset_list.append((start, end))
+            pos = end
+        offsets = torch.tensor(offset_list)
+    return offsets
+
+
 def get_sentence_offsets(
     text: str | list[str], method: str = "blingfire", n_jobs: int | None = None
 ) -> torch.Tensor | list[torch.Tensor]:
@@ -118,7 +162,7 @@ def get_sentence_offsets(
         the function will process each string in parallel.
     method : str, optional
         The method to use for sentence boundary detection.
-        Options are 'syntok', 'nltk', and 'blingfire'.
+        Options are 'blingfire', 'nltk', 'pysbd', and 'syntok'.
         Defaults to 'blingfire'.
     n_jobs : int, optional
         The number of jobs to use for parallel processing when the input
@@ -138,14 +182,16 @@ def get_sentence_offsets(
 
     See Also
     --------
-    get_sentence_offsets_syntok : Sentence offset detection using Syntok.
+    get_sentence_offsets_blingfire : Sentence offset detection using BlingFire.
     get_sentence_offsets_nltk : Sentence offset detection using NLTK.
-    get_sentence_offsets_blingfire : Sentence offset detection using Blingfire.
+    get_sentence_offsets_pysbd : Sentence offset detection using pysbd.
+    get_sentence_offsets_syntok : Sentence offset detection using syntok.
     """
     methods = {
-        "syntok": get_sentence_offsets_syntok,
-        "nltk": get_sentence_offsets_nltk,
         "blingfire": get_sentence_offsets_blingfire,
+        "nltk": get_sentence_offsets_nltk,
+        "pysbd": get_sentence_offsets_pysbd,
+        "syntok": get_sentence_offsets_syntok,
     }
 
     if method in methods:

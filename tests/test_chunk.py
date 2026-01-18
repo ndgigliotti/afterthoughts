@@ -7,6 +7,7 @@ from afterthoughts.chunk import (
     get_sentence_offsets,
     get_sentence_offsets_blingfire,
     get_sentence_offsets_nltk,
+    get_sentence_offsets_pysbd,
     get_sentence_offsets_syntok,
 )
 
@@ -101,6 +102,46 @@ def test_get_sentence_offsets_nltk_empty_text():
     assert offsets.size() == (0, 2)
 
 
+def test_get_sentence_offsets_pysbd_returns_tensor():
+    pytest.importorskip("pysbd")
+    text = "Hello world. This is a test."
+    offsets = get_sentence_offsets_pysbd(text)
+    # Check that the result is a tensor with 2 columns
+    assert isinstance(offsets, torch.Tensor)
+    assert offsets.ndim == 2
+    assert offsets.size(1) == 2
+
+
+def test_get_sentence_offsets_pysbd_non_empty():
+    pytest.importorskip("pysbd")
+    text = "Hello world. This is a test."
+    offsets = get_sentence_offsets_pysbd(text)
+    # Ensure that at least one sentence is detected
+    assert offsets.size(0) >= 1
+    # Check that each offset pair has a start less than end
+    for pair in offsets:
+        start, end = pair.tolist()
+        assert start < end
+
+
+def test_get_sentence_offsets_pysbd_empty_text():
+    pytest.importorskip("pysbd")
+    text = ""
+    offsets = get_sentence_offsets_pysbd(text)
+    # For empty text, expect no sentence offsets
+    assert isinstance(offsets, torch.Tensor)
+    assert offsets.size() == (0, 2)
+
+
+def test_get_sentence_offsets_pysbd_abbreviations():
+    pytest.importorskip("pysbd")
+    # pysbd should handle abbreviations correctly
+    text = "Dr. Smith went to Washington. He met with U.S. officials."
+    offsets = get_sentence_offsets_pysbd(text)
+    # Should detect exactly 2 sentences (not split on Dr. or U.S.)
+    assert offsets.size(0) == 2
+
+
 def test_get_sentence_offsets_blingfire_method():
     text = "Hello world. This is a test."
     offsets = get_sentence_offsets(text, method="blingfire")
@@ -124,6 +165,16 @@ def test_get_sentence_offsets_syntok_method():
     pytest.importorskip("syntok")
     text = "Hello world. This is a test."
     offsets = get_sentence_offsets(text, method="syntok")
+    # Check that the result is a tensor with 2 columns
+    assert isinstance(offsets, torch.Tensor)
+    assert offsets.ndim == 2
+    assert offsets.size(1) == 2
+
+
+def test_get_sentence_offsets_pysbd_method():
+    pytest.importorskip("pysbd")
+    text = "Hello world. This is a test."
+    offsets = get_sentence_offsets(text, method="pysbd")
     # Check that the result is a tensor with 2 columns
     assert isinstance(offsets, torch.Tensor)
     assert offsets.ndim == 2
