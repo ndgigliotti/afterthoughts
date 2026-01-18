@@ -2,15 +2,3 @@ Afterthoughts
 Copyright 2024-2026 Nicholas Gigliotti
 
 This product includes software developed by Nicholas Gigliotti.
-
-================================================================================
-
-This product includes code adapted from scikit-learn:
-
-  scikit-learn
-  Copyright 2007-2024 The scikit-learn developers
-  https://github.com/scikit-learn/scikit-learn
-  Licensed under the BSD 3-Clause License
-
-  The IncrementalPCA implementation in afterthoughts/pca.py is derived from
-  scikit-learn's sklearn.decomposition.IncrementalPCA module.

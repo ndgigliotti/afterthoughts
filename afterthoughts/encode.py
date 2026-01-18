@@ -16,8 +16,6 @@
 
 import logging
 import math
-import warnings
-from abc import ABC, abstractmethod
 from functools import partial
 
 import numpy as np
@@ -33,7 +31,6 @@ from afterthoughts.chunk import (
     _compute_chunk_embeds,
     tokenize_with_sentence_boundaries,
 )
-from afterthoughts.pca import IncrementalPCA
 from afterthoughts.tokenize import (
     DynamicTokenSampler,
     TokenizedDataset,
@@ -41,7 +38,6 @@ from afterthoughts.tokenize import (
     dynamic_pad_collate,
 )
 from afterthoughts.utils import (
-    binary_quantize,
     disable_tokenizer_parallelism,
     half_embeds,
     move_or_convert_tensors,
@@ -58,11 +54,11 @@ logger = logging.getLogger(__name__)
 _MIN_BATCHES_FOR_PARALLEL = 5
 
 
-class _EncoderBase(ABC):
-    """Abstract base class for Encoder models.
+class Encoder:
+    """Encoder model for generating sentence-chunk embeddings.
 
-    This class provides shared functionality for model loading, tokenization,
-    and embedding generation. Subclasses implement specific encode methods.
+    This class provides an API for extracting chunk embeddings from documents
+    using late chunking with transformer models.
     """
 
     def __init__(
@@ -73,10 +69,12 @@ class _EncoderBase(ABC):
         amp_dtype: torch.dtype = torch.float16,
         attn_implementation: str | None = None,
         normalize: bool = False,
+        half_embeds: bool = False,
+        truncate_dims: int | None = None,
         device: torch.device | str | int = "cuda",
         _num_token_jobs: int | None = -1,
     ) -> None:
-        """Initialize a Encoder model.
+        """Initialize an Encoder model.
 
         Parameters
         ----------
@@ -97,6 +95,12 @@ class _EncoderBase(ABC):
             the dot product of two unit vectors is equal to the cosine similarity.
             It is also useful if you want downstream Euclidean distance calculations
             to consider only the direction of the vectors, not their magnitude.
+        half_embeds : bool, optional
+            Convert chunk embeddings to float16 for reduced memory, by default False.
+        truncate_dims : int | None, optional
+            Truncate embedding dimensions to this value, by default None.
+            Useful for models trained with Matryoshka Representation Learning (MRL).
+            Truncation is applied to token embeddings before pooling.
         device : torch.device, str, int, optional
             Device to use for inference, by default "cuda".
         _num_token_jobs : int, None, optional
@@ -120,6 +124,8 @@ class _EncoderBase(ABC):
         self.amp = amp
         self.amp_dtype = amp_dtype
         self.normalize = normalize
+        self.half_embeds = half_embeds
+        self.truncate_dims = truncate_dims
         self._num_token_jobs = _num_token_jobs
 
     @property
@@ -127,7 +133,7 @@ class _EncoderBase(ABC):
         """Returns the device the model is on."""
         return self.model.device
 
-    def to(self, device: torch.device | str | int) -> "_EncoderBase":
+    def to(self, device: torch.device | str | int) -> "Encoder":
         """Move the model to a new device.
 
         Parameters
@@ -137,25 +143,25 @@ class _EncoderBase(ABC):
 
         Returns
         -------
-        _EncoderBase
+        Encoder
             Returns the model instance.
         """
         self.model.to(device)
         return self
 
-    def half(self) -> "_EncoderBase":
+    def half(self) -> "Encoder":
         """Convert the model to half precision.
 
         Returns
         -------
-        _EncoderBase
+        Encoder
             Returns the model instance.
         """
         self.model.half()
         self.model_dtype = self.model.dtype
         return self
 
-    def compile(self, mode: str = "reduce-overhead", dynamic: bool = True) -> "_EncoderBase":
+    def compile(self, mode: str = "reduce-overhead", dynamic: bool = True) -> "Encoder":
         """Compile the model using torch.compile for potential speedups.
 
         This is an advanced feature. Compilation benefits vary significantly
@@ -174,7 +180,7 @@ class _EncoderBase(ABC):
 
         Returns
         -------
-        _EncoderBase
+        Encoder
             Returns the model instance for method chaining.
         """
         self.model = torch.compile(self.model, mode=mode, dynamic=dynamic)
@@ -206,11 +212,27 @@ class _EncoderBase(ABC):
             embeds = normalize(embeds, dim=dim)
         return embeds
 
+    def half_embeds_if_needed(self, embeds: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
+        """Convert embeddings to float16 if enabled.
+
+        Parameters
+        ----------
+        embeds : torch.Tensor or np.ndarray
+            Embeddings to convert.
+
+        Returns
+        -------
+        torch.Tensor or np.ndarray
+            Embeddings in float16 if half_embeds is enabled, otherwise unchanged.
+        """
+        if self.half_embeds:
+            embeds = half_embeds(embeds)
+        return embeds
+
     def postprocess(self, embeds: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
         """Apply postprocessing steps to embeddings.
 
-        Base implementation only normalizes if enabled. Subclasses may override
-        to add additional steps (e.g., quantization, PCA).
+        Applies half_embeds (if enabled) then normalization (if enabled).
 
         Parameters
         ----------
@@ -222,7 +244,9 @@ class _EncoderBase(ABC):
         torch.Tensor or np.ndarray
             Postprocessed embeddings.
         """
-        return self.normalize_if_needed(embeds)
+        embeds = self.half_embeds_if_needed(embeds)
+        embeds = self.normalize_if_needed(embeds)
+        return embeds
 
     def _decode_chunks(
         self, chunk_token_ids: list[torch.Tensor], show_progress: bool = True
@@ -704,169 +728,6 @@ class _EncoderBase(ABC):
                 move_to_cpu=move_results_to_cpu,
             )
 
-    @abstractmethod
-    def encode(
-        self,
-        docs: list[str],
-        max_length: int | None = None,
-        batch_tokens: int = 16384,
-        num_sents: int | list | tuple = 1,
-        chunk_overlap: int | float | list | dict = 0,
-        prechunk: bool = True,
-        prechunk_overlap: float | int = 0.5,
-        sent_tokenizer: str = "blingfire",
-        exclude_special_tokens: bool = False,
-        deduplicate: bool = True,
-        return_frame: str = "polars",
-        as_numpy: bool = True,
-        debug: bool = False,
-        return_text: bool = True,
-        show_progress: bool = True,
-    ):
-        """Obtain the chunks and chunk embeddings from a list of documents."""
-        pass
-
-    def encode_queries(
-        self,
-        queries: list[str],
-        max_length: int | None = None,
-        batch_size: int = 32,
-        exclude_special_tokens: bool = False,
-        as_numpy: bool = True,
-    ) -> np.ndarray:
-        """Obtain the mean-tokens embeddings for a list of query strings.
-
-        This is a convenient method for embedding query strings into the same space
-        as the chunks extracted from documents. It is mainly useful for doing semantic
-        search.
-
-        Parameters
-        ----------
-        queries : list[str]
-            List of queries to encode.
-        max_length : int, optional
-            Maximum length of the query sequences, by default None.
-        batch_size : int, optional
-            Batch size for encoding, by default 32.
-        exclude_special_tokens : bool, optional
-            If True, exclude all special tokens from mean pooling.
-            If False (default), include [CLS] and [SEP] tokens in mean pooling for queries.
-        as_numpy : bool, optional
-            Convert the tensors to numpy arrays before returning, by default True.
-
-        Returns
-        -------
-        np.ndarray
-            Mean-token embeddings for each query.
-        """
-        token_batch_size = _get_tokenization_batch_size(queries)
-        num_token_batches = math.ceil(len(queries) / token_batch_size)
-        inputs, _ = self._tokenize(
-            queries,
-            max_length=max_length,
-            prechunk=False,
-            batch_size=token_batch_size,
-            num_jobs=1 if num_token_batches <= _MIN_BATCHES_FOR_PARALLEL else self.__num_token_jobs,
-        )
-        loader = DataLoader(
-            inputs,
-            batch_size=batch_size,
-            shuffle=False,
-            pin_memory=True,
-            pin_memory_device="",
-            collate_fn=partial(dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id),
-        )
-        batches = self._generate_token_embeds(
-            loader,
-            move_results_to_cpu=False,
-            return_tensors="pt",
-            truncate_dim=getattr(self, "truncate_dims", None),
-        )
-        query_embeds = []
-        for batch in batches:
-            token_embeds = batch["token_embeds"]
-            input_ids = batch["input_ids"]
-            if exclude_special_tokens:
-                # Default: exclude all special tokens
-                valid_token_mask = torch.isin(
-                    input_ids,
-                    torch.tensor(self.tokenizer.all_special_ids, device=self.device),
-                    invert=True,
-                )
-            else:
-                # Include [CLS] and [SEP] for queries (entire sequence is a single "chunk")
-                # Only exclude padding tokens
-                valid_token_mask = input_ids != self.tokenizer.pad_token_id
-            valid_token_weight = valid_token_mask.unsqueeze(2).float()
-            mean_tokens = (token_embeds * valid_token_weight).sum(dim=1) / valid_token_weight.sum(
-                dim=1
-            )
-            mean_tokens = self.postprocess(mean_tokens)
-            query_embeds.append(mean_tokens.cpu())
-        query_embeds = torch.vstack(query_embeds)
-        # Restore original order (TokenizedDataset sorts by token count for efficiency)
-        if inputs.sort_by_token_count:
-            query_embeds = query_embeds[inputs.unsort_idx]
-        if as_numpy:
-            query_embeds = query_embeds.numpy()
-        return query_embeds
-
-
-class Encoder(_EncoderBase):
-    """Simple Encoder model for generating sentence-chunk embeddings.
-
-    This class provides a straightforward API for extracting chunk embeddings
-    from documents. For memory-efficient operations with PCA, precision reduction,
-    and dimension truncation, use LiteEncoder instead.
-    """
-
-    def __init__(
-        self,
-        model_name: str,
-        model_dtype: torch.dtype = torch.float32,
-        amp: bool = False,
-        amp_dtype: torch.dtype = torch.float16,
-        attn_implementation: str | None = None,
-        normalize: bool = False,
-        device: torch.device | str | int = "cuda",
-        _num_token_jobs: int | None = -1,
-    ) -> None:
-        """Initialize a Encoder model.
-
-        Parameters
-        ----------
-        model_name : str
-            Name of the pretrained model to use.
-        model_dtype : torch.dtype, optional
-            Data type for the model, by default torch.float32.
-        amp : bool, optional
-            Enable automatic mixed precision, by default False.
-        amp_dtype : torch.dtype, optional
-            Data type for automatic mixed precision, by default torch.float16.
-        attn_implementation : str | None, optional
-            Attention implementation to use, by default None. If None, the model will use the
-            default attention implementation.
-        normalize : bool, optional
-            Normalize the embeddings to unit length, by default False.
-            This is useful for quick cosine similarity calculations downstream, since
-            the dot product of two unit vectors is equal to the cosine similarity.
-        device : torch.device, str, int, optional
-            Device to use for inference, by default "cuda".
-        _num_token_jobs : int, None, optional
-            Number of jobs to use for multiprocessing on tokenization and
-            detokenization, by default -1.
-        """
-        super().__init__(
-            model_name=model_name,
-            model_dtype=model_dtype,
-            amp=amp,
-            amp_dtype=amp_dtype,
-            attn_implementation=attn_implementation,
-            normalize=normalize,
-            device=device,
-            _num_token_jobs=_num_token_jobs,
-        )
-
     def encode(
         self,
         docs: list[str],
@@ -974,6 +835,7 @@ class Encoder(_EncoderBase):
             chunk_overlap=chunk_overlap,
             move_results_to_cpu=False,
             return_tensors="pt",
+            truncate_dim=self.truncate_dims,
             exclude_special_tokens=exclude_special_tokens,
             show_progress=show_progress,
         )
@@ -988,7 +850,7 @@ class Encoder(_EncoderBase):
             "chunk_embeds": [],
         }
         for batch in batches:
-            # Apply postprocessing (normalization in base Encoder)
+            # Apply postprocessing (half_embeds then normalization)
             batch["chunk_embeds"] = self.postprocess(batch["chunk_embeds"])
             # Offload batch to CPU
             batch = move_or_convert_tensors(batch, return_tensors="pt", move_to_cpu=True)
@@ -1082,501 +944,6 @@ class Encoder(_EncoderBase):
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
         return df, vecs
 
-
-class LiteEncoder(_EncoderBase):
-    """Memory-efficient Encoder variant for advanced users.
-
-    This class includes lossy memory optimizations:
-    - PCA dimensionality reduction (GPU-accelerated, incremental fitting)
-    - Quantization (fp16 or binary)
-    - Dimension truncation
-
-    For simple use cases without these optimizations, use Encoder instead.
-    """
-
-    QUANTIZE_OPTIONS = (None, "float16", "binary")
-
-    def __init__(
-        self,
-        model_name: str,
-        model_dtype: torch.dtype = torch.float32,
-        amp: bool = False,
-        amp_dtype: torch.dtype = torch.float16,
-        attn_implementation: str | None = None,
-        truncate_dims: int | None = None,
-        normalize: bool = False,
-        pca: int | None = None,
-        pca_early_stop: int | float = 1.0,
-        quantize: str | None = "float16",
-        device: torch.device | str | int = "cuda",
-        _num_token_jobs: int | None = -1,
-    ) -> None:
-        """Initialize a LiteEncoder model.
-
-        Parameters
-        ----------
-        model_name : str
-            Name of the pretrained model to use.
-        model_dtype : torch.dtype, optional
-            Data type for the model, by default torch.float32.
-        amp : bool, optional
-            Enable automatic mixed precision, by default True.
-        amp_dtype : torch.dtype, optional
-            Data type for automatic mixed precision, by default torch.float16.
-        attn_implementation : str | None, optional
-            Attention implementation to use, by default None.
-        truncate_dims : int, None, optional
-            Truncate the dimensions of the embeddings, by default None.
-        normalize : bool, optional
-            Normalize the embeddings to unit length, by default False.
-        pca : int, None, optional
-            Number of principal components to keep after PCA, by default None.
-        pca_early_stop : int, float, optional
-            Number of batches to use for fitting the PCA model, by default 1.0.
-            If a float, it is the fraction of the dataset to use.
-        quantize : str or None, optional
-            Quantization method for embeddings, by default "float16".
-            - None: No quantization (full float32)
-            - "float16": Float16 precision (2x compression)
-            - "binary": Packed binary (32x compression). Incompatible with normalize.
-        device : torch.device, str, int, optional
-            Device to use for inference, by default "cuda".
-        _num_token_jobs : int, None, optional
-            Number of jobs for tokenization/detokenization, by default -1.
-        """
-        super().__init__(
-            model_name=model_name,
-            model_dtype=model_dtype,
-            amp=amp,
-            amp_dtype=amp_dtype,
-            attn_implementation=attn_implementation,
-            normalize=normalize,
-            device=device,
-            _num_token_jobs=_num_token_jobs,
-        )
-        self.truncate_dims = truncate_dims
-        self.pca = pca
-        self.pca_early_stop = pca_early_stop
-        self.quantize = quantize
-
-        if truncate_dims is not None and pca is not None and truncate_dims < pca:
-            raise ValueError("`truncate_dims` must be greater than `pca`.")
-        match quantize:
-            case None | "float16":
-                pass
-            case "binary" if normalize:
-                raise ValueError("`quantize='binary'` is incompatible with `normalize=True`.")
-            case "binary":
-                pass
-            case _:
-                raise ValueError(
-                    f"`quantize` must be one of {self.QUANTIZE_OPTIONS}, got {quantize!r}."
-                )
-
-    def quantize_if_needed(self, embeds: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
-        """Apply float16 quantization if enabled.
-
-        Note: binary quantization is applied at the end of encode()
-        since it returns a different type (packed uint8).
-        """
-        if self.quantize == "float16":
-            embeds = half_embeds(embeds)
-        return embeds
-
-    def truncate_dims_if_needed(self, embeds: torch.Tensor | np.ndarray):
-        """Truncate the dimensions of the embeddings if needed.
-
-        Parameters
-        ----------
-        embeds : torch.Tensor or np.ndarray
-            Embeddings to truncate.
-
-        Returns
-        -------
-        torch.Tensor or np.ndarray
-            Truncated embeddings.
-        """
-        if self.truncate_dims is not None:
-            embeds = truncate_dims(embeds, dim=self.truncate_dims)
-        return embeds
-
-    def postprocess(self, embeds: torch.Tensor | np.ndarray) -> torch.Tensor | np.ndarray:
-        """Apply postprocessing steps to embeddings during batch processing.
-
-        The steps are:
-        1. Apply PCA transformation (if enabled).
-        2. Apply float16 quantization (if enabled).
-        3. Normalize embeddings to unit length (if enabled).
-
-        Note: binary quantization is applied at the end of encode()
-        since it returns a different type (packed uint8).
-
-        Parameters
-        ----------
-        embeds : torch.Tensor or np.ndarray
-            Embeddings to postprocess.
-
-        Returns
-        -------
-        torch.Tensor or np.ndarray
-            Postprocessed embeddings.
-
-        Raises
-        ------
-        RuntimeError
-            If PCA mode is enabled but PCA is not ready.
-        """
-        if self.pca_mode:
-            if not self.pca_is_ready:
-                raise RuntimeError(
-                    "Cannot postprocess in PCA mode when PCA is not ready. "
-                    "Fit more batches or disable PCA."
-                )
-            embeds = self.apply_pca(embeds)
-        steps = [
-            self.quantize_if_needed,
-            self.normalize_if_needed,
-        ]
-        for step in steps:
-            embeds = step(embeds)
-        return embeds
-
-    @property
-    def pca_mode(self) -> bool:
-        """Returns True if PCA is enabled."""
-        return self.pca is not None
-
-    @property
-    def pca_is_ready(self) -> bool:
-        """Returns True if PCA has seen enough batches to be applied."""
-        return (
-            hasattr(self, "pca_transformer_")
-            and hasattr(self, "_n_pca_fit_batches")
-            and hasattr(self.pca_transformer_, "n_batches_seen_")
-            and self.pca_transformer_.n_batches_seen_ >= self._n_pca_fit_batches
-        )
-
-    def update_pca(self, chunk_embeds: torch.Tensor) -> None:
-        """Update the PCA transformation with a batch of chunk embeddings.
-
-        Parameters
-        ----------
-        chunk_embeds : torch.Tensor
-            Chunk embeddings to update the PCA model with.
-        """
-        if not hasattr(self, "pca_transformer_"):
-            self.pca_transformer_ = IncrementalPCA(n_components=self.pca, device=self.device)
-        self.pca_transformer_.partial_fit(chunk_embeds)
-
-    def apply_pca(self, chunk_embeds: torch.Tensor) -> torch.Tensor:
-        """Apply PCA transformation to embeddings.
-
-        Parameters
-        ----------
-        chunk_embeds : torch.Tensor
-            Chunk embeddings to apply PCA to.
-
-        Returns
-        -------
-        torch.Tensor
-            PCA-transformed embeddings.
-        """
-        if not hasattr(self, "pca_transformer_"):
-            raise AttributeError("PCA must be fitted first.")
-        if not self.pca_is_ready:
-            raise RuntimeError("PCA has not seen enough batches to be applied yet.")
-        # Ensure PCA is on the same device as input
-        self.pca_transformer_.to(chunk_embeds.device)
-        return self.pca_transformer_.transform(chunk_embeds)
-
-    def clear_pca(self) -> None:
-        """Clear the fitted PCA transformation."""
-        pca_attrs = ["pca_transformer_", "_n_pca_fit_batches"]
-        for attr in pca_attrs:
-            if hasattr(self, attr):
-                delattr(self, attr)
-        logger.info("PCA cleared.")
-
-    def _postprocess_early_batches(self, results: dict) -> None:
-        """Apply postprocessing to early batches that were used for PCA fitting.
-
-        During the fitting phase, early batches are stored without postprocessing.
-        Once PCA fitting is complete, this method goes back and applies
-        postprocessing (including PCA) to those batches.
-
-        Parameters
-        ----------
-        results : dict
-            Results dictionary containing chunk_embeds list to process in-place.
-        """
-        if not self.pca_is_ready:
-            warnings.warn("PCA did not finish fitting and will not be applied.", stacklevel=3)
-            return
-        for i in range(self._n_pca_fit_batches):
-            batch_embeds = results["chunk_embeds"][i]
-            # Skip if already postprocessed (dimension matches PCA output)
-            if batch_embeds.size(1) != self.pca:
-                results["chunk_embeds"][i] = self.postprocess(batch_embeds)
-
-    def _new_results_dict(self) -> dict:
-        """Create a new results dictionary for batch accumulation."""
-        return {
-            "batch_idx": [],
-            "sequence_idx": [],
-            "chunk_idx": [],
-            "chunk_token_ids": [],
-            "chunk_sentence_ids": [],
-            "chunk_size": [],
-            "chunk_embeds": [],
-        }
-
-    def _accumulate_batch(self, results: dict, batch: dict) -> None:
-        """Accumulate a processed batch into the results dictionary."""
-        batch = move_or_convert_tensors(batch, return_tensors="pt", move_to_cpu=True)
-        results["batch_idx"].append(batch["batch_idx"])
-        results["sequence_idx"].append(batch["sequence_idx"])
-        results["chunk_idx"].append(batch["chunk_idx"])
-        if isinstance(batch["chunk_token_ids"], list):
-            results["chunk_token_ids"].extend(batch["chunk_token_ids"])
-        else:
-            results["chunk_token_ids"].append(batch["chunk_token_ids"])
-        if isinstance(batch["sentence_ids"], list):
-            results["chunk_sentence_ids"].extend(batch["sentence_ids"])
-        else:
-            results["chunk_sentence_ids"].append(batch["sentence_ids"])
-        results["chunk_size"].append(batch["chunk_size"])
-        results["chunk_embeds"].append(batch["chunk_embeds"])
-
-    def _process_batches_simple(self, batches) -> dict:
-        """Process batches with immediate postprocessing (non-PCA or PCA-ready mode)."""
-        results = self._new_results_dict()
-        for batch in batches:
-            batch["chunk_embeds"] = self.postprocess(batch["chunk_embeds"])
-            self._accumulate_batch(results, batch)
-        return results
-
-    def _process_batches_pca_fitting(self, batches, n_fit_batches: int) -> dict:
-        """Process batches while fitting PCA on early batches.
-
-        Early batches are used to fit PCA, then PCA is applied to later batches.
-        After the loop, early batches are retroactively postprocessed.
-        """
-        self._n_pca_fit_batches = n_fit_batches
-        results = self._new_results_dict()
-        for batch in batches:
-            if not self.pca_is_ready:
-                # Fitting PCA - don't postprocess yet
-                self.update_pca(batch["chunk_embeds"])
-            else:
-                # PCA is ready - postprocess (includes PCA)
-                batch["chunk_embeds"] = self.postprocess(batch["chunk_embeds"])
-            self._accumulate_batch(results, batch)
-        # Retroactively postprocess early batches
-        self._postprocess_early_batches(results)
-        return results
-
-    def encode(
-        self,
-        docs: list[str],
-        max_length: int | None = None,
-        batch_tokens: int = 16384,
-        num_sents: int | list | tuple = 1,
-        chunk_overlap: int | float | list | dict = 0,
-        prechunk: bool = True,
-        prechunk_overlap: float | int = 0.5,
-        sent_tokenizer: str = "blingfire",
-        exclude_special_tokens: bool = False,
-        deduplicate: bool = True,
-        return_frame: str = "polars",
-        as_numpy: bool = True,
-        debug: bool = False,
-        return_text: bool = True,
-        show_progress: bool = True,
-    ) -> dict[str, np.ndarray | torch.Tensor]:
-        """Obtain the chunks and chunk embeddings from a list of documents.
-
-        This first encodes the input documents, then extracts chunk embeddings
-        from the token embeddings. Chunks are groups of consecutive sentences.
-
-        Parameters
-        ----------
-        docs : list[str]
-            List of documents to encode.
-        max_length : int, optional
-            Maximum length of the input sequences, by default None.
-        batch_tokens : int, optional
-            Maximum tokens per batch for encoder, by default 16384.
-        num_sents : int, list, or tuple, optional
-            Number of sentences per chunk, by default 1.
-        chunk_overlap : int, float, list, or dict, optional
-            Overlap between chunks (in sentences), by default 0.
-        prechunk : bool, optional
-            Enable chunking of documents into overlapping sequences, by default True.
-        prechunk_overlap : float or int, optional
-            Overlap for splitting long documents into overlapping sequences, by default 0.5.
-        sent_tokenizer : str, optional
-            Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
-            Options are "blingfire", "nltk", or "syntok".
-        exclude_special_tokens : bool, optional
-            If True, exclude all special tokens from mean pooling.
-            If False (default), include [CLS] in first chunk and [SEP] in last chunk
-            of each sequence, per the late chunking paper's recommendation.
-        deduplicate : bool, optional
-            If True (default), average embeddings for duplicate chunks that arise
-            from overlapping pre-chunks. Duplicates are identified by matching
-            (document_idx, chunk_size, sentence_ids). If False, keep all chunks.
-        return_frame : str, optional
-            The type of DataFrame of chunks and indices to return, by default 'polars'.
-            Options are 'pandas' or 'polars'.
-        as_numpy : bool, optional
-            Convert the tensors to numpy arrays before returning, by default True.
-        debug : bool, optional
-            Include additional columns in the output DataFrame for debugging,
-            by default False.
-        return_text : bool, optional
-            Include decoded text chunks in the output DataFrame, by default True.
-            Set to False to skip detokenization for faster processing.
-        show_progress : bool, optional
-            Show progress bars during encoding, by default True.
-
-        Returns
-        -------
-        tuple[pd.DataFrame | pl.DataFrame, np.ndarray | torch.Tensor]
-            Tuple containing the DataFrame of chunks and the chunk embeddings.
-        """
-        # Validate arguments early to fail fast before expensive computation
-        if return_frame == "pandas":
-            require_pandas()
-        elif return_frame != "polars":
-            raise ValueError(f"Invalid value for return_frame: {return_frame}")
-        if self.quantize == "binary" and not as_numpy:
-            raise ValueError("`quantize='binary'` requires `as_numpy=True`.")
-
-        inputs, sentence_texts = self._tokenize(
-            docs,
-            max_length=max_length,
-            prechunk=prechunk,
-            prechunk_overlap=prechunk_overlap,
-            batch_size=_get_tokenization_batch_size(docs),
-            sent_tokenizer=sent_tokenizer,
-            show_progress=show_progress,
-        )
-        loader = DataLoader(
-            inputs,
-            shuffle=False,
-            pin_memory=True,
-            pin_memory_device="",
-            batch_sampler=DynamicTokenSampler(
-                inputs,
-                max_tokens=batch_tokens,
-            ),
-            collate_fn=partial(dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id),
-        )
-        batches = self._generate_chunk_embeds(
-            loader,
-            num_sents=num_sents,
-            chunk_overlap=chunk_overlap,
-            move_results_to_cpu=False,
-            return_tensors="pt",
-            truncate_dim=self.truncate_dims,
-            exclude_special_tokens=exclude_special_tokens,
-            show_progress=show_progress,
-        )
-        # Process batches based on PCA mode
-        if self.pca_mode and not self.pca_is_ready:
-            # PCA needs fitting - use fitting mode
-            if isinstance(self.pca_early_stop, float):
-                n_fit_batches = math.ceil(len(loader) * self.pca_early_stop)
-            else:
-                n_fit_batches = self.pca_early_stop
-            results = self._process_batches_pca_fitting(batches, n_fit_batches)
-        else:
-            # No PCA or PCA already ready - use simple mode
-            if self.pca_mode:
-                logger.info("PCA is already fit and will be applied to all batches.")
-            results = self._process_batches_simple(batches)
-
-        # Combine tensor results (excluding chunk_sentence_ids and chunk_token_ids
-        # which need special handling for text reconstruction)
-        keys_to_skip = {"chunk_sentence_ids", "chunk_token_ids"}
-        for key, value in results.items():
-            if key not in keys_to_skip and len(value) and isinstance(value[0], torch.Tensor):
-                results[key] = torch.cat(value, dim=0)
-
-        # Flatten chunk_sentence_ids and chunk_token_ids from batched to per-chunk lists
-        # Original format: list of 2D batch tensors [[c1, c2], [c3, c4], ...]
-        # Flattened format: list of 1D chunk tensors [c1, c2, c3, c4, ...]
-        results["chunk_sentence_ids"] = [
-            sid for batch in results["chunk_sentence_ids"] for sid in batch
-        ]
-        results["chunk_token_ids"] = [tid for batch in results["chunk_token_ids"] for tid in batch]
-
-        # Build seq_to_doc mapping for document index computation and text reconstruction
-        seq_to_doc = (
-            dict(
-                zip(
-                    inputs.data["sequence_idx"],
-                    inputs.data["overflow_to_sample_mapping"],
-                    strict=False,
-                )
-            )
-            if prechunk
-            else {i: i for i in inputs.data["sequence_idx"]}
-        )
-
-        # Map sequence indices to document indices
-        if prechunk:
-            results["document_idx"] = torch.tensor(
-                [seq_to_doc[s.item()] for s in results["sequence_idx"]]
-            )
-        else:
-            results["document_idx"] = results["sequence_idx"]
-
-        # Deduplicate chunks from overlapping pre-chunks (before text reconstruction)
-        if deduplicate and prechunk:
-            results = self._deduplicate_chunk_embeds(results)
-
-        # Reconstruct chunk text from original sentences
-        if return_text:
-            results["chunk"] = self._reconstruct_chunk_texts(
-                [results.pop("chunk_sentence_ids")],  # Wrap in list for batched format
-                [results.pop("chunk_token_ids")],  # Wrap in list for batched format
-                results["sequence_idx"],
-                seq_to_doc,
-                sentence_texts,
-                show_progress=show_progress,
-            )
-        else:
-            results.pop("chunk_token_ids")
-            results.pop("chunk_sentence_ids")
-
-        results["embed_idx"] = torch.arange(results["chunk_embeds"].shape[0])
-        df, vecs = self._build_results_df(
-            results,
-            as_numpy=as_numpy,
-            return_frame="polars",
-            debug=debug,
-        )
-        if inputs.sort_by_token_count:
-            df = df.sort("sequence_idx", "chunk_idx", descending=False)
-            vecs = vecs[df["embed_idx"]]
-        # Handle internal columns
-        if debug:
-            # Rename embed_idx to orig_embed_idx for clarity
-            df = df.rename({"embed_idx": "orig_embed_idx"})
-        else:
-            # Drop internal columns in non-debug mode
-            df = df.drop(["embed_idx", "sequence_idx"])
-        # Convert to requested DataFrame format
-        if return_frame == "pandas":
-            df = df.to_pandas()
-        elif return_frame != "polars":
-            raise ValueError(f"Invalid value for return_frame: {return_frame}")
-        # Apply binary quantization at the end (returns different type)
-        if self.quantize == "binary":
-            vecs = binary_quantize(vecs)
-        return df, vecs
-
     def encode_queries(
         self,
         queries: list[str],
@@ -1608,19 +975,56 @@ class LiteEncoder(_EncoderBase):
         Returns
         -------
         np.ndarray
-            Mean-token embeddings for each query. If quantize='binary', returns
-            packed uint8 array with shape (n, ceil(d/8)).
+            Mean-token embeddings for each query.
         """
-        if self.quantize == "binary" and not as_numpy:
-            raise ValueError("`quantize='binary'` requires `as_numpy=True`.")
-        query_embeds = super().encode_queries(
+        token_batch_size = _get_tokenization_batch_size(queries)
+        num_token_batches = math.ceil(len(queries) / token_batch_size)
+        inputs, _ = self._tokenize(
             queries,
             max_length=max_length,
-            batch_size=batch_size,
-            exclude_special_tokens=exclude_special_tokens,
-            as_numpy=as_numpy,
+            prechunk=False,
+            batch_size=token_batch_size,
+            num_jobs=1 if num_token_batches <= _MIN_BATCHES_FOR_PARALLEL else self.__num_token_jobs,
         )
-        # Apply binary quantization at the end (returns different type)
-        if self.quantize == "binary":
-            query_embeds = binary_quantize(query_embeds)
+        loader = DataLoader(
+            inputs,
+            batch_size=batch_size,
+            shuffle=False,
+            pin_memory=True,
+            pin_memory_device="",
+            collate_fn=partial(dynamic_pad_collate, pad_token_id=self.tokenizer.pad_token_id),
+        )
+        batches = self._generate_token_embeds(
+            loader,
+            move_results_to_cpu=False,
+            return_tensors="pt",
+            truncate_dim=self.truncate_dims,
+        )
+        query_embeds = []
+        for batch in batches:
+            token_embeds = batch["token_embeds"]
+            input_ids = batch["input_ids"]
+            if exclude_special_tokens:
+                # Default: exclude all special tokens
+                valid_token_mask = torch.isin(
+                    input_ids,
+                    torch.tensor(self.tokenizer.all_special_ids, device=self.device),
+                    invert=True,
+                )
+            else:
+                # Include [CLS] and [SEP] for queries (entire sequence is a single "chunk")
+                # Only exclude padding tokens
+                valid_token_mask = input_ids != self.tokenizer.pad_token_id
+            valid_token_weight = valid_token_mask.unsqueeze(2).float()
+            mean_tokens = (token_embeds * valid_token_weight).sum(dim=1) / valid_token_weight.sum(
+                dim=1
+            )
+            mean_tokens = self.postprocess(mean_tokens)
+            query_embeds.append(mean_tokens.cpu())
+        query_embeds = torch.vstack(query_embeds)
+        # Restore original order (TokenizedDataset sorts by token count for efficiency)
+        if inputs.sort_by_token_count:
+            query_embeds = query_embeds[inputs.unsort_idx]
+        if as_numpy:
+            query_embeds = query_embeds.numpy()
         return query_embeds

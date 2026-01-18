@@ -35,11 +35,7 @@ uv run mypy afterthoughts/              # Type checking (strict mode enabled)
 - `encode()`: Extracts chunk embeddings from documents (returns DataFrame + NumPy array)
 - `encode_queries()`: Encodes query strings for semantic search
 - Supports model compilation (`torch.compile`), AMP, and 16-bit precision reduction
-
-**`LiteEncoder` class** (`afterthoughts/encode.py`):
-- Extends `Encoder` with memory optimizations for large datasets
-- GPU-accelerated incremental PCA for dimensionality reduction
-- Configurable via `pca`, `pca_early_stop`, `half_embeds`, `truncate_dims`
+- Memory optimizations via `half_embeds` (float16 conversion) and `truncate_dims` (dimension truncation)
 
 **Tokenization Pipeline** (`afterthoughts/tokenize.py`):
 - `tokenize_docs()`: Parallel tokenization with document chunking for sequences exceeding model max length
@@ -56,18 +52,16 @@ uv run mypy afterthoughts/              # Type checking (strict mode enabled)
 - Lazy imports for optional packages (pandas, nltk, pysbd, syntok)
 - `require_*` functions raise helpful ImportError if package missing
 
-**PCA Module** (`afterthoughts/pca.py`):
-- `IncrementalPCA`: GPU-accelerated PyTorch implementation adapted from scikit-learn
-
 ### Data Flow
 
 1. Documents tokenized in parallel (joblib) with sentence boundary detection
 2. Long sequences chunked with configurable overlap, preserving sentence boundaries
 3. Sequences sorted by length and batched by total token count
 4. Model inference produces token embeddings
-5. Chunk embeddings computed by mean-pooling tokens within sentence groups
-6. Optional PCA reduction applied incrementally (LiteEncoder only)
-7. Results returned as polars/pandas DataFrame (chunk metadata) + NumPy array (embeddings)
+5. Optional dimension truncation applied to token embeddings
+6. Chunk embeddings computed by mean-pooling tokens within sentence groups
+7. Optional float16 conversion and normalization applied
+8. Results returned as polars/pandas DataFrame (chunk metadata) + NumPy array (embeddings)
 
 ### Key Parameters
 
@@ -75,8 +69,8 @@ uv run mypy afterthoughts/              # Type checking (strict mode enabled)
 - `chunk_overlap`: Fraction or count of sentences to overlap between chunks
 - `batch_tokens`: Total tokens per batch (enables dynamic batching)
 - `sent_tokenizer`: Sentence tokenizer ("blingfire", "nltk", "pysbd", "syntok")
-- `pca`: Number of PCA components (LiteEncoder only)
-- `pca_early_stop`: Fraction of batches to use for fitting PCA before applying
+- `half_embeds`: Convert chunk embeddings to float16 for reduced memory
+- `truncate_dims`: Truncate embedding dimensions (for MRL models)
 
 ## Dependencies
 

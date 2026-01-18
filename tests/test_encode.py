@@ -3,9 +3,8 @@ import polars as pl
 import pytest
 import torch
 
-from afterthoughts import Encoder, LiteEncoder
+from afterthoughts import Encoder
 from afterthoughts.chunk import get_chunk_idx
-from afterthoughts.encode import _EncoderBase
 from afterthoughts.utils import move_or_convert_tensors
 
 MODEL_NAME = "sentence-transformers/paraphrase-MiniLM-L3-v2"
@@ -42,51 +41,17 @@ def test_encoder_init():
 
 
 @requires_cuda
-def test_encoder_lite_init():
-    """Test LiteEncoder initialization with lossy params."""
-    model_name = MODEL_NAME
-    amp = False
-    amp_dtype = torch.float16
-    quantize = "float16"
-    truncate_dims = 128
-    normalize = True
-    pca = 50
-    pca_early_stop = 1.0
-    device = "cuda"
-    _num_token_jobs = 8
-
-    encoder = LiteEncoder(
-        model_name=model_name,
-        amp=amp,
-        amp_dtype=amp_dtype,
-        quantize=quantize,
-        truncate_dims=truncate_dims,
-        normalize=normalize,
-        pca=pca,
-        pca_early_stop=pca_early_stop,
-        device=device,
-        _num_token_jobs=_num_token_jobs,
+def test_encoder_init_with_half_embeds_and_truncate_dims():
+    """Test Encoder initialization with half_embeds and truncate_dims parameters."""
+    encoder = Encoder(
+        model_name=MODEL_NAME,
+        half_embeds=True,
+        truncate_dims=128,
+        device="cuda",
     )
 
-    assert encoder.tokenizer is not None
-    assert encoder.model is not None
-    assert encoder.amp == amp
-    assert encoder.amp_dtype == amp_dtype
-    assert encoder.quantize == quantize
-    assert encoder.truncate_dims == truncate_dims
-    assert encoder.normalize == normalize
-    assert encoder.pca == pca
-    assert encoder.pca_early_stop == pca_early_stop
-    assert encoder.device.type == device
-    assert encoder._num_token_jobs == _num_token_jobs
-
-    # Test invalid truncate_dims and pca combination
-    with pytest.raises(ValueError):
-        LiteEncoder(
-            model_name=model_name,
-            truncate_dims=10,
-            pca=50,
-        )
+    assert encoder.half_embeds is True
+    assert encoder.truncate_dims == 128
 
 
 def test_get_chunk_idx_single_size():
@@ -267,49 +232,16 @@ def test_encoder_encode_queries_preserves_order(model):
         assert similarity > 0.99, f"Query {i} embedding mismatch: similarity={similarity:.4f}"
 
 
-def test_encoder_lite_quantize_if_needed():
-    model = LiteEncoder(model_name=MODEL_NAME, device="cpu", quantize="float16")
+def test_encoder_half_embeds_if_needed():
+    """Test that half_embeds parameter converts embeddings to float16."""
+    encoder = Encoder(model_name=MODEL_NAME, device="cpu", half_embeds=True)
     embeds = torch.randn(10, 10, dtype=torch.float32)
-    reduced_embeds = model.quantize_if_needed(embeds)
+    reduced_embeds = encoder.half_embeds_if_needed(embeds)
     assert reduced_embeds.dtype == torch.float16
 
-    model.quantize = None
-    non_reduced_embeds = model.quantize_if_needed(embeds)
+    encoder.half_embeds = False
+    non_reduced_embeds = encoder.half_embeds_if_needed(embeds)
     assert non_reduced_embeds.dtype == torch.float32
-
-
-def test_encoder_lite_truncate_dims_if_needed():
-    encoder = LiteEncoder(model_name=MODEL_NAME, device="cpu", truncate_dims=5)
-    embeds = torch.randn(10, 10)
-    truncated_embeds = encoder.truncate_dims_if_needed(embeds)
-    assert truncated_embeds.shape[1] == 5
-
-    encoder.truncate_dims = None
-    non_truncated_embeds = encoder.truncate_dims_if_needed(embeds)
-    assert non_truncated_embeds.shape[1] == 10
-
-
-def test_encoder_lite_quantize_options():
-    """Test that LiteEncoder accepts valid quantize options."""
-    for opt in LiteEncoder.QUANTIZE_OPTIONS:
-        if opt == "binary":
-            # binary is incompatible with normalize=True (default is False, so this works)
-            encoder = LiteEncoder(model_name=MODEL_NAME, device="cpu", quantize=opt)
-        else:
-            encoder = LiteEncoder(model_name=MODEL_NAME, device="cpu", quantize=opt)
-        assert encoder.quantize == opt
-
-
-def test_encoder_lite_quantize_invalid():
-    """Test that invalid quantize value raises error."""
-    with pytest.raises(ValueError, match="must be one of"):
-        LiteEncoder(model_name=MODEL_NAME, device="cpu", quantize="invalid")
-
-
-def test_encoder_lite_quantize_normalize_incompatible():
-    """Test that quantize='binary' is incompatible with normalize=True."""
-    with pytest.raises(ValueError, match="incompatible"):
-        LiteEncoder(model_name=MODEL_NAME, device="cpu", quantize="binary", normalize=True)
 
 
 def test_encoder_normalize_if_needed():
@@ -357,11 +289,11 @@ def test_build_results_dataframe(return_frame, as_numpy):
     # Test for invalid return_frame value
     if return_frame == "teddies":
         with pytest.raises(ValueError, match="Invalid value for"):
-            _EncoderBase._build_results_df(results, return_frame, as_numpy)
+            Encoder._build_results_df(results, return_frame, as_numpy)
     else:
         # Build the results dataframe and check the types
         expected_length = len(results["sample_idx"])
-        df, embeds = _EncoderBase._build_results_df(results, return_frame, as_numpy)
+        df, embeds = Encoder._build_results_df(results, return_frame, as_numpy)
         assert isinstance(df, expected_df_type)
         assert isinstance(embeds, expected_embeds_type)
         assert len(df) == len(embeds) == expected_length
@@ -386,7 +318,7 @@ def test_build_results_dataframe_pandas():
     }
 
     expected_length = len(results["sample_idx"])
-    df, embeds = _EncoderBase._build_results_df(results, return_frame, as_numpy)
+    df, embeds = Encoder._build_results_df(results, return_frame, as_numpy)
     assert isinstance(df, expected_df_type)
     assert isinstance(embeds, expected_embeds_type)
     assert len(df) == len(embeds) == expected_length
@@ -746,8 +678,6 @@ def test_deduplicate_disabled_when_no_prechunk(model):
 
 def test_deduplicate_averaging_correctness():
     """Verify that deduplication correctly averages embeddings for duplicate chunks."""
-    from afterthoughts.encode import _EncoderBase
-
     # Create test data with known duplicates
     # Chunks 0 and 2 are duplicates (same doc, size, sentences)
     # Chunks 1 and 3 are duplicates (same doc, size, sentences)
@@ -780,7 +710,7 @@ def test_deduplicate_averaging_correctness():
     }
 
     # Test averaging method
-    dedup_results = _EncoderBase._deduplicate_chunk_embeds(results, method="average")
+    dedup_results = Encoder._deduplicate_chunk_embeds(results, method="average")
 
     # Should have 2 unique chunks
     assert len(dedup_results["document_idx"]) == 2
@@ -803,8 +733,6 @@ def test_deduplicate_averaging_correctness():
 
 def test_deduplicate_first_method():
     """Verify that method='first' keeps first occurrence without averaging."""
-    from afterthoughts.encode import _EncoderBase
-
     results = {
         "document_idx": torch.tensor([0, 0, 0]),
         "chunk_size": torch.tensor([1, 1, 1]),
@@ -830,7 +758,7 @@ def test_deduplicate_first_method():
         ],
     }
 
-    dedup_results = _EncoderBase._deduplicate_chunk_embeds(results, method="first")
+    dedup_results = Encoder._deduplicate_chunk_embeds(results, method="first")
 
     # Should have 2 unique chunks
     assert len(dedup_results["document_idx"]) == 2
@@ -843,3 +771,36 @@ def test_deduplicate_first_method():
         ]
     )
     torch.testing.assert_close(dedup_results["chunk_embeds"], expected_embeds)
+
+
+# =============================================================================
+# Tests for half_embeds and truncate_dims
+# =============================================================================
+
+
+def test_encoder_half_embeds_output(model_half_embeds):
+    """Test that half_embeds produces float16 output."""
+    docs = ["This is a test document. Another sentence here."]
+    df, X = model_half_embeds.encode(
+        docs, num_sents=1, max_length=64, batch_tokens=256, show_progress=False
+    )
+    # Note: as_numpy=True converts to numpy which may upcast to float32
+    # Check the internal processing produces float16
+    assert model_half_embeds.half_embeds is True
+
+
+def test_encoder_truncate_dims_output(model_truncate_dims):
+    """Test that truncate_dims produces truncated embeddings."""
+    docs = ["This is a test document. Another sentence here."]
+    df, X = model_truncate_dims.encode(
+        docs, num_sents=1, max_length=64, batch_tokens=256, show_progress=False
+    )
+    # The embedding dimension should be 128 (truncated from 384)
+    assert X.shape[1] == 128
+
+
+def test_encoder_truncate_dims_queries(model_truncate_dims):
+    """Test that truncate_dims applies to query embeddings."""
+    queries = ["What is this about?"]
+    query_embeds = model_truncate_dims.encode_queries(queries)
+    assert query_embeds.shape[1] == 128

@@ -18,5 +18,5 @@ __version__ = "0.1.0"
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from afterthoughts.encode import Encoder, LiteEncoder  # noqa
+from afterthoughts.encode import Encoder  # noqa
 from afterthoughts.utils import configure_logging  # noqa
