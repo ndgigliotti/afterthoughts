@@ -7,6 +7,7 @@ import pytest
 import torch
 
 from afterthoughts.utils import (
+    binary_quantize,
     format_memory_size,
     get_memory_report,
     get_memory_size,
@@ -187,3 +188,76 @@ def test_norm_jobs():
 
     # Test with a smaller negative number
     assert normalize_num_jobs(-3) == cpu_count - 3 + 1
+
+
+def test_binary_quantize_torch():
+    """Test binary quantization with packing for torch tensors."""
+    # 16 dimensions -> 2 bytes per row when packed
+    embeds = torch.tensor(
+        [[-0.5, 0.3, -0.1, 0.8, -0.2, 0.1, -0.3, 0.9, 0.1, 0.2, 0.3, 0.4, -0.1, -0.2, -0.3, -0.4]],
+        dtype=torch.float32,
+    )
+    packed = binary_quantize(embeds)
+
+    assert packed.dtype == np.uint8
+    assert packed.shape == (1, 2)  # 16 dims -> 2 bytes
+    # Values: [0,1,0,1,0,1,0,1, 1,1,1,1,0,0,0,0] -> [0b01010101, 0b11110000] = [85, 240]
+    assert packed[0, 0] == 0b01010101
+    assert packed[0, 1] == 0b11110000
+
+
+def test_binary_quantize_numpy():
+    """Test binary quantization with packing for numpy arrays."""
+    # 16 dimensions -> 2 bytes per row when packed
+    embeds = np.array(
+        [
+            [
+                -0.5,
+                0.3,
+                -0.1,
+                0.8,
+                -0.2,
+                0.1,
+                -0.3,
+                0.9,
+                0.1,
+                0.2,
+                0.3,
+                0.4,
+                -0.1,
+                -0.2,
+                -0.3,
+                -0.4,
+            ],
+            [
+                0.1,
+                0.2,
+                0.3,
+                0.4,
+                -0.1,
+                -0.2,
+                -0.3,
+                -0.4,
+                -0.5,
+                0.3,
+                -0.1,
+                0.8,
+                -0.2,
+                0.1,
+                -0.3,
+                0.9,
+            ],
+        ],
+        dtype=np.float32,
+    )
+    packed = binary_quantize(embeds)
+
+    assert packed.dtype == np.uint8
+    assert packed.shape == (2, 2)  # 16 dims -> 2 bytes per row
+
+
+def test_binary_quantize_pack_false_raises():
+    """Test that pack=False raises an error."""
+    embeds = np.array([[0.1, -0.2, 0.3, -0.4]], dtype=np.float32)
+    with pytest.raises(ValueError, match="pack=False is not supported"):
+        binary_quantize(embeds, pack=False)
