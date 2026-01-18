@@ -52,7 +52,7 @@ Chunk embeddings capture meaning from surrounding context. For example, "the cha
 * **Late chunking implementation**: Embed documents first, then pool into chunks for context-aware embeddings
 * **Flexible chunk configuration**: Customize sentences per chunk and overlap between chunks
 * **Sentence boundary detection**: Choice of BlingFire (default), NLTK, pysbd, or syntok for accurate sentence segmentation
-* **Two encoder classes**: `Encoder` for simple usage, `LiteEncoder` for memory-efficient workflows with large datasets
+* **Two encoder classes**: `Encoder` for simple usage, `LiteEncoder` (experimental) for memory-efficient workflows with large datasets
 * **GPU-accelerated PCA**: Incremental PCA for dimensionality reduction on massive embedding sets
 * **Query embedding**: Embed queries in the same space as chunks for semantic search
 * **HuggingFace integration**: Works with any transformer model from the HuggingFace Hub
@@ -64,7 +64,7 @@ Chunk embeddings capture meaning from surrounding context. For example, "the cha
 
 Afterthoughts provides two classes:
 - **`Encoder`**: Simple API for most use cases
-- **`LiteEncoder`**: Advanced API with memory optimizations (PCA, quantization, dimension truncation), enabling in-memory exploration of large datasets that would otherwise exceed available RAM. Configure options like `amp`, `quantize`, and `pca` based on your hardware and dataset size.
+- **`LiteEncoder`** (experimental): Advanced API with memory optimizations (PCA, quantization, dimension truncation), enabling in-memory exploration of large datasets that would otherwise exceed available RAM. Configure options like `amp`, `quantize`, and `pca` based on your hardware and dataset size.
 
 ### Basic Usage
 
@@ -141,7 +141,7 @@ Afterthoughts provides two classes:
     doc_chunks = X[df["sample_idx"] == i]
     ```
 
-### Memory Optimizations with LiteEncoder
+### Memory Optimizations with LiteEncoder (Experimental)
 
 For advanced users working with large datasets, `LiteEncoder` provides memory-efficient features including PCA, embedding quantization, and dimension truncation. These are "lossy" optimizations that trade some embedding quality for significant memory savings.
 
