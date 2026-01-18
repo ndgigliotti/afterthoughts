@@ -295,6 +295,7 @@ Late chunking's contextual benefits are bounded by the model's maximum sequence 
 * Persist `LiteEncoder` with its fitted PCA transformation
 * Include special tokens in chunk embeddings (as in the late chunking paper)
 * Handle duplicate sentence embeddings from overlapping pre-chunks by averaging
+* Support instruct embedding models
 
 ## References
 
