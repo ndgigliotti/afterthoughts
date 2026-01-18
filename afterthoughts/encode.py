@@ -18,6 +18,7 @@ import logging
 import math
 import warnings
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from functools import partial
 
 import numpy as np
@@ -452,8 +453,6 @@ class _EncoderBase(ABC):
             group_keys.append((doc_idx, size, unique_sents))
 
         # Group indices by key
-        from collections import defaultdict
-
         groups = defaultdict(list)
         for i, key in enumerate(group_keys):
             groups[key].append(i)
