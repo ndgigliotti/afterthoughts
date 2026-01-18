@@ -1,10 +1,10 @@
 # Afterthoughts
 
-A Python implementation of **Late Chunking** for generating fine-grained, context-aware sentence-chunk embeddings with transformer models.
+A Python library for generating fine-grained, context-aware sentence-chunk embeddings with transformer models.
 
-This library implements **late chunking** ([Günther et al., 2024](https://arxiv.org/abs/2409.04701)), a technique that preserves contextual information by embedding documents first and chunking second—ensuring each chunk retains context from the full document.
+Afterthoughts implements a variant of **late chunking** ([Günther et al., 2024](https://arxiv.org/abs/2409.04701)), embedding documents first and chunking second to preserve contextual information across chunks. The implementation differs in minor details but follows the same core approach: chunking happens *late*, after the model has contextualized all tokens.
 
-> **Note:** I began developing Afterthoughts in early 2024, independently exploring ways to derive context-aware chunk embeddings from transformer models. After much iteration, I arrived at essentially the same method that Günther et al. later formalized as "late chunking" in their September 2024 paper. I've since adopted their terminology, as it neatly captures the core idea: chunking happens *late*, after the model has contextualized all tokens.
+> **Note:** I began developing Afterthoughts in early 2024, independently exploring ways to derive context-aware chunk embeddings from transformer models. After much iteration, I arrived at a method closely resembling what Günther et al. later formalized as "late chunking" in their September 2024 paper.
 
 ## What is Late Chunking?
 
@@ -66,7 +66,7 @@ Chunk embeddings capture meaning from surrounding context. For example, "the cha
 
 Afterthoughts provides two classes:
 - **`Encoder`**: Simple API for most use cases
-- **`LiteEncoder`**: Advanced API with memory optimizations (PCA, precision reduction, dimension truncation), enabling in-memory exploration of large datasets that would otherwise exceed available RAM
+- **`LiteEncoder`**: Advanced API with memory optimizations (PCA, precision reduction, dimension truncation), enabling in-memory exploration of large datasets that would otherwise exceed available RAM. Configure options like `amp`, `half_embeds`, and `pca` based on your hardware and dataset size.
 
 ### Basic Usage
 
@@ -136,6 +136,8 @@ Afterthoughts provides two classes:
 ### Memory Optimizations with LiteEncoder
 
 For advanced users working with large datasets, `LiteEncoder` provides memory-efficient features including PCA, precision reduction, and dimension truncation. These are "lossy" optimizations that trade some embedding quality for significant memory savings.
+
+**Important:** `LiteEncoder` is designed to be configured based on your specific hardware and use case. Tune options like `amp` (automatic mixed precision), `half_embeds`, and `pca` based on your workflow.
 
 #### Using PCA
 
@@ -289,6 +291,10 @@ Late chunking's contextual benefits are bounded by the model's maximum sequence 
 
 * Add paragraph segmentation
 * Support for additional chunking strategies (e.g., semantic chunking)
+* Support more sentence tokenizers beyond BlingFire
+* Persist `LiteEncoder` with its fitted PCA transformation
+* Include special tokens in chunk embeddings (as in the late chunking paper)
+* Handle duplicate sentence embeddings from overlapping pre-chunks by averaging
 
 ## References
 
