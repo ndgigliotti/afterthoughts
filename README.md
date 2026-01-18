@@ -64,7 +64,7 @@ Chunk embeddings capture meaning from surrounding context. For example, "the cha
 
 Afterthoughts provides two classes:
 - **`Encoder`**: Simple API for most use cases
-- **`LiteEncoder`**: Advanced API with memory optimizations (PCA, precision reduction, dimension truncation), enabling in-memory exploration of large datasets that would otherwise exceed available RAM. Configure options like `amp`, `half_embeds`, and `pca` based on your hardware and dataset size.
+- **`LiteEncoder`**: Advanced API with memory optimizations (PCA, quantization, dimension truncation), enabling in-memory exploration of large datasets that would otherwise exceed available RAM. Configure options like `amp`, `quantize`, and `pca` based on your hardware and dataset size.
 
 ### Basic Usage
 
@@ -143,9 +143,9 @@ Afterthoughts provides two classes:
 
 ### Memory Optimizations with LiteEncoder
 
-For advanced users working with large datasets, `LiteEncoder` provides memory-efficient features including PCA, precision reduction, and dimension truncation. These are "lossy" optimizations that trade some embedding quality for significant memory savings.
+For advanced users working with large datasets, `LiteEncoder` provides memory-efficient features including PCA, embedding quantization, and dimension truncation. These are "lossy" optimizations that trade some embedding quality for significant memory savings.
 
-**Important:** `LiteEncoder` is designed to be configured based on your specific hardware and use case. Tune options like `amp` (automatic mixed precision), `half_embeds`, and `pca` based on your workflow.
+**Important:** `LiteEncoder` is designed to be configured based on your specific hardware and use case. Tune options like `amp` (automatic mixed precision), `quantize`, and `pca` based on your workflow.
 
 #### Using PCA
 
@@ -187,20 +187,52 @@ model = LiteEncoder(
 )
 ```
 
-#### Reducing Precision of the Embeddings to 16-bit
+#### Embedding Quantization
 
-To further reduce the memory footprint of the final embeddings, LiteEncoder makes it convenient to reduce their precision to 16-bit floating point. This can be done by setting the `half_embeds` parameter to `True` during initialization. This will reduce the precision of the embeddings to 16-bit floating point after they are extracted from the model and all transformations have been applied. This can be useful when working with large datasets or when memory is a concern, and generally not much quality is lost.
+LiteEncoder supports several quantization options to reduce memory footprint via the `quantize` parameter:
+
+| Option | Compression | Description |
+|--------|-------------|-------------|
+| `"float16"` (default) | 2x | Reduces precision to 16-bit floating point |
+| `"int8"` | 4x | Per-row min-max scaling to uint8 |
+| `"binary"` | 32x | Packed binary (1 bit per dimension) |
+| `None` | 1x | No quantization (full float32) |
+
+**Float16** is the default and provides a good balance of compression and quality:
 
 ```python
 from afterthoughts import LiteEncoder
 
 model = LiteEncoder(
     "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
-    half_embeds=True,  # Reduce the precision of the final embeds to 16-bit
+    quantize="float16",  # Default: reduce precision to 16-bit
 )
 ```
 
-> Downcasting the final embeddings to 16-bit may actually lead to slower calculations on CPU, e.g. for semantic search. The main benefit of this option is reducing the memory footprint.
+**INT8** provides 4x compression using per-row min-max scaling. The `encode()` method returns a tuple `(quantized, scales, min_vals)` that can be used for dequantization:
+
+```python
+model = LiteEncoder(
+    "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
+    quantize="int8",
+)
+df, (quantized, scales, min_vals) = model.encode(docs, num_sents=2)
+
+# Dequantize when needed
+dequantized = quantized.astype("float32") * scales[:, None] + min_vals[:, None]
+```
+
+**Binary** provides maximum compression (32x) by packing 8 dimensions into each byte. Use Hamming distance for similarity search:
+
+```python
+model = LiteEncoder(
+    "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
+    quantize="binary",
+    normalize=False,  # Binary quantization is incompatible with normalization
+)
+```
+
+> Note: `int8` and `binary` quantization are incompatible with `normalize=True`. Float16 embeddings may be slower for CPU calculations but significantly reduce memory footprint.
 
 ### Performance Optimizations
 
@@ -245,7 +277,7 @@ model.half()  # Convert the model to 16-bit precision
 
 #### Example High Efficiency Configuration
 
-An example of a highly memory-efficient configuration is to use `LiteEncoder` with AMP, PCA, and reduced-precision final embeddings. This configuration is ideal for working with large datasets on a machine with limited memory. Here is an example of how to initialize the model with this configuration:
+An example of a highly memory-efficient configuration is to use `LiteEncoder` with AMP, PCA, and quantization. This configuration is ideal for working with large datasets on a machine with limited memory. Here is an example of how to initialize the model with this configuration:
 
 ```python
 import torch
@@ -256,7 +288,7 @@ model = LiteEncoder(
     pca=64,  # Enable PCA with 64 components
     pca_early_stop=0.33,  # Use the first 33% of batches to fit PCA
     amp=True,  # Enable automatic mixed precision
-    half_embeds=True,  # Reduce the precision of the final embeds to 16-bit
+    quantize="float16",  # Reduce the precision of the final embeds to 16-bit
 )
 ```
 
