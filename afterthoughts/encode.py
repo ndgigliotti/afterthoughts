@@ -172,6 +172,8 @@ class Encoder:
         half_embeds: bool = False,
         truncate_dims: int | None = None,
         device: torch.device | str | int = "cuda",
+        query_prompt: str | None = None,
+        document_prompt: str | None = None,
         _num_token_jobs: int | None = -1,
     ) -> None:
         """Initialize an Encoder model.
@@ -203,6 +205,14 @@ class Encoder:
             Truncation is applied to token embeddings before pooling.
         device : torch.device, str, int, optional
             Device to use for inference, by default "cuda".
+        query_prompt : str | None, optional
+            Prompt to prepend to query strings in encode_queries(), by default None.
+            Used for instruct-style embedding models (E5-instruct, BGE, GTE-Qwen2-instruct).
+            Example: "Instruct: Given a web search query, retrieve relevant passages\\nQuery: "
+        document_prompt : str | None, optional
+            Prompt to prepend to documents in encode(), by default None.
+            Only needed for some instruct models (e.g., Instructor) that require
+            document-side prompts.
         _num_token_jobs : int, None, optional
             Number of jobs to use for multiprocessing on tokenization and
             detokenization, by default -1. If None, the number of jobs is
@@ -226,6 +236,8 @@ class Encoder:
         self.normalize = normalize
         self.half_embeds = half_embeds
         self.truncate_dims = truncate_dims
+        self.query_prompt = query_prompt
+        self.document_prompt = document_prompt
         self._num_token_jobs = _num_token_jobs
 
     @property
@@ -292,6 +304,43 @@ class Encoder:
     def __num_token_jobs(self) -> int:
         """Returns the number of jobs to use for tokenization."""
         return normalize_num_jobs(self._num_token_jobs)
+
+    def _apply_prompt(self, texts: list[str], prompt: str | None) -> list[str]:
+        """Apply a prompt prefix to a list of texts.
+
+        Parameters
+        ----------
+        texts : list[str]
+            List of texts to prepend the prompt to.
+        prompt : str | None
+            Prompt to prepend. If None, returns texts unchanged.
+
+        Returns
+        -------
+        list[str]
+            Texts with prompt prepended (if prompt is not None).
+        """
+        if prompt is None:
+            return texts
+        return [prompt + text for text in texts]
+
+    def _get_prompt_length(self, prompt: str | None) -> int:
+        """Get the number of tokens in a prompt (excluding special tokens).
+
+        Parameters
+        ----------
+        prompt : str | None
+            Prompt to tokenize. If None, returns 0.
+
+        Returns
+        -------
+        int
+            Number of tokens in the prompt.
+        """
+        if prompt is None:
+            return 0
+        tokens = self.tokenizer.encode(prompt, add_special_tokens=False)
+        return len(tokens)
 
     def normalize_if_needed(
         self, embeds: torch.Tensor | np.ndarray, dim: int = 1
@@ -667,6 +716,7 @@ class Encoder:
         num_jobs: int | None = None,
         sent_tokenizer: str = "blingfire",
         show_progress: bool = True,
+        prompt: str | None = None,
     ) -> tuple[TokenizedDataset, list[list[str]]]:
         """Tokenize a list of documents into input sequences for the model.
 
@@ -696,6 +746,9 @@ class Encoder:
             Options are "blingfire", "nltk", "pysbd", or "syntok".
         show_progress : bool, optional
             Show progress bar during tokenization, by default True.
+        prompt : str | None, optional
+            Prompt to prepend to each document, by default None. Sentence detection
+            is performed on the original document (without prompt).
 
         Returns
         -------
@@ -720,6 +773,7 @@ class Encoder:
             n_jobs=num_jobs,
             return_tokenized_dataset=True,
             show_progress=show_progress,
+            prompt=prompt,
         )
         if not isinstance(result, tuple):
             raise TypeError("Expected tokenize_with_sentence_boundaries to return a tuple")
@@ -784,7 +838,7 @@ class Encoder:
         move_results_to_cpu: bool = False,
         return_tensors: str = "pt",
         truncate_dim: int | None = None,
-        exclude_special_tokens: bool = False,
+        exclude_special_tokens: bool = True,
         show_progress: bool = True,
     ) -> Iterator[dict[str, Any]]:
         """Obtain the chunk embeddings for a list of documents, one batch at at time.
@@ -804,9 +858,9 @@ class Encoder:
         truncate_dim : int | None, optional
             Truncate token embeddings to this dimension, by default None.
         exclude_special_tokens : bool, optional
-            If True, exclude all special tokens from mean pooling.
-            If False (default), include [CLS] in first chunk and [SEP] in last chunk
-            of each sequence, per the late chunking paper's recommendation.
+            If True (default), exclude all special tokens from mean pooling.
+            If False, include [CLS] in first chunk and [SEP] in last chunk
+            of each sequence.
         show_progress : bool, optional
             Show progress bar during encoding, by default True.
         """
@@ -845,13 +899,14 @@ class Encoder:
         prechunk: bool = True,
         prechunk_overlap: float | int = 0.5,
         sent_tokenizer: str = "blingfire",
-        exclude_special_tokens: bool = False,
+        exclude_special_tokens: bool = True,
         deduplicate: bool = True,
         return_frame: str = "polars",
         as_numpy: bool = True,
         debug: bool = False,
         return_text: bool = True,
         show_progress: bool = True,
+        prompt: str | None = None,
     ) -> tuple[pl.DataFrame | Any, np.ndarray[Any, Any] | torch.Tensor]:
         """Obtain the chunks and chunk embeddings from a list of documents.
 
@@ -884,9 +939,9 @@ class Encoder:
             Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
             Options are "blingfire", "nltk", or "syntok".
         exclude_special_tokens : bool, optional
-            If True, exclude all special tokens from mean pooling.
-            If False (default), include [CLS] in first chunk and [SEP] in last chunk
-            of each sequence, per the late chunking paper's recommendation.
+            If True (default), exclude all special tokens from mean pooling.
+            If False, include [CLS] in first chunk and [SEP] in last chunk
+            of each sequence.
         deduplicate : bool, optional
             If True (default), average embeddings for duplicate chunks that arise
             from overlapping pre-chunks. Duplicates are identified by matching
@@ -904,6 +959,10 @@ class Encoder:
             Set to False to skip detokenization for faster processing.
         show_progress : bool, optional
             Show progress bars during encoding, by default True.
+        prompt : str | None, optional
+            Prompt to prepend to documents, by default None. If provided, overrides
+            the document_prompt set at initialization. Prompt tokens are excluded from
+            chunk mean-pooling. Used for instruct-style embedding models.
 
         Returns
         -------
@@ -916,6 +975,9 @@ class Encoder:
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
 
+        # Determine which prompt to use (per-call override or default)
+        effective_prompt = prompt if prompt is not None else self.document_prompt
+
         inputs, sentence_texts = self._tokenize(
             docs,
             max_length=max_length,
@@ -923,6 +985,7 @@ class Encoder:
             prechunk_overlap=prechunk_overlap,
             batch_size=_get_tokenization_batch_size(docs),
             sent_tokenizer=sent_tokenizer,
+            prompt=effective_prompt,
             show_progress=show_progress,
         )
         loader = DataLoader(
@@ -1056,8 +1119,9 @@ class Encoder:
         queries: list[str],
         max_length: int | None = None,
         batch_size: int = 32,
-        exclude_special_tokens: bool = False,
+        exclude_special_tokens: bool = True,
         as_numpy: bool = True,
+        prompt: str | None = None,
     ) -> np.ndarray[Any, Any] | torch.Tensor:
         """Obtain the mean-tokens embeddings for a list of query strings.
 
@@ -1074,20 +1138,30 @@ class Encoder:
         batch_size : int, optional
             Batch size for encoding, by default 32.
         exclude_special_tokens : bool, optional
-            If True, exclude all special tokens from mean pooling.
-            If False (default), include [CLS] and [SEP] tokens in mean pooling for queries.
+            If True (default), exclude all special tokens from mean pooling.
+            If False, include [CLS] and [SEP] tokens in mean pooling for queries.
         as_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
+        prompt : str | None, optional
+            Prompt to prepend to queries, by default None. If provided, overrides
+            the query_prompt set at initialization. Used for instruct-style embedding
+            models that require task-specific prefixes.
 
         Returns
         -------
         np.ndarray
             Mean-token embeddings for each query.
         """
-        token_batch_size = _get_tokenization_batch_size(queries)
-        num_token_batches = math.ceil(len(queries) / token_batch_size)
+        # Determine which prompt to use (per-call override or default)
+        effective_prompt = prompt if prompt is not None else self.query_prompt
+
+        # Apply prompt to queries
+        queries_with_prompt = self._apply_prompt(queries, effective_prompt)
+
+        token_batch_size = _get_tokenization_batch_size(queries_with_prompt)
+        num_token_batches = math.ceil(len(queries_with_prompt) / token_batch_size)
         inputs, _ = self._tokenize(
-            queries,
+            queries_with_prompt,
             max_length=max_length,
             prechunk=False,
             batch_size=token_batch_size,
