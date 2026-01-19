@@ -71,6 +71,7 @@ from afterthoughts.tokenize import (
 )
 from afterthoughts.utils import (
     disable_tokenizer_parallelism,
+    get_device,
     half_embeds,
     move_or_convert_tensors,
     normalize,
@@ -171,7 +172,7 @@ class Encoder:
         normalize: bool = False,
         half_embeds: bool = False,
         truncate_dims: int | None = None,
-        device: torch.device | str | int = "cuda",
+        device: torch.device | str | int | None = None,
         query_prompt: str | None = None,
         document_prompt: str | None = None,
         _num_token_jobs: int | None = -1,
@@ -203,8 +204,9 @@ class Encoder:
             Truncate embedding dimensions to this value, by default None.
             Useful for models trained with Matryoshka Representation Learning (MRL).
             Truncation is applied to token embeddings before pooling.
-        device : torch.device, str, int, optional
-            Device to use for inference, by default "cuda".
+        device : torch.device, str, int, None, optional
+            Device to use for inference. If None (default), auto-detects the best
+            available device (CUDA > MPS > CPU).
         query_prompt : str | None, optional
             Prompt to prepend to query strings in encode_queries(), by default None.
             Used for instruct-style embedding models (E5-instruct, BGE, GTE-Qwen2-instruct).
@@ -226,6 +228,8 @@ class Encoder:
             clean_up_tokenization_spaces=True,
         )
         self.attn_implementation = attn_implementation
+        if device is None:
+            device = get_device()
         model_kws = {"torch_dtype": self.model_dtype, "device_map": {"": device}}
         if self.attn_implementation is not None:
             model_kws["attn_implementation"] = self.attn_implementation
@@ -780,7 +784,7 @@ class Encoder:
         inputs, sentence_texts = result
         return inputs, sentence_texts
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def _generate_token_embeds(
         self,
         loader: DataLoader[dict[str, Any]],

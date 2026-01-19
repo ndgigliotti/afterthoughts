@@ -483,7 +483,7 @@ def _tokenize_batch(
     return dict(inputs)
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def pad(
     sequences: list[torch.Tensor] | list[np.ndarray[Any, Any]] | list[list[int]],
     pad_value: int,

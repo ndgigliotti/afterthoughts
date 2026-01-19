@@ -35,6 +35,7 @@ Encoder : Main API for encoding documents and queries into embeddings
 Utility Functions
 -----------------
 configure_logging : Configure logging output for the library
+get_device : Auto-detect the best available device (CUDA > MPS > CPU)
 
 See Also
 --------
@@ -61,4 +62,4 @@ __version__ = "0.1.0"
 # limitations under the License.
 
 from afterthoughts.encode import Encoder  # noqa
-from afterthoughts.utils import configure_logging  # noqa
+from afterthoughts.utils import configure_logging, get_device  # noqa

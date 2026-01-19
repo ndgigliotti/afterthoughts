@@ -272,7 +272,7 @@ def _add_special_tokens(
     return result
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def _split_long_sentences(sentence_ids: torch.Tensor, max_length: int) -> torch.Tensor:
     """Splits long sentences into smaller segments.
 
@@ -310,7 +310,7 @@ def _split_long_sentences(sentence_ids: torch.Tensor, max_length: int) -> torch.
     return sentence_ids
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def chunk_preserving_sentence_structure(
     input_ids: torch.Tensor,
     sentence_ids: torch.Tensor,
@@ -856,7 +856,7 @@ def _compute_boundary_special_token_mask(
     return valid_token_mask
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def _compute_chunk_embeds(
     input_ids: torch.Tensor,
     token_embeds: torch.Tensor,
@@ -1062,7 +1062,7 @@ def _as_sentence_ids(
     return token_type_ids.contiguous()
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def tokenize_with_sentence_boundaries(
     docs: list[str],
     tokenizer: PreTrainedTokenizerBase,
