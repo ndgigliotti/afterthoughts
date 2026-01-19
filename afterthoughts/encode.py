@@ -524,7 +524,7 @@ class Encoder:
         ----------
         results : dict
             Dictionary containing 'document_idx', 'sequence_idx', 'batch_idx',
-            'chunk_size', 'chunk', and 'chunk_embeds'.
+            'num_sents', 'chunk', and 'chunk_embeds'.
         return_frame : str, optional
             DataFrame type: 'polars' or 'pandas'. Default is 'polars'.
         as_numpy : bool, optional
@@ -543,7 +543,7 @@ class Encoder:
             "sequence_idx",
             "document_idx",
             "chunk_idx",
-            "chunk_size",
+            "num_sents",
         ]
         if debug:
             keys = base_keys + ["batch_idx", "chunk"]
@@ -582,7 +582,7 @@ class Encoder:
         When documents exceed max_length, they are split into overlapping pre-chunks.
         This can create duplicate chunk embeddings for the same sentence groups
         (with different attention contexts). This function groups by
-        (document_idx, chunk_size, first_sent, last_sent) and either averages
+        (document_idx, num_sents, first_sent, last_sent) and either averages
         embeddings or keeps the first occurrence.
 
         Uses vectorized operations (np.unique, torch.scatter_add) for performance
@@ -593,7 +593,7 @@ class Encoder:
         results : dict
             Dictionary containing accumulated batch results with keys:
             - 'document_idx': tensor of document indices
-            - 'chunk_size': tensor of chunk sizes
+            - 'num_sents': tensor of chunk sizes
             - 'chunk_sentence_ids': list of sentence ID tensors per chunk
             - 'chunk_embeds': tensor of chunk embeddings
             - 'sequence_idx', 'batch_idx', 'chunk_idx', 'chunk_token_ids' (preserved)
@@ -612,7 +612,7 @@ class Encoder:
             raise ValueError(f"method must be 'average' or 'first', got {method!r}")
 
         document_idx = results["document_idx"]
-        chunk_size = results["chunk_size"]
+        num_sents = results["num_sents"]
         chunk_embeds = results["chunk_embeds"]
         chunk_sentence_ids = results["chunk_sentence_ids"]
 
@@ -637,7 +637,7 @@ class Encoder:
                     last_sent[i] = valid_ids_list[-1]
 
         # Build compound key and use np.unique for fast grouping
-        keys = torch.stack([document_idx, chunk_size, first_sent, last_sent], dim=1).numpy()
+        keys = torch.stack([document_idx, num_sents, first_sent, last_sent], dim=1).numpy()
         _, inverse_indices, counts = np.unique(
             keys, axis=0, return_inverse=True, return_counts=True
         )
@@ -945,7 +945,7 @@ class Encoder:
         deduplicate : bool, optional
             If True (default), average embeddings for duplicate chunks that arise
             from overlapping pre-chunks. Duplicates are identified by matching
-            (document_idx, chunk_size, sentence_ids). If False, keep all chunks.
+            (document_idx, num_sents, sentence_ids). If False, keep all chunks.
         return_frame : str, optional
             The type of DataFrame of chunks and indices to return, by default 'polars'.
             Options are 'pandas' or 'polars'.
@@ -1016,7 +1016,7 @@ class Encoder:
             "chunk_idx": [],
             "chunk_token_ids": [],
             "chunk_sentence_ids": [],
-            "chunk_size": [],
+            "num_sents": [],
             "chunk_embeds": [],
         }
         for batch in batches:
@@ -1035,7 +1035,7 @@ class Encoder:
                 results["chunk_sentence_ids"].extend(batch["sentence_ids"])
             else:
                 results["chunk_sentence_ids"].append(batch["sentence_ids"])
-            results["chunk_size"].append(batch["chunk_size"])
+            results["num_sents"].append(batch["num_sents"])
             results["chunk_embeds"].append(batch["chunk_embeds"])
 
         # Combine tensor results (excluding chunk_sentence_ids and chunk_token_ids

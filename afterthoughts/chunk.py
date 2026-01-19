@@ -591,7 +591,7 @@ def get_chunk_idx(
         - "chunk_token_ids": Padded matrix of chunk token IDs.
         - "sentence_ids": Padded matrix of sentence IDs.
         - "attention_mask": Attention mask for the chunk indices.
-        - "chunk_size": Number of sentences in each chunk.
+        - "num_sents": Number of sentences in each chunk.
         - "sequence_idx": Sequence indices.
 
     Raises
@@ -625,7 +625,7 @@ def get_chunk_idx(
         "chunk_token_idx": [],
         "chunk_token_ids": [],
         "sentence_ids": [],
-        "chunk_size": [],
+        "num_sents": [],
         "sequence_idx": [],
         "chunk_idx": [],
     }
@@ -652,11 +652,11 @@ def get_chunk_idx(
             results["chunk_token_ids"].extend(chunk_token_ids)
             results["sentence_ids"].extend([seq_sentence_ids[mask] for mask in chunk_masks])
             results["chunk_token_idx"].extend(chunk_token_idx)
-            results["chunk_size"].append(torch.full((n_chunks,), size))
+            results["num_sents"].append(torch.full((n_chunks,), size))
             results["sequence_idx"].append(seq_idx.repeat_interleave(n_chunks))
             results["chunk_idx"].append(torch.arange(chunk_counter, chunk_counter + n_chunks))
             chunk_counter += n_chunks
-    results["chunk_size"] = torch.cat(results["chunk_size"])
+    results["num_sents"] = torch.cat(results["num_sents"])
     results["sequence_idx"] = torch.cat(results["sequence_idx"])
     results["chunk_idx"] = torch.cat(results["chunk_idx"])
     results["attention_mask"] = pad_sequence(
@@ -677,7 +677,7 @@ def get_chunk_idx(
         results["chunk_token_idx"].size(0)
         == results["chunk_token_ids"].size(0)
         == results["sentence_ids"].size(0)
-        == results["chunk_size"].size(0)
+        == results["num_sents"].size(0)
         == results["sequence_idx"].size(0)
         == results["chunk_idx"].size(0)
     )
@@ -724,7 +724,7 @@ def _compute_chunk_embeds_slow(
         Dictionary containing the following keys:
         - "sequence_idx": Tensor of sequence indices.
         - "chunk_token_ids": Tensor of chunk token IDs.
-        - "chunk_size": Tensor of chunk sizes.
+        - "num_sents": Tensor of chunk sizes.
         - "chunk_embeds": Tensor of chunk embeddings.
     """
     chunk_data = get_chunk_idx(
@@ -751,7 +751,7 @@ def _compute_chunk_embeds_slow(
     results = {
         "sequence_idx": chunk_data["sequence_idx"],
         "chunk_token_ids": chunk_data["chunk_token_ids"],
-        "chunk_size": chunk_data["chunk_size"],
+        "num_sents": chunk_data["num_sents"],
         "chunk_embeds": [],
     }
 
@@ -779,7 +779,7 @@ def _compute_chunk_embeds_slow(
         len(results["chunk_token_ids"])
         == results["chunk_embeds"].size(0)
         == results["sequence_idx"].numel()
-        == results["chunk_size"].numel()
+        == results["num_sents"].numel()
     )
     return results
 
@@ -916,7 +916,7 @@ def _compute_chunk_embeds(
         - "chunk_idx" (torch.Tensor): Chunk index within document, shape (num_chunks,)
         - "chunk_token_ids" (torch.Tensor): Token IDs for each chunk (padded), shape (num_chunks, max_chunk_len)
         - "sentence_ids" (torch.Tensor): Sentence IDs for each chunk (padded), shape (num_chunks, max_chunk_len)
-        - "chunk_size" (torch.Tensor): Number of sentences in each chunk, shape (num_chunks,)
+        - "num_sents" (torch.Tensor): Number of sentences in each chunk, shape (num_chunks,)
         - "chunk_embeds" (torch.Tensor): Mean-pooled chunk embeddings, shape (num_chunks, hidden_size)
 
     Notes
@@ -1000,7 +1000,7 @@ def _compute_chunk_embeds(
         "chunk_idx": chunk_data["chunk_idx"],
         "chunk_token_ids": chunk_data["chunk_token_ids"],
         "sentence_ids": chunk_data["sentence_ids"],
-        "chunk_size": chunk_data["chunk_size"],
+        "num_sents": chunk_data["num_sents"],
         "chunk_embeds": chunk_embeds,
     }
     assert (
@@ -1008,7 +1008,7 @@ def _compute_chunk_embeds(
         == results["sentence_ids"].size(0)
         == results["chunk_embeds"].size(0)
         == results["sequence_idx"].numel()
-        == results["chunk_size"].numel()
+        == results["num_sents"].numel()
         == results["chunk_idx"].numel()
     )
     return results

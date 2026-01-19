@@ -66,7 +66,7 @@ def test_get_chunk_idx_single_size():
     assert "chunk_token_ids" in result
     assert "sentence_ids" in result
     assert "sequence_idx" in result
-    assert "chunk_size" in result
+    assert "num_sents" in result
 
 
 def test_get_chunk_idx_multiple_sizes():
@@ -81,7 +81,7 @@ def test_get_chunk_idx_multiple_sizes():
     assert "chunk_token_ids" in result
     assert "sentence_ids" in result
     assert "sequence_idx" in result
-    assert "chunk_size" in result
+    assert "num_sents" in result
 
 
 def test_move_or_convert_results_to_cpu():
@@ -179,7 +179,7 @@ def test_encoder_encode(model):
     assert isinstance(X, np.ndarray)
     assert len(df) == len(X)
     assert "chunk" in df.columns
-    assert "chunk_size" in df.columns
+    assert "num_sents" in df.columns
 
 
 def test_encoder_encode_multiple_num_sents(model):
@@ -194,7 +194,7 @@ def test_encoder_encode_multiple_num_sents(model):
     assert isinstance(df, pl.DataFrame)
     assert isinstance(X, np.ndarray)
     assert len(df) == len(X)
-    assert all(size in df["chunk_size"].unique().to_list() for size in num_sents)
+    assert all(size in df["num_sents"].unique().to_list() for size in num_sents)
 
 
 def test_encoder_encode_queries(model):
@@ -281,7 +281,7 @@ def test_build_results_dataframe(return_frame, as_numpy):
         "sample_idx": torch.tensor([0, 1]),
         "sequence_idx": torch.tensor([0, 1]),
         "batch_idx": torch.tensor([0, 1]),
-        "chunk_size": torch.tensor([2, 2]),
+        "num_sents": torch.tensor([2, 2]),
         "chunk": ["segment1", "segment2"],
         "chunk_embeds": torch.randn(2, 10),
     }
@@ -312,7 +312,7 @@ def test_build_results_dataframe_pandas():
         "sample_idx": torch.tensor([0, 1]),
         "sequence_idx": torch.tensor([0, 1]),
         "batch_idx": torch.tensor([0, 1]),
-        "chunk_size": torch.tensor([2, 2]),
+        "num_sents": torch.tensor([2, 2]),
         "chunk": ["segment1", "segment2"],
         "chunk_embeds": torch.randn(2, 10),
     }
@@ -553,7 +553,7 @@ def test_deduplicate_averages_overlapping_chunks(model):
 
 
 def test_no_duplicates_after_dedup(model):
-    """Same (doc, chunk_size, sentences) appears only once after deduplication."""
+    """Same (doc, num_sents, sentences) appears only once after deduplication."""
     # Create a document that requires pre-chunking with overlap
     sentences = [f"Sentence {i}." for i in range(40)]
     long_doc = " ".join(sentences)
@@ -567,10 +567,10 @@ def test_no_duplicates_after_dedup(model):
         show_progress=False,
     )
 
-    # Check that each (document_idx, chunk_size, chunk text) combination is unique
+    # Check that each (document_idx, num_sents, chunk text) combination is unique
     # Using chunk text as proxy for sentence_ids
     if "chunk" in df.columns:
-        unique_chunks = df.select(["document_idx", "chunk_size", "chunk"]).unique()
+        unique_chunks = df.select(["document_idx", "num_sents", "chunk"]).unique()
         assert len(unique_chunks) == len(df)
 
 
@@ -622,8 +622,8 @@ def test_deduplicate_preserves_metadata(model):
     expected_chunk_idx = list(range(len(df)))
     assert df["chunk_idx"].to_list() == expected_chunk_idx
 
-    # chunk_size should all be 2
-    assert (df["chunk_size"] == 2).all()
+    # num_sents should all be 2
+    assert (df["num_sents"] == 2).all()
 
 
 def test_deduplicate_with_multiple_docs(model):
@@ -683,7 +683,7 @@ def test_deduplicate_averaging_correctness():
     # Chunks 1 and 3 are duplicates (same doc, size, sentences)
     results = {
         "document_idx": torch.tensor([0, 0, 0, 0]),
-        "chunk_size": torch.tensor([2, 2, 2, 2]),
+        "num_sents": torch.tensor([2, 2, 2, 2]),
         "chunk_embeds": torch.tensor(
             [
                 [1.0, 2.0, 3.0],  # chunk 0: sentences 0-1
@@ -735,7 +735,7 @@ def test_deduplicate_first_method():
     """Verify that method='first' keeps first occurrence without averaging."""
     results = {
         "document_idx": torch.tensor([0, 0, 0]),
-        "chunk_size": torch.tensor([1, 1, 1]),
+        "num_sents": torch.tensor([1, 1, 1]),
         "chunk_embeds": torch.tensor(
             [
                 [1.0, 2.0],
