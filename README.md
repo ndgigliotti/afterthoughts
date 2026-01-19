@@ -92,8 +92,8 @@ This approach ensures that pronouns, references, and contextual cues in each chu
 
     ```python
     docs = [
-        "I am a document. It has multiple sentences.",
-        "I am another document. This one also has sentences.",
+        "I am a document. I have multiple sentences.",
+        "I am another document. I also have sentences.",
         "I am yet another document. Sentences are great.",
         "I'm not like the others. I'm special.",
     ]
