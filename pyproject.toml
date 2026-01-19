@@ -13,8 +13,20 @@ authors = [
 maintainers = [
   {name = "Nicholas Gigliotti", email = "ndgigliotti@gmail.com"}
 ]
-classifiers = []
-license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Linguistic",
+]
+license = "Apache-2.0"
 dependencies = [
     "blingfire",
     "joblib",
@@ -38,9 +50,9 @@ dev = [
 ]
 
 [project.urls]
-bugs = "https://github.com/ndgigliotti/finephrase/issues"
-changelog = "https://github.com/ndgigliotti/finephrase/blob/master/changelog.md"
-homepage = "https://github.com/ndgigliotti/finephrase"
+bugs = "https://github.com/ndgigliotti/afterthoughts/issues"
+changelog = "https://github.com/ndgigliotti/afterthoughts/blob/main/CHANGELOG.md"
+homepage = "https://github.com/ndgigliotti/afterthoughts"
 
 [tool.setuptools]
 packages = ["afterthoughts"]
