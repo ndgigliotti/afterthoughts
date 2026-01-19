@@ -14,41 +14,9 @@ from afterthoughts import Encoder
 model = Encoder("sentence-transformers/multi-qa-MiniLM-L6-cos-v1")
 
 docs = [
-    "The Amazon rainforest produces 20% of Earth's oxygen. Deforestation threatens its biodiversity. Scientists warn of a tipping point.",
-]
-df, X = model.encode(docs, num_sents=1)  # 1 sentence per chunk
-```
-
-```python
->>> df
-shape: (3, 4)
-┌──────────────┬───────────┬───────────┬─────────────────────────────────┐
-│ document_idx ┆ chunk_idx ┆ num_sents ┆ chunk                           │
-│ ---          ┆ ---       ┆ ---       ┆ ---                             │
-│ i64          ┆ i64       ┆ i64       ┆ str                             │
-╞══════════════╪═══════════╪═══════════╪═════════════════════════════════╡
-│ 0            ┆ 0         ┆ 1         ┆ The Amazon rainforest produces… │
-│ 0            ┆ 1         ┆ 1         ┆ Deforestation threatens its bi… │
-│ 0            ┆ 2         ┆ 1         ┆ Scientists warn of a tipping p… │
-└──────────────┴───────────┴───────────┴─────────────────────────────────┘
-
->>> X.shape
-(3, 384)  # 3 sentence embeddings, each with full document context
-```
-
-## Quick Start
-
-```bash
-pip install afterthoughts
-```
-
-```python
-from afterthoughts import Encoder
-
-model = Encoder("sentence-transformers/multi-qa-MiniLM-L6-cos-v1")
-
-docs = [
-    "The Amazon rainforest produces 20% of Earth's oxygen. Deforestation threatens its biodiversity. Scientists warn of a tipping point.",
+    "The Amazon rainforest produces 20% of Earth's oxygen. "
+    "Deforestation threatens its biodiversity. "
+    "Scientists warn of a tipping point.",  # 1 document, 3 sentences
 ]
 df, X = model.encode(docs, num_sents=1)  # 1 sentence per chunk
 ```
