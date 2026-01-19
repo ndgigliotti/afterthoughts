@@ -341,7 +341,7 @@ class DynamicTokenSampler(Sampler[list[int]]):
         # Add final batch if not empty
         if current_batch:
             batch_list.append(current_batch)
-            batch_token_counts.append(current_tokens)  # Store token count for final batch
+            batch_token_counts.append(len(current_batch) * current_longest)
 
         logger.debug("Batch sizes: %s", [len(x) for x in batch_list])
         logger.debug("Batch token counts: %s", batch_token_counts)
