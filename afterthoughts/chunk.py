@@ -665,7 +665,7 @@ def _compute_chunk_embeds_slow(
     tokenizer: PreTrainedTokenizerBase,
     num_sents: int | list[int] | tuple[int, ...] = 2,
     chunk_overlap: int | float | list[int] | dict[int, int] = 0.5,
-    exclude_special_tokens: bool = False,
+    exclude_special_tokens: bool = True,
 ) -> dict[str, torch.Tensor]:
     """
     Compute chunk embeddings (slow version).
@@ -687,9 +687,9 @@ def _compute_chunk_embeds_slow(
     chunk_overlap : int or float or list or dict, optional
         Overlap between chunks. Default is 0.5.
     exclude_special_tokens : bool, optional
-        If True, exclude all special tokens from mean pooling.
-        If False (default), include [CLS] in first chunk and [SEP] in last chunk
-        of each sequence, per the late chunking paper's recommendation.
+        If True (default), exclude all special tokens from mean pooling.
+        If False, include [CLS] in first chunk and [SEP] in last chunk
+        of each sequence.
 
     Returns
     -------
@@ -838,7 +838,7 @@ def _compute_chunk_embeds(
     tokenizer: PreTrainedTokenizerBase,
     num_sents: int | list[int] | tuple[int, ...] = 2,
     chunk_overlap: int | float | list[int] | dict[int, int] = 0.5,
-    exclude_special_tokens: bool = False,
+    exclude_special_tokens: bool = True,
 ) -> dict[str, torch.Tensor]:
     """Compute chunk embeddings via vectorized mean-pooling of token embeddings.
 
@@ -847,9 +847,7 @@ def _compute_chunk_embeds(
     boundaries. Uses advanced indexing for efficient vectorized computation.
 
     The function groups consecutive sentences into chunks, then averages the token
-    embeddings for all tokens within each chunk. Special tokens ([CLS], [SEP]) are
-    handled according to the late chunking paper's recommendation: include them in
-    boundary chunks (first/last of each sequence) but exclude from interior chunks.
+    embeddings for all tokens within each chunk.
 
     Parameters
     ----------
@@ -878,11 +876,10 @@ def _compute_chunk_embeds(
         - list: Overlap values corresponding to each value in num_sents
         - dict: Maps chunk size to overlap count
     exclude_special_tokens : bool, optional
-        How to handle special tokens during mean pooling, by default False.
-        - False (recommended): Include [CLS] in first chunk and [SEP] in last chunk
-          of each sequence, exclude other special tokens. This follows the late
-          chunking paper's recommendation.
-        - True: Exclude all special tokens from mean pooling.
+        How to handle special tokens during mean pooling, by default True.
+        - True (default): Exclude all special tokens from mean pooling.
+        - False: Include [CLS] in first chunk and [SEP] in last chunk
+          of each sequence.
 
     Returns
     -------
@@ -901,7 +898,6 @@ def _compute_chunk_embeds(
     - Handles variable-length chunks through padding
     - Preserves sentence boundaries in all chunks
     - Mean pooling weights all non-padding, non-excluded tokens equally
-    - For queries (single-sentence inputs), typically exclude_special_tokens=False
 
     Examples
     --------

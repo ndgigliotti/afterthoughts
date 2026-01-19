@@ -784,7 +784,7 @@ class Encoder:
         move_results_to_cpu: bool = False,
         return_tensors: str = "pt",
         truncate_dim: int | None = None,
-        exclude_special_tokens: bool = False,
+        exclude_special_tokens: bool = True,
         show_progress: bool = True,
     ) -> Iterator[dict[str, Any]]:
         """Obtain the chunk embeddings for a list of documents, one batch at at time.
@@ -804,9 +804,9 @@ class Encoder:
         truncate_dim : int | None, optional
             Truncate token embeddings to this dimension, by default None.
         exclude_special_tokens : bool, optional
-            If True, exclude all special tokens from mean pooling.
-            If False (default), include [CLS] in first chunk and [SEP] in last chunk
-            of each sequence, per the late chunking paper's recommendation.
+            If True (default), exclude all special tokens from mean pooling.
+            If False, include [CLS] in first chunk and [SEP] in last chunk
+            of each sequence.
         show_progress : bool, optional
             Show progress bar during encoding, by default True.
         """
@@ -845,7 +845,7 @@ class Encoder:
         prechunk: bool = True,
         prechunk_overlap: float | int = 0.5,
         sent_tokenizer: str = "blingfire",
-        exclude_special_tokens: bool = False,
+        exclude_special_tokens: bool = True,
         deduplicate: bool = True,
         return_frame: str = "polars",
         as_numpy: bool = True,
@@ -884,9 +884,9 @@ class Encoder:
             Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
             Options are "blingfire", "nltk", or "syntok".
         exclude_special_tokens : bool, optional
-            If True, exclude all special tokens from mean pooling.
-            If False (default), include [CLS] in first chunk and [SEP] in last chunk
-            of each sequence, per the late chunking paper's recommendation.
+            If True (default), exclude all special tokens from mean pooling.
+            If False, include [CLS] in first chunk and [SEP] in last chunk
+            of each sequence.
         deduplicate : bool, optional
             If True (default), average embeddings for duplicate chunks that arise
             from overlapping pre-chunks. Duplicates are identified by matching
@@ -1056,7 +1056,7 @@ class Encoder:
         queries: list[str],
         max_length: int | None = None,
         batch_size: int = 32,
-        exclude_special_tokens: bool = False,
+        exclude_special_tokens: bool = True,
         as_numpy: bool = True,
     ) -> np.ndarray[Any, Any] | torch.Tensor:
         """Obtain the mean-tokens embeddings for a list of query strings.
@@ -1074,8 +1074,8 @@ class Encoder:
         batch_size : int, optional
             Batch size for encoding, by default 32.
         exclude_special_tokens : bool, optional
-            If True, exclude all special tokens from mean pooling.
-            If False (default), include [CLS] and [SEP] tokens in mean pooling for queries.
+            If True (default), exclude all special tokens from mean pooling.
+            If False, include [CLS] and [SEP] tokens in mean pooling for queries.
         as_numpy : bool, optional
             Convert the tensors to numpy arrays before returning, by default True.
 
