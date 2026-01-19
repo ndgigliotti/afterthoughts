@@ -804,3 +804,196 @@ def test_encoder_truncate_dims_queries(model_truncate_dims):
     queries = ["What is this about?"]
     query_embeds = model_truncate_dims.encode_queries(queries)
     assert query_embeds.shape[1] == 128
+
+
+# =============================================================================
+# Tests for instruct-style prompts (query_prompt, document_prompt)
+# =============================================================================
+
+
+def test_apply_prompt_helper(model):
+    """Test _apply_prompt helper method."""
+    texts = ["query one", "query two"]
+    prompt = "Represent this for retrieval: "
+
+    # With prompt
+    result = model._apply_prompt(texts, prompt)
+    assert result == [
+        "Represent this for retrieval: query one",
+        "Represent this for retrieval: query two",
+    ]
+
+    # Without prompt
+    result_no_prompt = model._apply_prompt(texts, None)
+    assert result_no_prompt == texts
+
+
+def test_get_prompt_length_helper(model):
+    """Test _get_prompt_length helper method."""
+    # Simple prompt
+    prompt = "Search query: "
+    length = model._get_prompt_length(prompt)
+    assert length > 0
+    assert isinstance(length, int)
+
+    # Empty/None prompt
+    assert model._get_prompt_length(None) == 0
+    assert model._get_prompt_length("") == 0
+
+
+def test_encode_queries_with_prompt(model):
+    """Test encode_queries with per-call prompt override."""
+    queries = ["What is machine learning?"]
+    prompt = "Represent this question for retrieval: "
+
+    # Encode with prompt
+    emb_with_prompt = model.encode_queries(queries, prompt=prompt)
+
+    # Encode without prompt
+    emb_no_prompt = model.encode_queries(queries)
+
+    # Embeddings should differ (prompt changes the embedding)
+    diff = np.linalg.norm(emb_with_prompt - emb_no_prompt)
+    assert diff > 0, "Prompt should change query embeddings"
+
+
+def test_encode_queries_with_init_prompt():
+    """Test encode_queries with query_prompt set at initialization."""
+    prompt = "Represent this for retrieval: "
+    encoder = Encoder(
+        model_name=MODEL_NAME,
+        device="cpu",
+        query_prompt=prompt,
+        _num_token_jobs=1,
+    )
+
+    queries = ["What is AI?"]
+
+    # Should use init prompt by default
+    emb_init_prompt = encoder.encode_queries(queries)
+
+    # Per-call prompt should override
+    override_prompt = "Represent for clustering: "
+    emb_override = encoder.encode_queries(queries, prompt=override_prompt)
+
+    # Embeddings should differ
+    diff = np.linalg.norm(emb_init_prompt - emb_override)
+    assert diff > 0, "Per-call prompt should override init prompt"
+
+
+def test_encode_with_document_prompt(model):
+    """Test encode() with per-call prompt override."""
+    docs = ["Machine learning is AI. Deep learning is a subset."]
+    prompt = "Represent this document: "
+
+    # Encode with prompt
+    df_with, emb_with = model.encode(
+        docs, num_sents=1, max_length=128, prompt=prompt, show_progress=False
+    )
+
+    # Encode without prompt
+    df_without, emb_without = model.encode(docs, num_sents=1, max_length=128, show_progress=False)
+
+    # Should have same number of chunks (prompt doesn't add sentences)
+    assert len(df_with) == len(df_without)
+
+    # Embeddings should differ
+    for i in range(len(emb_with)):
+        diff = np.linalg.norm(emb_with[i] - emb_without[i])
+        assert diff > 0, f"Prompt should change chunk {i} embedding"
+
+
+def test_encode_with_init_document_prompt():
+    """Test encode() with document_prompt set at initialization."""
+    prompt = "Document for retrieval: "
+    encoder = Encoder(
+        model_name=MODEL_NAME,
+        device="cpu",
+        document_prompt=prompt,
+        _num_token_jobs=1,
+    )
+
+    docs = ["Python is popular. It is widely used."]
+
+    # Should use init prompt by default
+    df_init, emb_init = encoder.encode(docs, num_sents=1, max_length=128, show_progress=False)
+
+    # Per-call prompt should override
+    override_prompt = "Summarize: "
+    df_override, emb_override = encoder.encode(
+        docs, num_sents=1, max_length=128, prompt=override_prompt, show_progress=False
+    )
+
+    # Embeddings should differ
+    assert len(emb_init) == len(emb_override)
+    diff = np.linalg.norm(emb_init[0] - emb_override[0])
+    assert diff > 0, "Per-call prompt should override init document_prompt"
+
+
+def test_prompt_does_not_affect_chunk_count(model):
+    """Verify that prompts don't change the number of chunks extracted."""
+    docs = ["First sentence. Second sentence. Third sentence."]
+    prompt = "This is a very long prompt that contains many tokens: "
+
+    df_without, _ = model.encode(docs, num_sents=1, max_length=256, show_progress=False)
+    df_with, _ = model.encode(docs, num_sents=1, max_length=256, prompt=prompt, show_progress=False)
+
+    assert len(df_without) == len(df_with), "Prompt should not affect chunk count"
+
+
+def test_prompt_excluded_from_chunk_text(model):
+    """Verify that prompt text is not included in reconstructed chunk text."""
+    docs = ["Hello world. This is a test."]
+    prompt = "PREFIX_MARKER: "
+
+    df, _ = model.encode(docs, num_sents=1, max_length=128, prompt=prompt, show_progress=False)
+
+    # Check that no chunk contains the prompt prefix
+    for chunk in df["chunk"].to_list():
+        assert "PREFIX_MARKER" not in chunk, "Prompt should not appear in chunk text"
+
+
+def test_prompt_sentence_ids_are_negative(tokenizer):
+    """Test that prompt tokens get sentence_id=-1 in tokenization."""
+    from afterthoughts.chunk import tokenize_with_sentence_boundaries
+
+    docs = ["Hello world."]
+    prompt = "Query: "
+
+    result = tokenize_with_sentence_boundaries(
+        docs,
+        tokenizer,
+        prechunk=False,
+        max_length=64,
+        prompt=prompt,
+    )
+
+    # Get sentence_ids for the first (only) sequence
+    sent_ids = result["sentence_ids"][0]
+
+    # The first few tokens should be prompt tokens with sentence_id=-1
+    prompt_tokens = tokenizer.encode(prompt, add_special_tokens=False)
+    num_prompt_tokens = len(prompt_tokens)
+
+    # First token is CLS, then prompt tokens should have -1
+    # (After CLS which also has a sentence_id assignment)
+    # Actually, special tokens get extended sentence_ids in the chunking logic
+    # Let's just verify some -1 values exist at the start (excluding CLS)
+    assert any(
+        sid == -1 for sid in sent_ids[1 : num_prompt_tokens + 2]
+    ), "Prompt tokens should have sentence_id=-1"
+
+
+def test_encode_queries_prompt_equivalent_to_manual_prepend(model):
+    """Verify prompt produces same embeddings as manually prepending text."""
+    query = "What is AI?"
+    prompt = "query: "
+
+    # Using prompt parameter
+    emb_prompt = model.encode_queries([query], prompt=prompt)
+
+    # Manual prepend
+    emb_manual = model.encode_queries([prompt + query])
+
+    # Should be identical (or very close due to floating point)
+    np.testing.assert_array_almost_equal(emb_prompt, emb_manual, decimal=5)

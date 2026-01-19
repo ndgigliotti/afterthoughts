@@ -392,8 +392,27 @@ def chunk_preserving_sentence_structure(
     cls_token_id = tokenizer.cls_token_id or tokenizer.bos_token_id
     sep_token_id = tokenizer.sep_token_id or tokenizer.eos_token_id
     num_specials = sum(x is not None for x in [cls_token_id, sep_token_id])
+
+    # Identify leading prompt tokens (sentence_id=-1 before first valid sentence)
+    # These need to be preserved in each chunk for attention context
+    prompt_mask = torch.zeros(len(sentence_ids), dtype=torch.bool)
+    for i, sid in enumerate(sentence_ids):
+        if sid == -1:
+            prompt_mask[i] = True
+        else:
+            break  # Stop at first valid sentence token
+
+    num_prompt_tokens = prompt_mask.sum().item()
+    prompt_input_ids = (
+        torch.tensor(input_ids)[:num_prompt_tokens] if num_prompt_tokens > 0 else None
+    )
+    prompt_sentence_ids = sentence_ids[:num_prompt_tokens] if num_prompt_tokens > 0 else None
+
+    # Effective max length must account for prompt tokens
     eff_max_length = max_length - num_specials if add_special_tokens else max_length
-    sentence_ids = _split_long_sentences(sentence_ids, eff_max_length)
+    eff_max_length_for_sentences = eff_max_length - num_prompt_tokens
+
+    sentence_ids = _split_long_sentences(sentence_ids, eff_max_length_for_sentences)
     sent_lengths = torch.bincount(sentence_ids[sentence_ids != -1])
     unique_sent_ids = torch.unique(sentence_ids[sentence_ids != -1])
 
@@ -425,6 +444,12 @@ def chunk_preserving_sentence_structure(
         mask = torch.isin(sentence_ids, torch.tensor(chunk))
         chunk_input_ids = torch.tensor(input_ids)[mask]
         chunk_sentence_ids_tensor = sentence_ids[mask]
+
+        # Prepend prompt tokens (if any) to each chunk
+        if prompt_input_ids is not None and prompt_sentence_ids is not None:
+            chunk_input_ids = torch.cat([prompt_input_ids, chunk_input_ids])
+            chunk_sentence_ids_tensor = torch.cat([prompt_sentence_ids, chunk_sentence_ids_tensor])
+
         chunk_length = len(chunk_input_ids)
         if chunk_length > eff_max_length:
             # Truncate the chunk to fit within the max_length
@@ -440,9 +465,11 @@ def chunk_preserving_sentence_structure(
             chunk_input_ids = _add_special_tokens(chunk_input_ids, cls_token_id, sep_token_id)
             # Extend first sentence ID to include CLS token
             # and last sentence ID to include SEP token
+            # For CLS: use -1 if we have prompt tokens, otherwise use first sentence's ID
+            cls_sentence_id = -1 if prompt_input_ids is not None else chunk_sentence_ids_tensor[0]
             chunk_sentence_ids_tensor = torch.cat(
                 [
-                    torch.tensor([chunk_sentence_ids_tensor[0]]),
+                    torch.tensor([cls_sentence_id]),
                     chunk_sentence_ids_tensor,
                     torch.tensor([chunk_sentence_ids_tensor[-1]]),
                 ]
@@ -1047,6 +1074,7 @@ def tokenize_with_sentence_boundaries(
     batch_size: int = 10,
     n_jobs: int | None = None,
     show_progress: bool = True,
+    prompt: str | None = None,
 ) -> dict[str, Any] | tuple[TokenizedDataset, list[list[str]]]:
     """Tokenize documents while preserving sentence boundaries for late chunking.
 
@@ -1094,6 +1122,11 @@ def tokenize_with_sentence_boundaries(
         - n > 1: Use n parallel workers
     show_progress : bool, optional
         Whether to display progress bar during chunking, by default True.
+    prompt : str | None, optional
+        Prompt to prepend to each document, by default None. Used for instruct-style
+        embedding models. Sentence detection is performed on the original document
+        (without prompt), then prompt tokens are assigned sentence_id=-1 so they
+        are excluded from chunk mean-pooling.
 
     Returns
     -------
@@ -1114,6 +1147,7 @@ def tokenize_with_sentence_boundaries(
     -----
     - Sentence IDs are consecutive integers (0, 1, 2, ...) within each document
     - Padding tokens have sentence_id = -1
+    - Prompt tokens (if prompt is provided) have sentence_id = -1
     - When prechunk=True, sentences are never split across sequence boundaries
     - Original sentence texts are preserved for later text reconstruction
     - Token offsets are used to map tokens back to sentences in the original text
@@ -1149,13 +1183,28 @@ def tokenize_with_sentence_boundaries(
     ...     prechunk=True,
     ...     prechunk_overlap=0.5
     ... )
+
+    With instruct-style prompt:
+
+    >>> docs = ["What is machine learning?"]
+    >>> result = tokenize_with_sentence_boundaries(
+    ...     docs,
+    ...     tokenizer,
+    ...     prompt="Represent this question for retrieval: "
+    ... )
     """
+    # Determine prompt offset for adjusting character positions
+    prompt_char_offset = len(prompt) if prompt is not None else 0
+
+    # Prepend prompt to documents for tokenization (if provided)
+    docs_for_tokenization = [prompt + doc for doc in docs] if prompt else docs
+
     # Tokenize the documents using the provided tokenizer.
     # We disable truncation and padding at this stage to retain full document context.
     # Special tokens are also disabled, but will be added later.
     tokenize_max_length: int | None = max_length if not prechunk else None
     inputs_raw = tokenize_docs(
-        docs,
+        docs_for_tokenization,
         tokenizer,  # type: ignore[arg-type]
         max_length=tokenize_max_length,
         truncation=not prechunk,
@@ -1170,14 +1219,24 @@ def tokenize_with_sentence_boundaries(
         raise TypeError("Expected tokenize_docs to return a dict")
     inputs: dict[str, Any] = inputs_raw
     # Get sentence offsets for each document using the specified method.
+    # Sentence detection is performed on original documents (without prompt).
     sent_offsets = get_sentence_offsets(docs, method=method)
+
+    # Adjust sentence offsets by prompt length so they align with tokenized text.
+    # This way, prompt tokens will have character offsets before any sentence
+    # and will naturally get sentence_id=-1.
+    if prompt_char_offset > 0:
+        sent_offsets = [offsets + prompt_char_offset for offsets in sent_offsets]
+
     token_offsets = [torch.as_tensor(x) for x in inputs["offset_mapping"]]
 
     # Extract original sentence texts using character offsets (per-document, not per-sequence).
     # This allows reconstructing chunk text without detokenization later.
+    # Note: We use the original docs (without prompt) for sentence text extraction.
+    original_sent_offsets = get_sentence_offsets(docs, method=method)
     sentence_texts = [
         [doc[start:end] for start, end in offsets.tolist()]
-        for doc, offsets in zip(docs, sent_offsets, strict=False)
+        for doc, offsets in zip(docs, original_sent_offsets, strict=False)
     ]
 
     # Initialize a dictionary to store the results.
