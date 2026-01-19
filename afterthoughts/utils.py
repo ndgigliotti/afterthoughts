@@ -595,3 +595,26 @@ def order_by_indices(elements: list[Any], indices: list[int]) -> list[Any]:
 def round_up_to_power_of_2(x: int) -> int:
     """Round up to the nearest power of 2."""
     return int(2 ** math.ceil(math.log2(x)))
+
+
+def get_device() -> str:
+    """Auto-detect the best available device for inference.
+
+    Checks for available accelerators in order of preference:
+    CUDA > MPS (Apple Silicon) > CPU.
+
+    Returns
+    -------
+    str
+        Device string: "cuda", "mps", or "cpu".
+
+    Examples
+    --------
+    >>> device = get_device()
+    >>> encoder = Encoder("model-name", device=device)
+    """
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"

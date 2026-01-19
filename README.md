@@ -2,7 +2,39 @@
 
 A Python library for late chunking ([Günther et al., 2024](https://arxiv.org/abs/2409.04701)) that preserves context across chunks for improved RAG retrieval, semantic search, clustering, and exploratory data analysis.
 
-Independently developed with focus on production robustness, edge case handling, and ease of integration. It also emphasizes sentence-boundary awareness, since sentences are units of thought.
+## Quick Start
+
+```bash
+pip install afterthoughts
+```
+
+```python
+from afterthoughts import Encoder
+
+model = Encoder("sentence-transformers/multi-qa-MiniLM-L6-cos-v1")
+
+docs = [
+    "The Amazon rainforest produces 20% of Earth's oxygen. Deforestation threatens its biodiversity. Scientists warn of a tipping point.",
+]
+df, X = model.encode(docs, num_sents=1)  # 1 sentence per chunk
+```
+
+```python
+>>> df
+shape: (3, 4)
+┌──────────────┬───────────┬───────────┬─────────────────────────────────┐
+│ document_idx ┆ chunk_idx ┆ num_sents ┆ chunk                           │
+│ ---          ┆ ---       ┆ ---       ┆ ---                             │
+│ i64          ┆ i64       ┆ i64       ┆ str                             │
+╞══════════════╪═══════════╪═══════════╪═════════════════════════════════╡
+│ 0            ┆ 0         ┆ 1         ┆ The Amazon rainforest produces… │
+│ 0            ┆ 1         ┆ 1         ┆ Deforestation threatens its bi… │
+│ 0            ┆ 2         ┆ 1         ┆ Scientists warn of a tipping p… │
+└──────────────┴───────────┴───────────┴─────────────────────────────────┘
+
+>>> X.shape
+(3, 384)  # 3 sentence embeddings, each with full document context
+```
 
 ## Quick Start
 
@@ -49,37 +81,13 @@ Traditional RAG pipelines split documents into chunks *before* embedding, which 
 
 This approach ensures that pronouns, references, and contextual cues in each chunk are informed by the full document context.
 
-## How Afterthoughts Implements Late Chunking
+## Why Late Chunking?
 
-Afterthoughts provides a fast, memory-efficient implementation of late chunking optimized for production use:
+**The problem:** Document-level embeddings are too coarse for long documents. Traditional chunking loses context—pronouns like "it" or "the technology" become meaningless when separated from their referents.
 
-1. **Sentence boundary awareness** using BlingFire, NLTK, pysbd, or syntok for accurate, linguistically-aware chunking
-2. **Full document embedding** through transformer models to capture cross-sentence context
-3. **Sentence-based pooling** of token embeddings from the model's final hidden state
-4. **Overlapping chunk extraction** with configurable sentence counts and overlap ratios
+**The solution:** Late chunking embeds the full document first, then pools token embeddings into chunks. Each chunk retains full document context.
 
-The result is a set of chunk embeddings where each chunk's representation is enriched by the surrounding document context—even if the chunk itself contains ambiguous references or pronouns.
-
-## Why Use Chunk Embeddings?
-
-Document-level embeddings work well for shorter texts but can be too coarse for long or complex documents where multiple topics appear in different sections.
-
-**Example use cases:**
-
-- **Legal document search**: Find specific clauses (e.g., non-compete provisions) buried within lengthy contracts, rather than matching on overall document similarity
-- **Review analysis**: Locate specific claims in lengthy reviews (e.g., mentions of "one-dimensional characters") even when they're a minor point rather than the main topic
-- **Research paper search**: Find relevant paragraphs discussing specific methods or results within long academic papers
-
-## Key Advantages
-
-### Computational Efficiency
-
-Rather than running each chunk through the model separately, late chunking runs the full document once and derives all chunk embeddings from the resulting token embeddings. This is significantly faster than embedding thousands of short chunks individually.
-
-### Contextual Enrichment
-
-Chunk embeddings capture meaning from surrounding context. For example, "the characters were really something" from a movie review will have different embeddings depending on whether the surrounding text is positive or negative—the model shifts token vectors based on context, producing embeddings that accurately reflect sentiment even without explicit sentiment words in the chunk.
-
+**Performance:** One forward pass for the entire document, regardless of chunk count.
 
 ## Features
 
@@ -145,26 +153,26 @@ Chunk embeddings capture meaning from surrounding context. For example, "the cha
     ```
 
     The DataFrame contains the following columns:
-    * `sample_idx`: The index of the document from which the chunk was extracted
-    * `chunk_idx`: A global index preserving chunk extraction order
+    * `document_idx`: The index of the document from which the chunk was extracted
+    * `chunk_idx`: The chunk index within each document
     * `num_sents`: The number of sentences in the chunk
-    * `chunk`: The chunk itself, as text
+    * `chunk`: The chunk text
 
     Additional columns are available when `debug=True`:
     * `embed_idx`: The original embedding index before re-sorting
-    * `sequence_idx`: The index of the tokenized sequence (differs from `sample_idx` when long documents are chunked)
+    * `sequence_idx`: The index of the tokenized sequence (differs from `document_idx` when long documents are split)
     * `batch_idx`: The index of the batch in which the chunk was processed
 
     To access the chunk embeddings from the `i`-th document:
 
     ```python
     i = 10
-    doc_chunks = X[df["sample_idx"] == i]
+    doc_chunks = X[df["document_idx"] == i]
     ```
 
     This works identically for both Polars and pandas DataFrames.
 
-### Using pandas Instead of Polars
+### Using Pandas Instead of Polars
 
 Afterthoughts uses Polars by default for its speed and memory efficiency, but pandas is fully supported for users who prefer it or need compatibility with existing code. Simply set `return_frame="pandas"`:
 
@@ -176,7 +184,7 @@ df, X = model.encode(
 )
 
 # Use familiar pandas operations
-df.groupby("sample_idx").size()
+df.groupby("document_idx").size()
 df[df["num_sents"] == 2]
 ```
 

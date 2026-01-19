@@ -8,6 +8,7 @@ import torch
 
 from afterthoughts.utils import (
     format_memory_size,
+    get_device,
     get_memory_report,
     get_memory_size,
     get_torch_dtype,
@@ -187,3 +188,15 @@ def test_norm_jobs():
 
     # Test with a smaller negative number
     assert normalize_num_jobs(-3) == cpu_count - 3 + 1
+
+
+def test_get_device():
+    """Test that get_device returns a valid device string."""
+    device = get_device()
+    assert device in ("cuda", "mps", "cpu")
+    # Verify the returned device is actually available
+    if device == "cuda":
+        assert torch.cuda.is_available()
+    elif device == "mps":
+        assert torch.backends.mps.is_available()
+    # CPU is always available, no assertion needed

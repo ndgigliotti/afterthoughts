@@ -48,7 +48,10 @@ import logging
 import math
 from collections.abc import Iterator
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal, overload
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 import numpy as np
 import polars as pl
@@ -71,6 +74,7 @@ from afterthoughts.tokenize import (
 )
 from afterthoughts.utils import (
     disable_tokenizer_parallelism,
+    get_device,
     half_embeds,
     move_or_convert_tensors,
     normalize,
@@ -78,6 +82,7 @@ from afterthoughts.utils import (
     timer,
     truncate_dims,
 )
+from afterthoughts.validation import validate_encode_params, validate_encode_queries_params
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +176,7 @@ class Encoder:
         normalize: bool = False,
         half_embeds: bool = False,
         truncate_dims: int | None = None,
-        device: torch.device | str | int = "cuda",
+        device: torch.device | str | int | None = None,
         query_prompt: str | None = None,
         document_prompt: str | None = None,
         _num_token_jobs: int | None = -1,
@@ -203,8 +208,9 @@ class Encoder:
             Truncate embedding dimensions to this value, by default None.
             Useful for models trained with Matryoshka Representation Learning (MRL).
             Truncation is applied to token embeddings before pooling.
-        device : torch.device, str, int, optional
-            Device to use for inference, by default "cuda".
+        device : torch.device, str, int, None, optional
+            Device to use for inference. If None (default), auto-detects the best
+            available device (CUDA > MPS > CPU).
         query_prompt : str | None, optional
             Prompt to prepend to query strings in encode_queries(), by default None.
             Used for instruct-style embedding models (E5-instruct, BGE, GTE-Qwen2-instruct).
@@ -226,6 +232,8 @@ class Encoder:
             clean_up_tokenization_spaces=True,
         )
         self.attn_implementation = attn_implementation
+        if device is None:
+            device = get_device()
         model_kws = {"torch_dtype": self.model_dtype, "device_map": {"": device}}
         if self.attn_implementation is not None:
             model_kws["attn_implementation"] = self.attn_implementation
@@ -780,7 +788,7 @@ class Encoder:
         inputs, sentence_texts = result
         return inputs, sentence_texts
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def _generate_token_embeds(
         self,
         loader: DataLoader[dict[str, Any]],
@@ -889,6 +897,90 @@ class Encoder:
                 move_to_cpu=move_results_to_cpu,
             )
 
+    @overload
+    def encode(
+        self,
+        docs: list[str],
+        max_length: int | None = ...,
+        batch_tokens: int = ...,
+        num_sents: int | list[int] | tuple[int, ...] = ...,
+        chunk_overlap: int | float | list[int] | dict[int, int] = ...,
+        prechunk: bool = ...,
+        prechunk_overlap: float | int = ...,
+        sent_tokenizer: str = ...,
+        exclude_special_tokens: bool = ...,
+        deduplicate: bool = ...,
+        return_frame: Literal["polars"] = ...,
+        as_numpy: Literal[True] = ...,
+        debug: bool = ...,
+        return_text: bool = ...,
+        show_progress: bool = ...,
+        prompt: str | None = ...,
+    ) -> tuple[pl.DataFrame, np.ndarray[Any, Any]]: ...
+
+    @overload
+    def encode(
+        self,
+        docs: list[str],
+        max_length: int | None = ...,
+        batch_tokens: int = ...,
+        num_sents: int | list[int] | tuple[int, ...] = ...,
+        chunk_overlap: int | float | list[int] | dict[int, int] = ...,
+        prechunk: bool = ...,
+        prechunk_overlap: float | int = ...,
+        sent_tokenizer: str = ...,
+        exclude_special_tokens: bool = ...,
+        deduplicate: bool = ...,
+        return_frame: Literal["polars"] = ...,
+        as_numpy: Literal[False] = ...,
+        debug: bool = ...,
+        return_text: bool = ...,
+        show_progress: bool = ...,
+        prompt: str | None = ...,
+    ) -> tuple[pl.DataFrame, torch.Tensor]: ...
+
+    @overload
+    def encode(
+        self,
+        docs: list[str],
+        max_length: int | None = ...,
+        batch_tokens: int = ...,
+        num_sents: int | list[int] | tuple[int, ...] = ...,
+        chunk_overlap: int | float | list[int] | dict[int, int] = ...,
+        prechunk: bool = ...,
+        prechunk_overlap: float | int = ...,
+        sent_tokenizer: str = ...,
+        exclude_special_tokens: bool = ...,
+        deduplicate: bool = ...,
+        return_frame: Literal["pandas"] = ...,
+        as_numpy: Literal[True] = ...,
+        debug: bool = ...,
+        return_text: bool = ...,
+        show_progress: bool = ...,
+        prompt: str | None = ...,
+    ) -> tuple["pd.DataFrame", np.ndarray[Any, Any]]: ...
+
+    @overload
+    def encode(
+        self,
+        docs: list[str],
+        max_length: int | None = ...,
+        batch_tokens: int = ...,
+        num_sents: int | list[int] | tuple[int, ...] = ...,
+        chunk_overlap: int | float | list[int] | dict[int, int] = ...,
+        prechunk: bool = ...,
+        prechunk_overlap: float | int = ...,
+        sent_tokenizer: str = ...,
+        exclude_special_tokens: bool = ...,
+        deduplicate: bool = ...,
+        return_frame: Literal["pandas"] = ...,
+        as_numpy: Literal[False] = ...,
+        debug: bool = ...,
+        return_text: bool = ...,
+        show_progress: bool = ...,
+        prompt: str | None = ...,
+    ) -> tuple["pd.DataFrame", torch.Tensor]: ...
+
     def encode(
         self,
         docs: list[str],
@@ -907,7 +999,12 @@ class Encoder:
         return_text: bool = True,
         show_progress: bool = True,
         prompt: str | None = None,
-    ) -> tuple[pl.DataFrame | Any, np.ndarray[Any, Any] | torch.Tensor]:
+    ) -> (
+        tuple[pl.DataFrame, np.ndarray[Any, Any]]
+        | tuple[pl.DataFrame, torch.Tensor]
+        | tuple["pd.DataFrame", np.ndarray[Any, Any]]
+        | tuple["pd.DataFrame", torch.Tensor]
+    ):
         """Obtain the chunks and chunk embeddings from a list of documents.
 
         This first encodes the input documents, then extracts chunk embeddings
@@ -937,7 +1034,7 @@ class Encoder:
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
         sent_tokenizer : str, optional
             Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
-            Options are "blingfire", "nltk", or "syntok".
+            Options are "blingfire", "nltk", "pysbd", or "syntok".
         exclude_special_tokens : bool, optional
             If True (default), exclude all special tokens from mean pooling.
             If False, include [CLS] in first chunk and [SEP] in last chunk
@@ -969,11 +1066,19 @@ class Encoder:
         tuple[pd.DataFrame | pl.DataFrame, np.ndarray | torch.Tensor]
             Tuple containing the DataFrame of chunks and the chunk embeddings.
         """
-        # Validate return_frame early to fail fast before expensive computation
+        # Validate inputs early to fail fast before expensive computation
+        validate_encode_params(
+            docs=docs,
+            num_sents=num_sents,
+            chunk_overlap=chunk_overlap,
+            prechunk_overlap=prechunk_overlap,
+            sent_tokenizer=sent_tokenizer,
+            return_frame=return_frame,
+            batch_tokens=batch_tokens,
+            max_length=max_length,
+        )
         if return_frame == "pandas":
             require_pandas()
-        elif return_frame != "polars":
-            raise ValueError(f"Invalid value for return_frame: {return_frame}")
 
         # Determine which prompt to use (per-call override or default)
         effective_prompt = prompt if prompt is not None else self.document_prompt
@@ -1114,6 +1219,28 @@ class Encoder:
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
         return df, vecs
 
+    @overload
+    def encode_queries(
+        self,
+        queries: list[str],
+        max_length: int | None = ...,
+        batch_size: int = ...,
+        exclude_special_tokens: bool = ...,
+        as_numpy: Literal[True] = ...,
+        prompt: str | None = ...,
+    ) -> np.ndarray[Any, Any]: ...
+
+    @overload
+    def encode_queries(
+        self,
+        queries: list[str],
+        max_length: int | None = ...,
+        batch_size: int = ...,
+        exclude_special_tokens: bool = ...,
+        as_numpy: Literal[False] = ...,
+        prompt: str | None = ...,
+    ) -> torch.Tensor: ...
+
     def encode_queries(
         self,
         queries: list[str],
@@ -1152,6 +1279,13 @@ class Encoder:
         np.ndarray
             Mean-token embeddings for each query.
         """
+        # Validate inputs early to fail fast
+        validate_encode_queries_params(
+            queries=queries,
+            batch_size=batch_size,
+            max_length=max_length,
+        )
+
         # Determine which prompt to use (per-call override or default)
         effective_prompt = prompt if prompt is not None else self.query_prompt
 
