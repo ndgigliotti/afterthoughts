@@ -48,7 +48,10 @@ import logging
 import math
 from collections.abc import Iterator
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal, overload
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 import numpy as np
 import polars as pl
@@ -894,6 +897,90 @@ class Encoder:
                 move_to_cpu=move_results_to_cpu,
             )
 
+    @overload
+    def encode(
+        self,
+        docs: list[str],
+        max_length: int | None = ...,
+        batch_tokens: int = ...,
+        num_sents: int | list[int] | tuple[int, ...] = ...,
+        chunk_overlap: int | float | list[int] | dict[int, int] = ...,
+        prechunk: bool = ...,
+        prechunk_overlap: float | int = ...,
+        sent_tokenizer: str = ...,
+        exclude_special_tokens: bool = ...,
+        deduplicate: bool = ...,
+        return_frame: Literal["polars"] = ...,
+        as_numpy: Literal[True] = ...,
+        debug: bool = ...,
+        return_text: bool = ...,
+        show_progress: bool = ...,
+        prompt: str | None = ...,
+    ) -> tuple[pl.DataFrame, np.ndarray[Any, Any]]: ...
+
+    @overload
+    def encode(
+        self,
+        docs: list[str],
+        max_length: int | None = ...,
+        batch_tokens: int = ...,
+        num_sents: int | list[int] | tuple[int, ...] = ...,
+        chunk_overlap: int | float | list[int] | dict[int, int] = ...,
+        prechunk: bool = ...,
+        prechunk_overlap: float | int = ...,
+        sent_tokenizer: str = ...,
+        exclude_special_tokens: bool = ...,
+        deduplicate: bool = ...,
+        return_frame: Literal["polars"] = ...,
+        as_numpy: Literal[False] = ...,
+        debug: bool = ...,
+        return_text: bool = ...,
+        show_progress: bool = ...,
+        prompt: str | None = ...,
+    ) -> tuple[pl.DataFrame, torch.Tensor]: ...
+
+    @overload
+    def encode(
+        self,
+        docs: list[str],
+        max_length: int | None = ...,
+        batch_tokens: int = ...,
+        num_sents: int | list[int] | tuple[int, ...] = ...,
+        chunk_overlap: int | float | list[int] | dict[int, int] = ...,
+        prechunk: bool = ...,
+        prechunk_overlap: float | int = ...,
+        sent_tokenizer: str = ...,
+        exclude_special_tokens: bool = ...,
+        deduplicate: bool = ...,
+        return_frame: Literal["pandas"] = ...,
+        as_numpy: Literal[True] = ...,
+        debug: bool = ...,
+        return_text: bool = ...,
+        show_progress: bool = ...,
+        prompt: str | None = ...,
+    ) -> tuple["pd.DataFrame", np.ndarray[Any, Any]]: ...
+
+    @overload
+    def encode(
+        self,
+        docs: list[str],
+        max_length: int | None = ...,
+        batch_tokens: int = ...,
+        num_sents: int | list[int] | tuple[int, ...] = ...,
+        chunk_overlap: int | float | list[int] | dict[int, int] = ...,
+        prechunk: bool = ...,
+        prechunk_overlap: float | int = ...,
+        sent_tokenizer: str = ...,
+        exclude_special_tokens: bool = ...,
+        deduplicate: bool = ...,
+        return_frame: Literal["pandas"] = ...,
+        as_numpy: Literal[False] = ...,
+        debug: bool = ...,
+        return_text: bool = ...,
+        show_progress: bool = ...,
+        prompt: str | None = ...,
+    ) -> tuple["pd.DataFrame", torch.Tensor]: ...
+
     def encode(
         self,
         docs: list[str],
@@ -912,7 +999,12 @@ class Encoder:
         return_text: bool = True,
         show_progress: bool = True,
         prompt: str | None = None,
-    ) -> tuple[pl.DataFrame | Any, np.ndarray[Any, Any] | torch.Tensor]:
+    ) -> (
+        tuple[pl.DataFrame, np.ndarray[Any, Any]]
+        | tuple[pl.DataFrame, torch.Tensor]
+        | tuple["pd.DataFrame", np.ndarray[Any, Any]]
+        | tuple["pd.DataFrame", torch.Tensor]
+    ):
         """Obtain the chunks and chunk embeddings from a list of documents.
 
         This first encodes the input documents, then extracts chunk embeddings
@@ -942,7 +1034,7 @@ class Encoder:
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
         sent_tokenizer : str, optional
             Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
-            Options are "blingfire", "nltk", or "syntok".
+            Options are "blingfire", "nltk", "pysbd", or "syntok".
         exclude_special_tokens : bool, optional
             If True (default), exclude all special tokens from mean pooling.
             If False, include [CLS] in first chunk and [SEP] in last chunk
@@ -1126,6 +1218,28 @@ class Encoder:
         elif return_frame != "polars":
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
         return df, vecs
+
+    @overload
+    def encode_queries(
+        self,
+        queries: list[str],
+        max_length: int | None = ...,
+        batch_size: int = ...,
+        exclude_special_tokens: bool = ...,
+        as_numpy: Literal[True] = ...,
+        prompt: str | None = ...,
+    ) -> np.ndarray[Any, Any]: ...
+
+    @overload
+    def encode_queries(
+        self,
+        queries: list[str],
+        max_length: int | None = ...,
+        batch_size: int = ...,
+        exclude_special_tokens: bool = ...,
+        as_numpy: Literal[False] = ...,
+        prompt: str | None = ...,
+    ) -> torch.Tensor: ...
 
     def encode_queries(
         self,
