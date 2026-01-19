@@ -56,7 +56,7 @@ def validate_chunk_overlap(chunk_overlap: int | float | list[int] | dict[int, in
                 f"chunk_overlap list values must be non-negative integers, got {overlaps}"
             )
         case dict() as mapping if any(not isinstance(v, int) or v < 0 for v in mapping.values()):
-            raise ValueError(f"chunk_overlap dict values must be non-negative integers")
+            raise ValueError("chunk_overlap dict values must be non-negative integers")
 
 
 def validate_prechunk_overlap(prechunk_overlap: float | int) -> None:
