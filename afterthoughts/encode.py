@@ -79,6 +79,7 @@ from afterthoughts.utils import (
     timer,
     truncate_dims,
 )
+from afterthoughts.validation import validate_encode_params, validate_encode_queries_params
 
 logger = logging.getLogger(__name__)
 
@@ -973,11 +974,19 @@ class Encoder:
         tuple[pd.DataFrame | pl.DataFrame, np.ndarray | torch.Tensor]
             Tuple containing the DataFrame of chunks and the chunk embeddings.
         """
-        # Validate return_frame early to fail fast before expensive computation
+        # Validate inputs early to fail fast before expensive computation
+        validate_encode_params(
+            docs=docs,
+            num_sents=num_sents,
+            chunk_overlap=chunk_overlap,
+            prechunk_overlap=prechunk_overlap,
+            sent_tokenizer=sent_tokenizer,
+            return_frame=return_frame,
+            batch_tokens=batch_tokens,
+            max_length=max_length,
+        )
         if return_frame == "pandas":
             require_pandas()
-        elif return_frame != "polars":
-            raise ValueError(f"Invalid value for return_frame: {return_frame}")
 
         # Determine which prompt to use (per-call override or default)
         effective_prompt = prompt if prompt is not None else self.document_prompt
@@ -1156,6 +1165,13 @@ class Encoder:
         np.ndarray
             Mean-token embeddings for each query.
         """
+        # Validate inputs early to fail fast
+        validate_encode_queries_params(
+            queries=queries,
+            batch_size=batch_size,
+            max_length=max_length,
+        )
+
         # Determine which prompt to use (per-call override or default)
         effective_prompt = prompt if prompt is not None else self.query_prompt
 
