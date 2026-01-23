@@ -841,13 +841,14 @@ class Encoder:
     def _generate_chunk_embeds(
         self,
         loader: DataLoader[dict[str, Any]],
-        num_sents: int | list[int] | tuple[int, ...],
+        num_sents: int | list[int] | tuple[int, ...] | None,
         chunk_overlap: int | float | list[int] | dict[int, int],
         move_results_to_cpu: bool = False,
         return_tensors: str = "pt",
         truncate_dim: int | None = None,
         exclude_special_tokens: bool = True,
         show_progress: bool = True,
+        max_chunk_tokens: int | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Obtain the chunk embeddings for a list of documents, one batch at at time.
 
@@ -855,8 +856,8 @@ class Encoder:
         ----------
         loader : DataLoader
             DataLoader containing the tokenized input sequences.
-        num_sents : int, list, or tuple
-            Number of sentences per chunk.
+        num_sents : int, list, tuple, or None
+            Number of sentences per chunk. None means no sentence limit.
         chunk_overlap : int, float, list, or dict
             Overlap between chunks (in sentences).
         move_results_to_cpu : bool, optional
@@ -871,6 +872,8 @@ class Encoder:
             of each sequence.
         show_progress : bool, optional
             Show progress bar during encoding, by default True.
+        max_chunk_tokens : int | None, optional
+            Maximum tokens per chunk, by default None.
         """
         batches = self._generate_token_embeds(
             loader,
@@ -889,6 +892,7 @@ class Encoder:
                 num_sents=num_sents,
                 chunk_overlap=chunk_overlap,
                 exclude_special_tokens=exclude_special_tokens,
+                max_chunk_tokens=max_chunk_tokens,
             )
             results["batch_idx"] = torch.full(results["sequence_idx"].shape, batch["batch_idx"][0])
             yield move_or_convert_tensors(
@@ -903,7 +907,7 @@ class Encoder:
         docs: list[str],
         max_length: int | None = ...,
         batch_tokens: int = ...,
-        num_sents: int | list[int] | tuple[int, ...] = ...,
+        num_sents: int | list[int] | tuple[int, ...] | None = ...,
         chunk_overlap: int | float | list[int] | dict[int, int] = ...,
         prechunk: bool = ...,
         prechunk_overlap: float | int = ...,
@@ -916,6 +920,7 @@ class Encoder:
         return_text: bool = ...,
         show_progress: bool = ...,
         prompt: str | None = ...,
+        max_chunk_tokens: int | None = ...,
     ) -> tuple[pl.DataFrame, np.ndarray[Any, Any]]: ...
 
     @overload
@@ -924,7 +929,7 @@ class Encoder:
         docs: list[str],
         max_length: int | None = ...,
         batch_tokens: int = ...,
-        num_sents: int | list[int] | tuple[int, ...] = ...,
+        num_sents: int | list[int] | tuple[int, ...] | None = ...,
         chunk_overlap: int | float | list[int] | dict[int, int] = ...,
         prechunk: bool = ...,
         prechunk_overlap: float | int = ...,
@@ -937,6 +942,7 @@ class Encoder:
         return_text: bool = ...,
         show_progress: bool = ...,
         prompt: str | None = ...,
+        max_chunk_tokens: int | None = ...,
     ) -> tuple[pl.DataFrame, torch.Tensor]: ...
 
     @overload
@@ -945,7 +951,7 @@ class Encoder:
         docs: list[str],
         max_length: int | None = ...,
         batch_tokens: int = ...,
-        num_sents: int | list[int] | tuple[int, ...] = ...,
+        num_sents: int | list[int] | tuple[int, ...] | None = ...,
         chunk_overlap: int | float | list[int] | dict[int, int] = ...,
         prechunk: bool = ...,
         prechunk_overlap: float | int = ...,
@@ -958,6 +964,7 @@ class Encoder:
         return_text: bool = ...,
         show_progress: bool = ...,
         prompt: str | None = ...,
+        max_chunk_tokens: int | None = ...,
     ) -> tuple["pd.DataFrame", np.ndarray[Any, Any]]: ...
 
     @overload
@@ -966,7 +973,7 @@ class Encoder:
         docs: list[str],
         max_length: int | None = ...,
         batch_tokens: int = ...,
-        num_sents: int | list[int] | tuple[int, ...] = ...,
+        num_sents: int | list[int] | tuple[int, ...] | None = ...,
         chunk_overlap: int | float | list[int] | dict[int, int] = ...,
         prechunk: bool = ...,
         prechunk_overlap: float | int = ...,
@@ -979,6 +986,7 @@ class Encoder:
         return_text: bool = ...,
         show_progress: bool = ...,
         prompt: str | None = ...,
+        max_chunk_tokens: int | None = ...,
     ) -> tuple["pd.DataFrame", torch.Tensor]: ...
 
     def encode(
@@ -986,7 +994,7 @@ class Encoder:
         docs: list[str],
         max_length: int | None = None,
         batch_tokens: int = 16384,
-        num_sents: int | list[int] | tuple[int, ...] = 1,
+        num_sents: int | list[int] | tuple[int, ...] | None = 1,
         chunk_overlap: int | float | list[int] | dict[int, int] = 0,
         prechunk: bool = True,
         prechunk_overlap: float | int = 0.5,
@@ -999,6 +1007,7 @@ class Encoder:
         return_text: bool = True,
         show_progress: bool = True,
         prompt: str | None = None,
+        max_chunk_tokens: int | None = None,
     ) -> (
         tuple[pl.DataFrame, np.ndarray[Any, Any]]
         | tuple[pl.DataFrame, torch.Tensor]
@@ -1018,8 +1027,11 @@ class Encoder:
             Maximum length of the input sequences, by default None.
         batch_tokens : int, optional
             Maximum tokens per batch for encoder, by default 16384.
-        num_sents : int, list, or tuple, optional
-            Number of sentences per chunk, by default 1.
+        num_sents : int, list, tuple, or None, optional
+            Number of sentences per chunk, by default 1. Can be:
+            - int: Fixed number of sentences per chunk
+            - list/tuple: Extract multiple chunk sizes simultaneously
+            - None: No sentence limit (only valid with max_chunk_tokens)
             For example, if `num_sents` is set to `(1, 2, 3)`, chunks
             of 1, 2, and 3 consecutive sentences will be extracted.
         chunk_overlap : int, float, list, or dict, optional
@@ -1060,6 +1072,15 @@ class Encoder:
             Prompt to prepend to documents, by default None. If provided, overrides
             the document_prompt set at initialization. Prompt tokens are excluded from
             chunk mean-pooling. Used for instruct-style embedding models.
+        max_chunk_tokens : int or None, optional
+            Maximum number of tokens per chunk, by default None. When specified,
+            chunks are built by greedily accumulating sentences until the token
+            limit is reached, respecting sentence boundaries. Can be used in
+            combination with `num_sents`:
+            - max_chunk_tokens alone: Greedy accumulation, no sentence limit
+            - num_sents alone: Fixed sentence count per chunk (default behavior)
+            - Both specified: "At most N sentences AND at most M tokens" - whichever
+              limit is hit first stops the chunk
 
         Returns
         -------
@@ -1076,6 +1097,7 @@ class Encoder:
             return_frame=return_frame,
             batch_tokens=batch_tokens,
             max_length=max_length,
+            max_chunk_tokens=max_chunk_tokens,
         )
         if return_frame == "pandas":
             require_pandas()
@@ -1113,6 +1135,7 @@ class Encoder:
             truncate_dim=self.truncate_dims,
             exclude_special_tokens=exclude_special_tokens,
             show_progress=show_progress,
+            max_chunk_tokens=max_chunk_tokens,
         )
 
         results: dict[str, Any] = {

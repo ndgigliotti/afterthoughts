@@ -6,6 +6,7 @@ from afterthoughts.chunk import (
     _compute_boundary_special_token_mask,
     _split_long_sentences,
     get_chunk_idx,
+    get_chunk_idx_by_tokens,
     get_sentence_offsets,
     get_sentence_offsets_blingfire,
     get_sentence_offsets_nltk,
@@ -286,3 +287,182 @@ def test_boundary_special_token_mask_first_last(tokenizer):
     # For single chunk, both CLS and SEP should be included (mask=1)
     # The mask should be all 1s for valid tokens
     assert mask.sum() > 0
+
+
+# =============================================================================
+# Tests for get_chunk_idx_by_tokens
+# =============================================================================
+
+
+def test_get_chunk_idx_by_tokens_basic():
+    """Test basic token-based chunking."""
+    # 3 sentences: sent0 has 3 tokens, sent1 has 3 tokens, sent2 has 3 tokens
+    input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]])  # 0 is padding
+    sentence_ids = torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2, -1]])
+
+    # Max 6 tokens per chunk should group sent0+sent1, then sent2
+    result = get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=6, chunk_overlap=0)
+
+    assert "chunk_token_idx" in result
+    assert "chunk_token_ids" in result
+    assert "sentence_ids" in result
+    assert "num_sents" in result
+    assert "sequence_idx" in result
+    assert "chunk_idx" in result
+
+    # Should have 2 chunks
+    assert result["num_sents"].size(0) == 2
+    # First chunk has 2 sentences, second has 1
+    assert result["num_sents"][0].item() == 2
+    assert result["num_sents"][1].item() == 1
+
+
+def test_get_chunk_idx_by_tokens_single_chunk():
+    """Test when entire document fits in one chunk."""
+    input_ids = torch.tensor([[1, 2, 3, 4, 5, 6]])
+    sentence_ids = torch.tensor([[0, 0, 0, 1, 1, 1]])
+
+    result = get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=100, chunk_overlap=0)
+
+    # All sentences should fit in one chunk
+    assert result["num_sents"].size(0) == 1
+    assert result["num_sents"][0].item() == 2
+
+
+def test_get_chunk_idx_by_tokens_with_overlap():
+    """Test token-based chunking with sentence overlap."""
+    # 4 sentences: 2 tokens each
+    input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]])
+    sentence_ids = torch.tensor([[0, 0, 1, 1, 2, 2, 3, 3]])
+
+    # Max 4 tokens per chunk with 50% overlap
+    result = get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=4, chunk_overlap=0.5)
+
+    # Should have overlapping chunks
+    assert result["num_sents"].size(0) >= 2
+    # With overlap, later chunks should share sentences with earlier ones
+
+
+def test_get_chunk_idx_by_tokens_with_num_sents_limit():
+    """Test combined num_sents and max_chunk_tokens limits."""
+    # 4 sentences: 2 tokens each
+    input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]])
+    sentence_ids = torch.tensor([[0, 0, 1, 1, 2, 2, 3, 3]])
+
+    # Max 100 tokens (won't be hit) but max 2 sentences
+    result = get_chunk_idx_by_tokens(
+        input_ids, sentence_ids, max_chunk_tokens=100, num_sents=2, chunk_overlap=0
+    )
+
+    # Should have 2 chunks of 2 sentences each (limited by num_sents)
+    assert result["num_sents"].size(0) == 2
+    assert all(result["num_sents"] == 2)
+
+
+def test_get_chunk_idx_by_tokens_num_sents_hit_first():
+    """Test that num_sents limit is respected even when token limit allows more."""
+    # 3 sentences: 2 tokens each
+    input_ids = torch.tensor([[1, 2, 3, 4, 5, 6]])
+    sentence_ids = torch.tensor([[0, 0, 1, 1, 2, 2]])
+
+    # Max 100 tokens but only 1 sentence per chunk
+    result = get_chunk_idx_by_tokens(
+        input_ids, sentence_ids, max_chunk_tokens=100, num_sents=1, chunk_overlap=0
+    )
+
+    # Should have 3 chunks of 1 sentence each
+    assert result["num_sents"].size(0) == 3
+    assert all(result["num_sents"] == 1)
+
+
+def test_get_chunk_idx_by_tokens_token_limit_hit_first():
+    """Test that token limit is respected even when num_sents allows more."""
+    # 3 sentences: 3 tokens each
+    input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9]])
+    sentence_ids = torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2]])
+
+    # Max 5 tokens but up to 10 sentences per chunk
+    result = get_chunk_idx_by_tokens(
+        input_ids, sentence_ids, max_chunk_tokens=5, num_sents=10, chunk_overlap=0
+    )
+
+    # Token limit should be hit first - can only fit 1 sentence (3 tokens) per chunk
+    assert result["num_sents"].size(0) == 3
+    assert all(result["num_sents"] == 1)
+
+
+def test_get_chunk_idx_by_tokens_empty_document():
+    """Test handling of empty document."""
+    input_ids = torch.tensor([[0]])  # Just padding
+    sentence_ids = torch.tensor([[-1]])  # No valid sentences
+
+    result = get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=100, chunk_overlap=0)
+
+    # Should return empty results
+    assert result["num_sents"].size(0) == 0
+
+
+def test_get_chunk_idx_by_tokens_large_sentence_warning():
+    """Test that warning is issued when single sentence exceeds max_chunk_tokens."""
+    # One sentence with 10 tokens, limit is 5
+    input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+    sentence_ids = torch.tensor([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0]])
+
+    with pytest.warns(UserWarning, match="exceeding max_chunk_tokens"):
+        result = get_chunk_idx_by_tokens(
+            input_ids, sentence_ids, max_chunk_tokens=5, chunk_overlap=0
+        )
+
+    # The large sentence should still be included as its own chunk
+    assert result["num_sents"].size(0) == 1
+
+
+def test_get_chunk_idx_by_tokens_multiple_sequences():
+    """Test token-based chunking across multiple sequences."""
+    # 2 sequences
+    input_ids = torch.tensor(
+        [
+            [1, 2, 3, 4, 5, 6, 0, 0],  # 6 tokens
+            [7, 8, 9, 10, 0, 0, 0, 0],  # 4 tokens
+        ]
+    )
+    sentence_ids = torch.tensor(
+        [
+            [0, 0, 0, 1, 1, 1, -1, -1],  # 2 sentences
+            [0, 0, 1, 1, -1, -1, -1, -1],  # 2 sentences
+        ]
+    )
+
+    result = get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=4, chunk_overlap=0)
+
+    # Should have chunks from both sequences
+    assert result["num_sents"].size(0) >= 2
+    # sequence_idx should track which sequence each chunk came from
+    assert 0 in result["sequence_idx"].tolist()
+    assert 1 in result["sequence_idx"].tolist()
+
+
+def test_get_chunk_idx_by_tokens_chunk_idx_per_document():
+    """Test that chunk_idx resets for each document."""
+    input_ids = torch.tensor(
+        [
+            [1, 2, 3, 4, 5, 6],
+            [7, 8, 9, 10, 11, 12],
+        ]
+    )
+    sentence_ids = torch.tensor(
+        [
+            [0, 0, 0, 1, 1, 1],
+            [0, 0, 0, 1, 1, 1],
+        ]
+    )
+
+    result = get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=4, chunk_overlap=0)
+
+    # chunk_idx should start at 0 for each sequence
+    seq0_chunks = result["chunk_idx"][result["sequence_idx"] == 0]
+    seq1_chunks = result["chunk_idx"][result["sequence_idx"] == 1]
+
+    # Both should start with 0
+    assert seq0_chunks[0].item() == 0
+    assert seq1_chunks[0].item() == 0

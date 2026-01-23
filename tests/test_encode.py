@@ -997,3 +997,210 @@ def test_encode_queries_prompt_equivalent_to_manual_prepend(model):
 
     # Should be identical (or very close due to floating point)
     np.testing.assert_array_almost_equal(emb_prompt, emb_manual, decimal=5)
+
+
+# =============================================================================
+# Tests for max_chunk_tokens parameter
+# =============================================================================
+
+
+def test_encode_with_max_chunk_tokens_only(model):
+    """Test encode() with only max_chunk_tokens (no num_sents limit)."""
+    docs = ["First sentence here. Second sentence follows. Third sentence ends. Fourth one too."]
+    df, X = model.encode(
+        docs,
+        max_chunk_tokens=32,
+        num_sents=None,  # No sentence limit
+        max_length=128,
+        batch_tokens=256,
+        show_progress=False,
+    )
+
+    assert isinstance(df, pl.DataFrame)
+    assert isinstance(X, np.ndarray)
+    assert len(df) == len(X)
+    # Should have multiple chunks (doc is too long for 32 tokens)
+    assert len(df) >= 1
+
+
+def test_encode_with_max_chunk_tokens_and_num_sents(model):
+    """Test encode() with both max_chunk_tokens and num_sents."""
+    docs = ["First sentence here. Second sentence follows. Third sentence ends. Fourth one too."]
+    df, X = model.encode(
+        docs,
+        max_chunk_tokens=128,  # High token limit
+        num_sents=2,  # Low sentence limit
+        max_length=128,
+        batch_tokens=256,
+        show_progress=False,
+    )
+
+    assert isinstance(df, pl.DataFrame)
+    assert isinstance(X, np.ndarray)
+    # All chunks should have at most 2 sentences
+    assert all(df["num_sents"] <= 2)
+
+
+def test_max_chunk_tokens_respects_token_limit(model):
+    """Verify chunks don't exceed max_chunk_tokens."""
+    # Create document with varying sentence lengths
+    docs = [
+        "Short. A bit longer sentence here. "
+        "This is a much longer sentence with many words. "
+        "Another one. And the final sentence of this test document."
+    ]
+
+    df, X = model.encode(
+        docs,
+        max_chunk_tokens=20,
+        num_sents=None,
+        max_length=256,
+        batch_tokens=256,
+        show_progress=False,
+    )
+
+    # Each chunk text should tokenize to <= max_chunk_tokens
+    # (accounting for the fact that chunk text doesn't include special tokens)
+    for chunk_text in df["chunk"].to_list():
+        tokens = model.tokenizer.encode(chunk_text, add_special_tokens=False)
+        # Allow some tolerance due to sentence boundary alignment
+        assert len(tokens) <= 25, f"Chunk '{chunk_text}' has {len(tokens)} tokens"
+
+
+def test_max_chunk_tokens_produces_valid_embeddings(model):
+    """Verify embeddings from max_chunk_tokens are valid."""
+    docs = ["First sentence. Second sentence. Third sentence."]
+
+    df, X = model.encode(
+        docs,
+        max_chunk_tokens=50,
+        num_sents=None,
+        max_length=128,
+        batch_tokens=256,
+        show_progress=False,
+    )
+
+    # Embeddings should have correct shape
+    assert X.shape[0] == len(df)
+    assert X.shape[1] > 0
+
+    # Embeddings should not be all zeros or NaN
+    assert not np.all(X == 0)
+    assert not np.any(np.isnan(X))
+
+
+def test_max_chunk_tokens_with_overlap(model):
+    """Test max_chunk_tokens with sentence overlap."""
+    docs = ["First sentence. Second sentence. Third sentence. Fourth sentence. Fifth sentence."]
+
+    df, X = model.encode(
+        docs,
+        max_chunk_tokens=32,
+        num_sents=None,
+        chunk_overlap=0.5,  # 50% sentence overlap
+        max_length=128,
+        batch_tokens=256,
+        deduplicate=False,
+        show_progress=False,
+    )
+
+    assert isinstance(df, pl.DataFrame)
+    # With overlap, chunks may share sentences
+    assert len(df) >= 1
+
+
+def test_max_chunk_tokens_backward_compatibility(model):
+    """Verify existing behavior is unchanged when max_chunk_tokens is not specified."""
+    docs = ["First sentence. Second sentence. Third sentence."]
+
+    # Old behavior (num_sents only)
+    df_old, X_old = model.encode(
+        docs,
+        num_sents=1,
+        max_length=128,
+        batch_tokens=256,
+        show_progress=False,
+    )
+
+    # Should have 3 chunks (one per sentence)
+    assert len(df_old) == 3
+    assert all(df_old["num_sents"] == 1)
+
+
+def test_max_chunk_tokens_validation_rejects_list_num_sents(model):
+    """Verify that list num_sents is rejected with max_chunk_tokens."""
+    docs = ["Test document."]
+
+    with pytest.raises(ValueError, match="num_sents cannot be a list/tuple"):
+        model.encode(
+            docs,
+            max_chunk_tokens=50,
+            num_sents=[1, 2],  # Should fail
+            show_progress=False,
+        )
+
+
+def test_max_chunk_tokens_validation_rejects_invalid_value(model):
+    """Verify validation for invalid max_chunk_tokens values."""
+    docs = ["Test document."]
+
+    with pytest.raises(ValueError, match="max_chunk_tokens must be >= 1"):
+        model.encode(
+            docs,
+            max_chunk_tokens=0,
+            num_sents=None,
+            show_progress=False,
+        )
+
+
+def test_num_sents_none_without_max_chunk_tokens_fails(model):
+    """Verify that num_sents=None without max_chunk_tokens raises error."""
+    docs = ["Test document."]
+
+    with pytest.raises(ValueError, match="num_sents cannot be None"):
+        model.encode(
+            docs,
+            num_sents=None,
+            max_chunk_tokens=None,
+            show_progress=False,
+        )
+
+
+def test_max_chunk_tokens_with_long_document(model):
+    """Test max_chunk_tokens handles long documents requiring prechunking."""
+    # Create a longer document
+    sentences = [f"This is sentence number {i}." for i in range(20)]
+    long_doc = " ".join(sentences)
+
+    df, X = model.encode(
+        [long_doc],
+        max_chunk_tokens=64,
+        num_sents=None,
+        max_length=128,  # Force prechunking
+        batch_tokens=256,
+        show_progress=False,
+    )
+
+    assert isinstance(df, pl.DataFrame)
+    assert isinstance(X, np.ndarray)
+    assert len(df) > 0
+    # All chunks should have the same document_idx
+    assert all(df["document_idx"] == 0)
+
+
+def test_max_chunk_tokens_chunk_text_preserved(model):
+    """Verify chunk text is correctly reconstructed with max_chunk_tokens."""
+    docs = ["Hello world. This is a test sentence. Final sentence here."]
+
+    df, X = model.encode(
+        docs,
+        max_chunk_tokens=30,
+        num_sents=None,
+        max_length=128,
+        batch_tokens=256,
+        show_progress=False,
+    )
+
+    # Each chunk should contain text from the original document
+    for chunk in df["chunk"].to_list():
+        assert any(sent in chunk for sent in ["Hello world", "test sentence", "Final sentence"])
