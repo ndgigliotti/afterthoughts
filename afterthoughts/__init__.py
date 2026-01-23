@@ -23,7 +23,7 @@ Basic Usage
     >>>
     >>> # Encode documents into sentence chunks
     >>> docs = ["First sentence. Second sentence.", "Another document."]
-    >>> df, embeddings = encoder.encode(docs, num_sents=1)
+    >>> df, embeddings = encoder.encode(docs, max_chunk_sents=1)
     >>>
     >>> # Encode queries for semantic search
     >>> query_embeds = encoder.encode_queries(["search query"])

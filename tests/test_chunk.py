@@ -4,7 +4,7 @@ import torch
 from afterthoughts.chunk import (
     _add_special_tokens,
     _compute_boundary_special_token_mask,
-    _split_long_sentences,
+    _split_long_sents,
     get_chunk_idx,
     get_chunk_idx_by_tokens,
     get_sentence_offsets,
@@ -231,42 +231,42 @@ def test_add_special_tokens_with_cls_and_sep_tokens():
     assert torch.equal(result, expected)
 
 
-def test_split_long_sentences_no_split_needed():
+def test_split_long_sents_no_split_needed():
     sentence_ids = torch.tensor([0, 0, 1, 1, 2, 2], dtype=torch.int32)
     max_length = 3
-    result = _split_long_sentences(sentence_ids, max_length)
+    result = _split_long_sents(sentence_ids, max_length)
     expected = torch.tensor([0, 0, 1, 1, 2, 2], dtype=torch.int32)
     assert torch.equal(result, expected)
 
 
-def test_split_long_sentences_split_needed():
+def test_split_long_sents_split_needed():
     sentence_ids = torch.tensor([0, 0, 0, 0, 1, 1, 1, 1], dtype=torch.int32)
     max_length = 2
-    result = _split_long_sentences(sentence_ids, max_length)
+    result = _split_long_sents(sentence_ids, max_length)
     expected = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3], dtype=torch.int32)
     assert torch.equal(result, expected)
 
 
-def test_split_long_sentences_multiple_splits():
+def test_split_long_sents_multiple_splits():
     sentence_ids = torch.tensor([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1], dtype=torch.int32)
     max_length = 2
-    result = _split_long_sentences(sentence_ids, max_length)
+    result = _split_long_sents(sentence_ids, max_length)
     expected = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5], dtype=torch.int32)
     assert torch.equal(result, expected)
 
 
-def test_split_long_sentences_with_padding():
+def test_split_long_sents_with_padding():
     sentence_ids = torch.tensor([0, 0, 0, 1, 1, 1, -1, -1], dtype=torch.int32)
     max_length = 2
-    result = _split_long_sentences(sentence_ids, max_length)
+    result = _split_long_sents(sentence_ids, max_length)
     expected = torch.tensor([0, 0, 1, 2, 2, 3, -1, -1], dtype=torch.int32)
     assert torch.equal(result, expected)
 
 
-def test_split_long_sentences_empty_input():
+def test_split_long_sents_empty_input():
     sentence_ids = torch.tensor([], dtype=torch.int32)
     max_length = 2
-    result = _split_long_sentences(sentence_ids, max_length)
+    result = _split_long_sents(sentence_ids, max_length)
     expected = torch.tensor([], dtype=torch.int32)
     assert torch.equal(result, expected)
 
@@ -279,7 +279,7 @@ def test_boundary_special_token_mask_first_last(tokenizer):
     sequence_idx = torch.tensor([0])
 
     chunk_data = get_chunk_idx(
-        input_ids, sentence_ids, num_sents=1, chunk_overlap=0, sequence_idx=sequence_idx
+        input_ids, sentence_ids, max_chunk_sents=1, chunk_overlap=0, sequence_idx=sequence_idx
     )
 
     mask = _compute_boundary_special_token_mask(chunk_data, tokenizer, torch.device("cpu"))
@@ -352,31 +352,31 @@ def test_get_chunk_idx_by_tokens_rejects_float_overlap():
         get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=4, chunk_overlap=0.5)
 
 
-def test_get_chunk_idx_by_tokens_with_num_sents_limit():
-    """Test combined num_sents and max_chunk_tokens limits."""
+def test_get_chunk_idx_by_tokens_with_max_chunk_sents_limit():
+    """Test combined max_chunk_sents and max_chunk_tokens limits."""
     # 4 sentences: 2 tokens each
     input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]])
     sentence_ids = torch.tensor([[0, 0, 1, 1, 2, 2, 3, 3]])
 
     # Max 100 tokens (won't be hit) but max 2 sentences
     result = get_chunk_idx_by_tokens(
-        input_ids, sentence_ids, max_chunk_tokens=100, num_sents=2, chunk_overlap=0
+        input_ids, sentence_ids, max_chunk_tokens=100, max_chunk_sents=2, chunk_overlap=0
     )
 
-    # Should have 2 chunks of 2 sentences each (limited by num_sents)
+    # Should have 2 chunks of 2 sentences each (limited by max_chunk_sents)
     assert result["num_sents"].size(0) == 2
     assert all(result["num_sents"] == 2)
 
 
-def test_get_chunk_idx_by_tokens_num_sents_hit_first():
-    """Test that num_sents limit is respected even when token limit allows more."""
+def test_get_chunk_idx_by_tokens_max_chunk_sents_hit_first():
+    """Test that max_chunk_sents limit is respected even when token limit allows more."""
     # 3 sentences: 2 tokens each
     input_ids = torch.tensor([[1, 2, 3, 4, 5, 6]])
     sentence_ids = torch.tensor([[0, 0, 1, 1, 2, 2]])
 
     # Max 100 tokens but only 1 sentence per chunk
     result = get_chunk_idx_by_tokens(
-        input_ids, sentence_ids, max_chunk_tokens=100, num_sents=1, chunk_overlap=0
+        input_ids, sentence_ids, max_chunk_tokens=100, max_chunk_sents=1, chunk_overlap=0
     )
 
     # Should have 3 chunks of 1 sentence each
@@ -385,14 +385,14 @@ def test_get_chunk_idx_by_tokens_num_sents_hit_first():
 
 
 def test_get_chunk_idx_by_tokens_token_limit_hit_first():
-    """Test that token limit is respected even when num_sents allows more."""
+    """Test that token limit is respected even when max_chunk_sents allows more."""
     # 3 sentences: 3 tokens each
     input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9]])
     sentence_ids = torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2]])
 
     # Max 5 tokens but up to 10 sentences per chunk
     result = get_chunk_idx_by_tokens(
-        input_ids, sentence_ids, max_chunk_tokens=5, num_sents=10, chunk_overlap=0
+        input_ids, sentence_ids, max_chunk_tokens=5, max_chunk_sents=10, chunk_overlap=0
     )
 
     # Token limit should be hit first - can only fit 1 sentence (3 tokens) per chunk
@@ -412,14 +412,14 @@ def test_get_chunk_idx_by_tokens_empty_document():
 
 
 def test_get_chunk_idx_by_tokens_large_sentence_split():
-    """Test that long sentences are split when split_long_sentences=True (default)."""
+    """Test that long sentences are split when split_long_sents=True (default)."""
     # One sentence with 10 tokens, limit is 5
     input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
     sentence_ids = torch.tensor([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0]])
 
     with pytest.warns(UserWarning, match="Splitting into multiple chunks"):
         result = get_chunk_idx_by_tokens(
-            input_ids, sentence_ids, max_chunk_tokens=5, chunk_overlap=0, split_long_sentences=True
+            input_ids, sentence_ids, max_chunk_tokens=5, chunk_overlap=0, split_long_sents=True
         )
 
     # The sentence should be split into 2 chunks of 5 tokens each
@@ -429,14 +429,14 @@ def test_get_chunk_idx_by_tokens_large_sentence_split():
 
 
 def test_get_chunk_idx_by_tokens_large_sentence_intact():
-    """Test that long sentences are kept intact when split_long_sentences=False."""
+    """Test that long sentences are kept intact when split_long_sents=False."""
     # One sentence with 10 tokens, limit is 5
     input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
     sentence_ids = torch.tensor([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0]])
 
     with pytest.warns(UserWarning, match="Including as its own chunk without splitting"):
         result = get_chunk_idx_by_tokens(
-            input_ids, sentence_ids, max_chunk_tokens=5, chunk_overlap=0, split_long_sentences=False
+            input_ids, sentence_ids, max_chunk_tokens=5, chunk_overlap=0, split_long_sents=False
         )
 
     # The large sentence should be kept as one chunk

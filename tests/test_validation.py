@@ -5,7 +5,7 @@ from afterthoughts.validation import (
     validate_docs,
     validate_encode_params,
     validate_encode_queries_params,
-    validate_num_sents,
+    validate_max_chunk_sents,
     validate_positive_int,
     validate_prechunk_overlap,
     validate_return_frame,
@@ -28,34 +28,34 @@ class TestValidateDocs:
 
 class TestValidateNumSents:
     def test_valid_int(self):
-        validate_num_sents(1)
-        validate_num_sents(5)
+        validate_max_chunk_sents(1)
+        validate_max_chunk_sents(5)
 
     def test_valid_list(self):
-        validate_num_sents([1, 2, 3])
+        validate_max_chunk_sents([1, 2, 3])
 
     def test_valid_tuple(self):
-        validate_num_sents((1, 2))
+        validate_max_chunk_sents((1, 2))
 
     def test_zero_int(self):
         with pytest.raises(ValueError, match="must be >= 1"):
-            validate_num_sents(0)
+            validate_max_chunk_sents(0)
 
     def test_negative_int(self):
         with pytest.raises(ValueError, match="must be >= 1"):
-            validate_num_sents(-1)
+            validate_max_chunk_sents(-1)
 
     def test_empty_list(self):
         with pytest.raises(ValueError, match="cannot be empty"):
-            validate_num_sents([])
+            validate_max_chunk_sents([])
 
     def test_list_with_zero(self):
         with pytest.raises(ValueError, match="must be >= 1"):
-            validate_num_sents([1, 0, 2])
+            validate_max_chunk_sents([1, 0, 2])
 
     def test_list_with_non_int(self):
         with pytest.raises(TypeError, match="must be integers"):
-            validate_num_sents([1, 2.5])  # type: ignore[list-item]
+            validate_max_chunk_sents([1, 2.5])  # type: ignore[list-item]
 
 
 class TestValidateChunkOverlap:
@@ -150,12 +150,12 @@ class TestValidateEncodeParams:
     def test_valid_params(self):
         validate_encode_params(
             docs=["doc1"],
-            num_sents=1,
+            max_chunk_sents=1,
             chunk_overlap=0.5,
             prechunk_overlap=0.5,
             sent_tokenizer="blingfire",
             return_frame="polars",
-            batch_tokens=8192,
+            max_batch_tokens=8192,
             max_length=512,
         )
 
@@ -163,12 +163,12 @@ class TestValidateEncodeParams:
         with pytest.raises(ValueError, match="cannot be empty"):
             validate_encode_params(
                 docs=[],
-                num_sents=1,
+                max_chunk_sents=1,
                 chunk_overlap=0,
                 prechunk_overlap=0.5,
                 sent_tokenizer="blingfire",
                 return_frame="polars",
-                batch_tokens=8192,
+                max_batch_tokens=8192,
                 max_length=None,
             )
 

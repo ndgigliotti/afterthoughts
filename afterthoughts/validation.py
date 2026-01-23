@@ -31,25 +31,25 @@ def validate_docs(docs: list[str]) -> None:
             raise TypeError("docs must be a list of strings")
 
 
-def validate_num_sents(
-    num_sents: int | list[int] | tuple[int, ...] | None,
+def validate_max_chunk_sents(
+    max_chunk_sents: int | list[int] | tuple[int, ...] | None,
     max_chunk_tokens: int | None = None,
 ) -> None:
-    """Validate num_sents parameter."""
+    """Validate max_chunk_sents parameter."""
     # Allow None only when max_chunk_tokens is specified
-    if num_sents is None:
+    if max_chunk_sents is None:
         if max_chunk_tokens is None:
-            raise ValueError("num_sents cannot be None unless max_chunk_tokens is specified")
+            raise ValueError("max_chunk_sents cannot be None unless max_chunk_tokens is specified")
         return
-    match num_sents:
+    match max_chunk_sents:
         case int(n) if n < 1:
-            raise ValueError(f"num_sents must be >= 1, got {n}")
+            raise ValueError(f"max_chunk_sents must be >= 1, got {n}")
         case list() | tuple() as sizes if len(sizes) == 0:
-            raise ValueError("num_sents cannot be empty")
+            raise ValueError("max_chunk_sents cannot be empty")
         case list() | tuple() as sizes if any(not isinstance(s, int) for s in sizes):
-            raise TypeError("num_sents values must be integers")
+            raise TypeError("max_chunk_sents values must be integers")
         case list() | tuple() as sizes if any(s < 1 for s in sizes):
-            raise ValueError(f"num_sents values must be >= 1, got {list(sizes)}")
+            raise ValueError(f"max_chunk_sents values must be >= 1, got {list(sizes)}")
 
 
 def validate_chunk_overlap(chunk_overlap: int | float | list[int] | dict[int, int]) -> None:
@@ -115,7 +115,7 @@ def validate_positive_int(value: int | None, name: str) -> None:
 
 def validate_max_chunk_tokens(
     max_chunk_tokens: int | None,
-    num_sents: int | list[int] | tuple[int, ...] | None,
+    max_chunk_sents: int | list[int] | tuple[int, ...] | None,
     chunk_overlap: int | float | list[int] | dict[int, int],
 ) -> None:
     """Validate max_chunk_tokens parameter."""
@@ -126,10 +126,10 @@ def validate_max_chunk_tokens(
             )
         if max_chunk_tokens < 1:
             raise ValueError(f"max_chunk_tokens must be >= 1, got {max_chunk_tokens}")
-        # When max_chunk_tokens is used, num_sents can only be int or None (not list/tuple)
-        if isinstance(num_sents, (list, tuple)):
+        # When max_chunk_tokens is used, max_chunk_sents can only be int or None (not list/tuple)
+        if isinstance(max_chunk_sents, (list, tuple)):
             raise ValueError(
-                "num_sents cannot be a list/tuple when max_chunk_tokens is specified. "
+                "max_chunk_sents cannot be a list/tuple when max_chunk_tokens is specified. "
                 "Use a single int value or None."
             )
         # When max_chunk_tokens is used, chunk_overlap must be an integer
@@ -147,24 +147,24 @@ def validate_max_chunk_tokens(
 
 def validate_encode_params(
     docs: list[str],
-    num_sents: int | list[int] | tuple[int, ...] | None,
+    max_chunk_sents: int | list[int] | tuple[int, ...] | None,
     chunk_overlap: int | float | list[int] | dict[int, int],
     prechunk_overlap: float | int,
     sent_tokenizer: str,
     return_frame: str,
-    batch_tokens: int,
+    max_batch_tokens: int,
     max_length: int | None,
     max_chunk_tokens: int | None = None,
 ) -> None:
     """Validate all parameters for Encoder.encode()."""
     validate_docs(docs)
-    validate_max_chunk_tokens(max_chunk_tokens, num_sents, chunk_overlap)
-    validate_num_sents(num_sents, max_chunk_tokens)
+    validate_max_chunk_tokens(max_chunk_tokens, max_chunk_sents, chunk_overlap)
+    validate_max_chunk_sents(max_chunk_sents, max_chunk_tokens)
     validate_chunk_overlap(chunk_overlap)
     validate_prechunk_overlap(prechunk_overlap)
     validate_sent_tokenizer(sent_tokenizer)
     validate_return_frame(return_frame)
-    validate_positive_int(batch_tokens, "batch_tokens")
+    validate_positive_int(max_batch_tokens, "max_batch_tokens")
     validate_positive_int(max_length, "max_length")
 
 

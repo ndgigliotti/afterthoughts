@@ -57,10 +57,10 @@ def test_encoder_init_with_half_embeds_and_truncate_dims():
 def test_get_chunk_idx_single_size():
     input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
     sentence_ids = torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2, -1]])
-    num_sents = 2
+    max_chunk_sents = 2
     overlap = 0.5
 
-    result = get_chunk_idx(input_ids, sentence_ids, num_sents, overlap)
+    result = get_chunk_idx(input_ids, sentence_ids, max_chunk_sents, overlap)
 
     assert "chunk_token_idx" in result
     assert "chunk_token_ids" in result
@@ -72,10 +72,10 @@ def test_get_chunk_idx_single_size():
 def test_get_chunk_idx_multiple_sizes():
     input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
     sentence_ids = torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2, -1]])
-    num_sents = [1, 2]
+    max_chunk_sents = [1, 2]
     overlap = 0.5
 
-    result = get_chunk_idx(input_ids, sentence_ids, num_sents, overlap)
+    result = get_chunk_idx(input_ids, sentence_ids, max_chunk_sents, overlap)
 
     assert "chunk_token_idx" in result
     assert "chunk_token_ids" in result
@@ -174,7 +174,9 @@ def test_encoder_encode(model):
         "This is a test document. Another sentence here.",
         "Another test document. With more sentences.",
     ]
-    df, X = model.encode(docs, num_sents=1, max_length=64, batch_tokens=256, show_progress=False)
+    df, X = model.encode(
+        docs, max_chunk_sents=1, max_length=64, max_batch_tokens=256, show_progress=False
+    )
     assert isinstance(df, pl.DataFrame)
     assert isinstance(X, np.ndarray)
     assert len(df) == len(X)
@@ -182,19 +184,23 @@ def test_encoder_encode(model):
     assert "num_sents" in df.columns
 
 
-def test_encoder_encode_multiple_num_sents(model):
+def test_encoder_encode_multiple_max_chunk_sents(model):
     docs = [
         "This is a test document. Another sentence here.",
         "Another test document. With more sentences.",
     ]
-    num_sents = [1, 2]
+    max_chunk_sents = [1, 2]
     df, X = model.encode(
-        docs, num_sents=num_sents, max_length=64, batch_tokens=256, show_progress=False
+        docs,
+        max_chunk_sents=max_chunk_sents,
+        max_length=64,
+        max_batch_tokens=256,
+        show_progress=False,
     )
     assert isinstance(df, pl.DataFrame)
     assert isinstance(X, np.ndarray)
     assert len(df) == len(X)
-    assert all(size in df["num_sents"].unique().to_list() for size in num_sents)
+    assert all(size in df["num_sents"].unique().to_list() for size in max_chunk_sents)
 
 
 def test_encoder_encode_queries(model):
@@ -330,7 +336,9 @@ def test_encoder_preserves_sentence_text(model):
         "This is the first sentence. Here's the second one!",
         "Another document starts here. And continues with this.",
     ]
-    df, X = model.encode(docs, num_sents=1, max_length=64, batch_tokens=256, show_progress=False)
+    df, X = model.encode(
+        docs, max_chunk_sents=1, max_length=64, max_batch_tokens=256, show_progress=False
+    )
     assert isinstance(df, pl.DataFrame)
     assert "chunk" in df.columns
 
@@ -348,17 +356,17 @@ def test_encoder_text_preservation_with_overlap(model):
     ]
     df, X = model.encode(
         docs,
-        num_sents=2,
+        max_chunk_sents=2,
         chunk_overlap=1,  # One sentence overlap
         max_length=64,
-        batch_tokens=256,
+        max_batch_tokens=256,
         show_progress=False,
     )
     assert isinstance(df, pl.DataFrame)
     chunks = df["chunk"].to_list()
 
     # Check that overlapping chunks contain correct sentence combinations
-    # With num_sents=2 and overlap=1, we should get chunks like:
+    # With max_chunk_sents=2 and overlap=1, we should get chunks like:
     # [sent0, sent1], [sent1, sent2]
     for chunk in chunks:
         # Each chunk should be a substring or contiguous part of the original doc
@@ -379,7 +387,9 @@ def test_encoder_text_preservation_multiple_docs(model):
         "Doc two sentence one. Doc two sentence two.",
         "Doc three has a single sentence.",
     ]
-    df, X = model.encode(docs, num_sents=1, max_length=64, batch_tokens=256, show_progress=False)
+    df, X = model.encode(
+        docs, max_chunk_sents=1, max_length=64, max_batch_tokens=256, show_progress=False
+    )
 
     # Verify correct document mapping
     assert "document_idx" in df.columns
@@ -397,7 +407,12 @@ def test_encoder_return_text_false(model):
     """Test that return_text=False skips text reconstruction."""
     docs = ["Simple test document. With two sentences."]
     df, X = model.encode(
-        docs, num_sents=1, max_length=64, batch_tokens=256, return_text=False, show_progress=False
+        docs,
+        max_chunk_sents=1,
+        max_length=64,
+        max_batch_tokens=256,
+        return_text=False,
+        show_progress=False,
     )
     assert "chunk" not in df.columns
 
@@ -405,14 +420,16 @@ def test_encoder_return_text_false(model):
 def test_encoder_text_reconstruction_fallback(model):
     """Test fallback to decoding when sentence is split due to exceeding max_length."""
     # Create a document with a very long sentence that will exceed max_length
-    # and trigger _split_long_sentences(), causing sentence IDs to exceed original count
+    # and trigger _split_long_sents(), causing sentence IDs to exceed original count
     long_sentence = (
         "This is a very long sentence " + "with many repeated words " * 50 + "that ends here."
     )
     docs = [f"Short intro. {long_sentence} Short outro."]
 
     # Use a small max_length to force the long sentence to be split
-    df, X = model.encode(docs, num_sents=1, max_length=32, batch_tokens=256, show_progress=False)
+    df, X = model.encode(
+        docs, max_chunk_sents=1, max_length=32, max_batch_tokens=256, show_progress=False
+    )
 
     assert isinstance(df, pl.DataFrame)
     assert "chunk" in df.columns
@@ -432,7 +449,7 @@ def test_exclude_special_tokens_option(model):
     docs = ["This is a sentence. This is another."]
     df_exclude, emb_exclude = model.encode(
         docs,
-        num_sents=1,
+        max_chunk_sents=1,
         exclude_special_tokens=True,
         show_progress=False,
     )
@@ -448,7 +465,7 @@ def test_include_boundary_special_tokens(model):
 
     df_exclude, emb_exclude = model.encode(
         docs,
-        num_sents=1,
+        max_chunk_sents=1,
         exclude_special_tokens=True,
         deduplicate=False,
         show_progress=False,
@@ -456,7 +473,7 @@ def test_include_boundary_special_tokens(model):
 
     df_include, emb_include = model.encode(
         docs,
-        num_sents=1,
+        max_chunk_sents=1,
         exclude_special_tokens=False,
         deduplicate=False,
         show_progress=False,
@@ -483,14 +500,14 @@ def test_single_chunk_includes_both_special_tokens(model):
 
     df_exclude, emb_exclude = model.encode(
         docs,
-        num_sents=1,
+        max_chunk_sents=1,
         exclude_special_tokens=True,
         show_progress=False,
     )
 
     df_include, emb_include = model.encode(
         docs,
-        num_sents=1,
+        max_chunk_sents=1,
         exclude_special_tokens=False,
         show_progress=False,
     )
@@ -532,7 +549,7 @@ def test_deduplicate_averages_overlapping_chunks(model):
 
     df_no_dedup, emb_no_dedup = model.encode(
         [long_doc],
-        num_sents=1,
+        max_chunk_sents=1,
         deduplicate=False,
         max_length=128,  # Force pre-chunking
         show_progress=False,
@@ -540,7 +557,7 @@ def test_deduplicate_averages_overlapping_chunks(model):
 
     df_dedup, emb_dedup = model.encode(
         [long_doc],
-        num_sents=1,
+        max_chunk_sents=1,
         deduplicate=True,
         max_length=128,  # Force pre-chunking
         show_progress=False,
@@ -553,21 +570,21 @@ def test_deduplicate_averages_overlapping_chunks(model):
 
 
 def test_no_duplicates_after_dedup(model):
-    """Same (doc, num_sents, sentences) appears only once after deduplication."""
+    """Same (doc, max_chunk_sents, sentences) appears only once after deduplication."""
     # Create a document that requires pre-chunking with overlap
     sentences = [f"Sentence {i}." for i in range(40)]
     long_doc = " ".join(sentences)
 
     df, emb = model.encode(
         [long_doc],
-        num_sents=1,
+        max_chunk_sents=1,
         deduplicate=True,
         max_length=128,
         prechunk_overlap=0.5,
         show_progress=False,
     )
 
-    # Check that each (document_idx, num_sents, chunk text) combination is unique
+    # Check that each (document_idx, max_chunk_sents, chunk text) combination is unique
     # Using chunk text as proxy for sentence_ids
     if "chunk" in df.columns:
         unique_chunks = df.select(["document_idx", "num_sents", "chunk"]).unique()
@@ -583,14 +600,14 @@ def test_short_docs_unaffected_by_dedup(model):
 
     df_no_dedup, emb_no_dedup = model.encode(
         short_docs,
-        num_sents=1,
+        max_chunk_sents=1,
         deduplicate=False,
         show_progress=False,
     )
 
     df_dedup, emb_dedup = model.encode(
         short_docs,
-        num_sents=1,
+        max_chunk_sents=1,
         deduplicate=True,
         show_progress=False,
     )
@@ -609,7 +626,7 @@ def test_deduplicate_preserves_metadata(model):
 
     df, emb = model.encode(
         [doc],
-        num_sents=2,
+        max_chunk_sents=2,
         deduplicate=True,
         max_length=128,
         show_progress=False,
@@ -622,7 +639,7 @@ def test_deduplicate_preserves_metadata(model):
     expected_chunk_idx = list(range(len(df)))
     assert df["chunk_idx"].to_list() == expected_chunk_idx
 
-    # num_sents should all be 2
+    # max_chunk_sents should all be 2
     assert (df["num_sents"] == 2).all()
 
 
@@ -635,7 +652,7 @@ def test_deduplicate_with_multiple_docs(model):
 
     df, emb = model.encode(
         docs,
-        num_sents=1,
+        max_chunk_sents=1,
         deduplicate=True,
         max_length=128,
         show_progress=False,
@@ -658,7 +675,7 @@ def test_deduplicate_disabled_when_no_prechunk(model):
     # With prechunk=False, deduplicate should have no effect
     df1, emb1 = model.encode(
         docs,
-        num_sents=1,
+        max_chunk_sents=1,
         prechunk=False,
         deduplicate=True,
         show_progress=False,
@@ -666,7 +683,7 @@ def test_deduplicate_disabled_when_no_prechunk(model):
 
     df2, emb2 = model.encode(
         docs,
-        num_sents=1,
+        max_chunk_sents=1,
         prechunk=False,
         deduplicate=False,
         show_progress=False,
@@ -782,7 +799,7 @@ def test_encoder_half_embeds_output(model_half_embeds):
     """Test that half_embeds produces float16 output."""
     docs = ["This is a test document. Another sentence here."]
     df, X = model_half_embeds.encode(
-        docs, num_sents=1, max_length=64, batch_tokens=256, show_progress=False
+        docs, max_chunk_sents=1, max_length=64, max_batch_tokens=256, show_progress=False
     )
     # Note: as_numpy=True converts to numpy which may upcast to float32
     # Check the internal processing produces float16
@@ -793,7 +810,7 @@ def test_encoder_truncate_dims_output(model_truncate_dims):
     """Test that truncate_dims produces truncated embeddings."""
     docs = ["This is a test document. Another sentence here."]
     df, X = model_truncate_dims.encode(
-        docs, num_sents=1, max_length=64, batch_tokens=256, show_progress=False
+        docs, max_chunk_sents=1, max_length=64, max_batch_tokens=256, show_progress=False
     )
     # The embedding dimension should be 128 (truncated from 384)
     assert X.shape[1] == 128
@@ -888,11 +905,13 @@ def test_encode_with_document_prompt(model):
 
     # Encode with prompt
     df_with, emb_with = model.encode(
-        docs, num_sents=1, max_length=128, prompt=prompt, show_progress=False
+        docs, max_chunk_sents=1, max_length=128, prompt=prompt, show_progress=False
     )
 
     # Encode without prompt
-    df_without, emb_without = model.encode(docs, num_sents=1, max_length=128, show_progress=False)
+    df_without, emb_without = model.encode(
+        docs, max_chunk_sents=1, max_length=128, show_progress=False
+    )
 
     # Should have same number of chunks (prompt doesn't add sentences)
     assert len(df_with) == len(df_without)
@@ -916,12 +935,12 @@ def test_encode_with_init_document_prompt():
     docs = ["Python is popular. It is widely used."]
 
     # Should use init prompt by default
-    df_init, emb_init = encoder.encode(docs, num_sents=1, max_length=128, show_progress=False)
+    df_init, emb_init = encoder.encode(docs, max_chunk_sents=1, max_length=128, show_progress=False)
 
     # Per-call prompt should override
     override_prompt = "Summarize: "
     df_override, emb_override = encoder.encode(
-        docs, num_sents=1, max_length=128, prompt=override_prompt, show_progress=False
+        docs, max_chunk_sents=1, max_length=128, prompt=override_prompt, show_progress=False
     )
 
     # Embeddings should differ
@@ -935,8 +954,10 @@ def test_prompt_does_not_affect_chunk_count(model):
     docs = ["First sentence. Second sentence. Third sentence."]
     prompt = "This is a very long prompt that contains many tokens: "
 
-    df_without, _ = model.encode(docs, num_sents=1, max_length=256, show_progress=False)
-    df_with, _ = model.encode(docs, num_sents=1, max_length=256, prompt=prompt, show_progress=False)
+    df_without, _ = model.encode(docs, max_chunk_sents=1, max_length=256, show_progress=False)
+    df_with, _ = model.encode(
+        docs, max_chunk_sents=1, max_length=256, prompt=prompt, show_progress=False
+    )
 
     assert len(df_without) == len(df_with), "Prompt should not affect chunk count"
 
@@ -946,7 +967,9 @@ def test_prompt_excluded_from_chunk_text(model):
     docs = ["Hello world. This is a test."]
     prompt = "PREFIX_MARKER: "
 
-    df, _ = model.encode(docs, num_sents=1, max_length=128, prompt=prompt, show_progress=False)
+    df, _ = model.encode(
+        docs, max_chunk_sents=1, max_length=128, prompt=prompt, show_progress=False
+    )
 
     # Check that no chunk contains the prompt prefix
     for chunk in df["chunk"].to_list():
@@ -1005,14 +1028,14 @@ def test_encode_queries_prompt_equivalent_to_manual_prepend(model):
 
 
 def test_encode_with_max_chunk_tokens_only(model):
-    """Test encode() with only max_chunk_tokens (no num_sents limit)."""
+    """Test encode() with only max_chunk_tokens (no max_chunk_sents limit)."""
     docs = ["First sentence here. Second sentence follows. Third sentence ends. Fourth one too."]
     df, X = model.encode(
         docs,
         max_chunk_tokens=32,
-        num_sents=None,  # No sentence limit
+        max_chunk_sents=None,  # No sentence limit
         max_length=128,
-        batch_tokens=256,
+        max_batch_tokens=256,
         show_progress=False,
     )
 
@@ -1023,15 +1046,15 @@ def test_encode_with_max_chunk_tokens_only(model):
     assert len(df) >= 1
 
 
-def test_encode_with_max_chunk_tokens_and_num_sents(model):
-    """Test encode() with both max_chunk_tokens and num_sents."""
+def test_encode_with_max_chunk_tokens_and_max_chunk_sents(model):
+    """Test encode() with both max_chunk_tokens and max_chunk_sents."""
     docs = ["First sentence here. Second sentence follows. Third sentence ends. Fourth one too."]
     df, X = model.encode(
         docs,
         max_chunk_tokens=128,  # High token limit
-        num_sents=2,  # Low sentence limit
+        max_chunk_sents=2,  # Low sentence limit
         max_length=128,
-        batch_tokens=256,
+        max_batch_tokens=256,
         show_progress=False,
     )
 
@@ -1053,9 +1076,9 @@ def test_max_chunk_tokens_respects_token_limit(model):
     df, X = model.encode(
         docs,
         max_chunk_tokens=20,
-        num_sents=None,
+        max_chunk_sents=None,
         max_length=256,
-        batch_tokens=256,
+        max_batch_tokens=256,
         show_progress=False,
     )
 
@@ -1074,9 +1097,9 @@ def test_max_chunk_tokens_produces_valid_embeddings(model):
     df, X = model.encode(
         docs,
         max_chunk_tokens=50,
-        num_sents=None,
+        max_chunk_sents=None,
         max_length=128,
-        batch_tokens=256,
+        max_batch_tokens=256,
         show_progress=False,
     )
 
@@ -1096,10 +1119,10 @@ def test_max_chunk_tokens_with_overlap(model):
     df, X = model.encode(
         docs,
         max_chunk_tokens=32,
-        num_sents=None,
+        max_chunk_sents=None,
         chunk_overlap=1,  # 1 sentence overlap (must be int with max_chunk_tokens)
         max_length=128,
-        batch_tokens=256,
+        max_batch_tokens=256,
         deduplicate=False,
         show_progress=False,
     )
@@ -1113,12 +1136,12 @@ def test_max_chunk_tokens_backward_compatibility(model):
     """Verify existing behavior is unchanged when max_chunk_tokens is not specified."""
     docs = ["First sentence. Second sentence. Third sentence."]
 
-    # Old behavior (num_sents only)
+    # Old behavior (max_chunk_sents only)
     df_old, X_old = model.encode(
         docs,
-        num_sents=1,
+        max_chunk_sents=1,
         max_length=128,
-        batch_tokens=256,
+        max_batch_tokens=256,
         show_progress=False,
     )
 
@@ -1127,15 +1150,15 @@ def test_max_chunk_tokens_backward_compatibility(model):
     assert all(df_old["num_sents"] == 1)
 
 
-def test_max_chunk_tokens_validation_rejects_list_num_sents(model):
-    """Verify that list num_sents is rejected with max_chunk_tokens."""
+def test_max_chunk_tokens_validation_rejects_list_max_chunk_sents(model):
+    """Verify that list max_chunk_sents is rejected with max_chunk_tokens."""
     docs = ["Test document."]
 
-    with pytest.raises(ValueError, match="num_sents cannot be a list/tuple"):
+    with pytest.raises(ValueError, match="max_chunk_sents cannot be a list/tuple"):
         model.encode(
             docs,
             max_chunk_tokens=50,
-            num_sents=[1, 2],  # Should fail
+            max_chunk_sents=[1, 2],  # Should fail
             show_progress=False,
         )
 
@@ -1148,19 +1171,19 @@ def test_max_chunk_tokens_validation_rejects_invalid_value(model):
         model.encode(
             docs,
             max_chunk_tokens=0,
-            num_sents=None,
+            max_chunk_sents=None,
             show_progress=False,
         )
 
 
-def test_num_sents_none_without_max_chunk_tokens_fails(model):
-    """Verify that num_sents=None without max_chunk_tokens raises error."""
+def test_max_chunk_sents_none_without_max_chunk_tokens_fails(model):
+    """Verify that max_chunk_sents=None without max_chunk_tokens raises error."""
     docs = ["Test document."]
 
-    with pytest.raises(ValueError, match="num_sents cannot be None"):
+    with pytest.raises(ValueError, match="max_chunk_sents cannot be None"):
         model.encode(
             docs,
-            num_sents=None,
+            max_chunk_sents=None,
             max_chunk_tokens=None,
             show_progress=False,
         )
@@ -1175,9 +1198,9 @@ def test_max_chunk_tokens_with_long_document(model):
     df, X = model.encode(
         [long_doc],
         max_chunk_tokens=64,
-        num_sents=None,
+        max_chunk_sents=None,
         max_length=128,  # Force prechunking
-        batch_tokens=256,
+        max_batch_tokens=256,
         show_progress=False,
     )
 
@@ -1195,9 +1218,9 @@ def test_max_chunk_tokens_chunk_text_preserved(model):
     df, X = model.encode(
         docs,
         max_chunk_tokens=30,
-        num_sents=None,
+        max_chunk_sents=None,
         max_length=128,
-        batch_tokens=256,
+        max_batch_tokens=256,
         show_progress=False,
     )
 
@@ -1214,14 +1237,14 @@ def test_max_chunk_tokens_rejects_float_overlap(model):
         model.encode(
             docs,
             max_chunk_tokens=50,
-            num_sents=None,
+            max_chunk_sents=None,
             chunk_overlap=0.5,  # Should fail - must be int
             show_progress=False,
         )
 
 
-def test_split_long_sentences_true_splits(model):
-    """Test that split_long_sentences=True splits sentences exceeding max_chunk_tokens."""
+def test_split_long_sents_true_splits(model):
+    """Test that split_long_sents=True splits sentences exceeding max_chunk_tokens."""
     # Create doc with a long sentence
     long_sent = "This is a very long sentence " + "with many repeated words " * 10 + "ending here."
     docs = [f"Short intro. {long_sent} Short outro."]
@@ -1229,8 +1252,8 @@ def test_split_long_sentences_true_splits(model):
     df, X = model.encode(
         docs,
         max_chunk_tokens=32,
-        num_sents=None,
-        split_long_sentences=True,
+        max_chunk_sents=None,
+        split_long_sents=True,
         max_length=256,
         show_progress=False,
     )
@@ -1241,8 +1264,8 @@ def test_split_long_sentences_true_splits(model):
         assert tokens <= 32, f"Chunk has {tokens} tokens, exceeds limit of 32"
 
 
-def test_split_long_sentences_false_keeps_intact(model):
-    """Test that split_long_sentences=False keeps sentences intact even if exceeding limit."""
+def test_split_long_sents_false_keeps_intact(model):
+    """Test that split_long_sents=False keeps sentences intact even if exceeding limit."""
     # Create doc with a long sentence
     long_sent = "This is a very long sentence " + "with many repeated words " * 10 + "ending here."
     docs = [f"Short intro. {long_sent} Short outro."]
@@ -1250,8 +1273,8 @@ def test_split_long_sentences_false_keeps_intact(model):
     df, X = model.encode(
         docs,
         max_chunk_tokens=32,
-        num_sents=None,
-        split_long_sentences=False,
+        max_chunk_sents=None,
+        split_long_sents=False,
         max_length=256,
         show_progress=False,
     )
@@ -1274,6 +1297,6 @@ def test_max_chunk_tokens_exceeds_max_length_raises(model):
             docs,
             max_chunk_tokens=256,
             max_length=128,  # max_chunk_tokens > max_length
-            num_sents=None,
+            max_chunk_sents=None,
             show_progress=False,
         )
