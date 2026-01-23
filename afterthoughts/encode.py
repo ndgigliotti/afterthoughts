@@ -71,6 +71,7 @@ from afterthoughts.tokenize import (
     TokenizedDataset,
     _get_tokenization_batch_size,
     dynamic_pad_collate,
+    get_max_length,
 )
 from afterthoughts.utils import (
     disable_tokenizer_parallelism,
@@ -1139,6 +1140,16 @@ class Encoder:
         )
         if return_frame == "pandas":
             require_pandas()
+
+        # Validate max_chunk_tokens against resolved max_length
+        if max_chunk_tokens is not None:
+            resolved_max_length = get_max_length(max_length, self.tokenizer)
+            if resolved_max_length is not None and max_chunk_tokens > resolved_max_length:
+                raise ValueError(
+                    f"max_chunk_tokens ({max_chunk_tokens}) cannot exceed max_length "
+                    f"({resolved_max_length}). Chunks are built from token embeddings "
+                    f"within sequences of at most max_length tokens."
+                )
 
         # Determine which prompt to use (per-call override or default)
         effective_prompt = prompt if prompt is not None else self.document_prompt

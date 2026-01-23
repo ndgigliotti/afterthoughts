@@ -1263,3 +1263,17 @@ def test_split_long_sentences_false_keeps_intact(model):
         len(model.tokenizer.encode(c, add_special_tokens=False)) for c in df["chunk"].to_list()
     ]
     assert max(token_counts) > 32, "Long sentence should exceed token limit"
+
+
+def test_max_chunk_tokens_exceeds_max_length_raises(model):
+    """Test that max_chunk_tokens > max_length raises ValueError."""
+    docs = ["This is a test sentence."]
+
+    with pytest.raises(ValueError, match="max_chunk_tokens.*cannot exceed max_length"):
+        model.encode(
+            docs,
+            max_chunk_tokens=256,
+            max_length=128,  # max_chunk_tokens > max_length
+            num_sents=None,
+            show_progress=False,
+        )
