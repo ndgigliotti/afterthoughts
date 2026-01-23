@@ -335,12 +335,21 @@ def test_get_chunk_idx_by_tokens_with_overlap():
     input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]])
     sentence_ids = torch.tensor([[0, 0, 1, 1, 2, 2, 3, 3]])
 
-    # Max 4 tokens per chunk with 50% overlap
-    result = get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=4, chunk_overlap=0.5)
+    # Max 4 tokens per chunk with 1 sentence overlap
+    result = get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=4, chunk_overlap=1)
 
     # Should have overlapping chunks
     assert result["num_sents"].size(0) >= 2
     # With overlap, later chunks should share sentences with earlier ones
+
+
+def test_get_chunk_idx_by_tokens_rejects_float_overlap():
+    """Test that float overlap is rejected for token-based chunking."""
+    input_ids = torch.tensor([[1, 2, 3, 4, 5, 6]])
+    sentence_ids = torch.tensor([[0, 0, 0, 1, 1, 1]])
+
+    with pytest.raises(ValueError, match="must be a non-negative integer"):
+        get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=4, chunk_overlap=0.5)
 
 
 def test_get_chunk_idx_by_tokens_with_num_sents_limit():
@@ -402,19 +411,38 @@ def test_get_chunk_idx_by_tokens_empty_document():
     assert result["num_sents"].size(0) == 0
 
 
-def test_get_chunk_idx_by_tokens_large_sentence_warning():
-    """Test that warning is issued when single sentence exceeds max_chunk_tokens."""
+def test_get_chunk_idx_by_tokens_large_sentence_split():
+    """Test that long sentences are split when split_long_sentences=True (default)."""
     # One sentence with 10 tokens, limit is 5
     input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
     sentence_ids = torch.tensor([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0]])
 
-    with pytest.warns(UserWarning, match="exceeding max_chunk_tokens"):
+    with pytest.warns(UserWarning, match="Splitting into multiple chunks"):
         result = get_chunk_idx_by_tokens(
-            input_ids, sentence_ids, max_chunk_tokens=5, chunk_overlap=0
+            input_ids, sentence_ids, max_chunk_tokens=5, chunk_overlap=0, split_long_sentences=True
         )
 
-    # The large sentence should still be included as its own chunk
+    # The sentence should be split into 2 chunks of 5 tokens each
+    assert result["num_sents"].size(0) == 2
+    # Each chunk has 5 tokens
+    assert result["chunk_token_ids"].size(1) == 5
+
+
+def test_get_chunk_idx_by_tokens_large_sentence_intact():
+    """Test that long sentences are kept intact when split_long_sentences=False."""
+    # One sentence with 10 tokens, limit is 5
+    input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+    sentence_ids = torch.tensor([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0]])
+
+    with pytest.warns(UserWarning, match="Including as its own chunk without splitting"):
+        result = get_chunk_idx_by_tokens(
+            input_ids, sentence_ids, max_chunk_tokens=5, chunk_overlap=0, split_long_sentences=False
+        )
+
+    # The large sentence should be kept as one chunk
     assert result["num_sents"].size(0) == 1
+    # Chunk has all 10 tokens (exceeds limit)
+    assert result["chunk_token_ids"].size(1) == 10
 
 
 def test_get_chunk_idx_by_tokens_multiple_sequences():

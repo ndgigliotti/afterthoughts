@@ -446,6 +446,7 @@ class Encoder:
         seq_to_doc: dict[int, int],
         sentence_texts: list[list[str]],
         separator: str = " ",
+        is_split: torch.Tensor | None = None,
         show_progress: bool = True,
     ) -> pl.Series:
         """Join original sentence texts by sentence ID instead of detokenizing.
@@ -464,6 +465,9 @@ class Encoder:
             Per-document list of sentence texts.
         separator : str, optional
             String to join sentences with, by default " ".
+        is_split : torch.Tensor or None, optional
+            Boolean tensor indicating which chunks are split portions of sentences
+            and need detokenization instead of sentence joining.
         show_progress : bool, optional
             Show progress bar during reconstruction, by default True.
 
@@ -488,6 +492,13 @@ class Encoder:
                 total=len(flat_sent_ids),
             )
         ):
+            # Check if this is a split chunk that needs detokenization
+            if is_split is not None and is_split[i]:
+                chunks.append("")  # Placeholder for fallback (will be replaced)
+                fallback_indices.append(i)
+                fallback_token_ids.append(token_ids)
+                continue
+
             doc_idx = seq_to_doc[int(sequence_idx[i].item())]
             doc_sentences = sentence_texts[doc_idx]
             # Sentence IDs are contiguous, so just get min/max instead of unique
@@ -645,7 +656,18 @@ class Encoder:
                     last_sent[i] = valid_ids_list[-1]
 
         # Build compound key and use np.unique for fast grouping
-        keys = torch.stack([document_idx, num_sents, first_sent, last_sent], dim=1).numpy()
+        # Include chunk_idx for split chunks to prevent them from being deduplicated
+        # (split chunks share the same sentence boundaries but represent different tokens)
+        if "is_split" in results and results["is_split"].any():
+            is_split = results["is_split"]
+            chunk_idx = results["chunk_idx"]
+            # For split chunks, include chunk_idx to make them unique; for others use -1
+            split_id = torch.where(is_split, chunk_idx, torch.full_like(chunk_idx, -1))
+            keys = torch.stack(
+                [document_idx, num_sents, first_sent, last_sent, split_id], dim=1
+            ).numpy()
+        else:
+            keys = torch.stack([document_idx, num_sents, first_sent, last_sent], dim=1).numpy()
         _, inverse_indices, counts = np.unique(
             keys, axis=0, return_inverse=True, return_counts=True
         )
@@ -849,6 +871,7 @@ class Encoder:
         exclude_special_tokens: bool = True,
         show_progress: bool = True,
         max_chunk_tokens: int | None = None,
+        split_long_sentences: bool = True,
     ) -> Iterator[dict[str, Any]]:
         """Obtain the chunk embeddings for a list of documents, one batch at at time.
 
@@ -893,6 +916,7 @@ class Encoder:
                 chunk_overlap=chunk_overlap,
                 exclude_special_tokens=exclude_special_tokens,
                 max_chunk_tokens=max_chunk_tokens,
+                split_long_sentences=split_long_sentences,
             )
             results["batch_idx"] = torch.full(results["sequence_idx"].shape, batch["batch_idx"][0])
             yield move_or_convert_tensors(
@@ -921,6 +945,7 @@ class Encoder:
         show_progress: bool = ...,
         prompt: str | None = ...,
         max_chunk_tokens: int | None = ...,
+        split_long_sentences: bool = ...,
     ) -> tuple[pl.DataFrame, np.ndarray[Any, Any]]: ...
 
     @overload
@@ -943,6 +968,7 @@ class Encoder:
         show_progress: bool = ...,
         prompt: str | None = ...,
         max_chunk_tokens: int | None = ...,
+        split_long_sentences: bool = ...,
     ) -> tuple[pl.DataFrame, torch.Tensor]: ...
 
     @overload
@@ -965,6 +991,7 @@ class Encoder:
         show_progress: bool = ...,
         prompt: str | None = ...,
         max_chunk_tokens: int | None = ...,
+        split_long_sentences: bool = ...,
     ) -> tuple["pd.DataFrame", np.ndarray[Any, Any]]: ...
 
     @overload
@@ -987,6 +1014,7 @@ class Encoder:
         show_progress: bool = ...,
         prompt: str | None = ...,
         max_chunk_tokens: int | None = ...,
+        split_long_sentences: bool = ...,
     ) -> tuple["pd.DataFrame", torch.Tensor]: ...
 
     def encode(
@@ -1008,6 +1036,7 @@ class Encoder:
         show_progress: bool = True,
         prompt: str | None = None,
         max_chunk_tokens: int | None = None,
+        split_long_sentences: bool = True,
     ) -> (
         tuple[pl.DataFrame, np.ndarray[Any, Any]]
         | tuple[pl.DataFrame, torch.Tensor]
@@ -1081,6 +1110,15 @@ class Encoder:
             - num_sents alone: Fixed sentence count per chunk (default behavior)
             - Both specified: "At most N sentences AND at most M tokens" - whichever
               limit is hit first stops the chunk
+            Note: When using `max_chunk_tokens`, `chunk_overlap` must be an integer
+            (number of sentences), not a float.
+        split_long_sentences : bool, optional
+            How to handle sentences that exceed `max_chunk_tokens`, by default True.
+            Only applies when `max_chunk_tokens` is specified.
+            - True: Split long sentences into multiple chunks at token boundaries.
+              A warning is issued when this occurs.
+            - False: Keep sentences intact as their own chunks, even if they
+              exceed the limit. A warning is issued when this occurs.
 
         Returns
         -------
@@ -1136,6 +1174,7 @@ class Encoder:
             exclude_special_tokens=exclude_special_tokens,
             show_progress=show_progress,
             max_chunk_tokens=max_chunk_tokens,
+            split_long_sentences=split_long_sentences,
         )
 
         results: dict[str, Any] = {
@@ -1146,6 +1185,7 @@ class Encoder:
             "chunk_sentence_ids": [],
             "num_sents": [],
             "chunk_embeds": [],
+            "is_split": [],  # Track split chunks for text reconstruction
         }
         for batch in batches:
             # Apply postprocessing (half_embeds then normalization)
@@ -1165,6 +1205,13 @@ class Encoder:
                 results["chunk_sentence_ids"].append(batch["sentence_ids"])
             results["num_sents"].append(batch["num_sents"])
             results["chunk_embeds"].append(batch["chunk_embeds"])
+            # Collect is_split if present (token-based chunking)
+            if "is_split" in batch:
+                results["is_split"].append(batch["is_split"])
+
+        # Remove is_split if empty (not using token-based chunking)
+        if not results["is_split"]:
+            del results["is_split"]
 
         # Combine tensor results (excluding chunk_sentence_ids and chunk_token_ids
         # which need special handling for text reconstruction)
@@ -1208,17 +1255,21 @@ class Encoder:
 
         # Reconstruct chunk text from original sentences
         if return_text:
+            # Get is_split tensor if present (for token-based chunking)
+            is_split = results.pop("is_split", None)
             results["chunk"] = self._reconstruct_chunk_texts(
                 [results.pop("chunk_sentence_ids")],  # Wrap in list for batched format
                 [results.pop("chunk_token_ids")],  # Wrap in list for batched format
                 results["sequence_idx"],
                 seq_to_doc,
                 sentence_texts,
+                is_split=is_split,
                 show_progress=show_progress,
             )
         else:
             results.pop("chunk_token_ids")
             results.pop("chunk_sentence_ids")
+            results.pop("is_split", None)  # Clean up if present
 
         results["embed_idx"] = torch.arange(results["chunk_embeds"].shape[0])
         df, vecs = self._build_results_df(

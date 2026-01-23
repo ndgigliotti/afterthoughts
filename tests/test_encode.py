@@ -1097,7 +1097,7 @@ def test_max_chunk_tokens_with_overlap(model):
         docs,
         max_chunk_tokens=32,
         num_sents=None,
-        chunk_overlap=0.5,  # 50% sentence overlap
+        chunk_overlap=1,  # 1 sentence overlap (must be int with max_chunk_tokens)
         max_length=128,
         batch_tokens=256,
         deduplicate=False,
@@ -1204,3 +1204,62 @@ def test_max_chunk_tokens_chunk_text_preserved(model):
     # Each chunk should contain text from the original document
     for chunk in df["chunk"].to_list():
         assert any(sent in chunk for sent in ["Hello world", "test sentence", "Final sentence"])
+
+
+def test_max_chunk_tokens_rejects_float_overlap(model):
+    """Verify that float chunk_overlap is rejected with max_chunk_tokens."""
+    docs = ["Test document."]
+
+    with pytest.raises(TypeError, match="chunk_overlap must be an integer"):
+        model.encode(
+            docs,
+            max_chunk_tokens=50,
+            num_sents=None,
+            chunk_overlap=0.5,  # Should fail - must be int
+            show_progress=False,
+        )
+
+
+def test_split_long_sentences_true_splits(model):
+    """Test that split_long_sentences=True splits sentences exceeding max_chunk_tokens."""
+    # Create doc with a long sentence
+    long_sent = "This is a very long sentence " + "with many repeated words " * 10 + "ending here."
+    docs = [f"Short intro. {long_sent} Short outro."]
+
+    df, X = model.encode(
+        docs,
+        max_chunk_tokens=32,
+        num_sents=None,
+        split_long_sentences=True,
+        max_length=256,
+        show_progress=False,
+    )
+
+    # All chunks should respect the token limit (since sentences are split)
+    for chunk_text in df["chunk"].to_list():
+        tokens = len(model.tokenizer.encode(chunk_text, add_special_tokens=False))
+        assert tokens <= 32, f"Chunk has {tokens} tokens, exceeds limit of 32"
+
+
+def test_split_long_sentences_false_keeps_intact(model):
+    """Test that split_long_sentences=False keeps sentences intact even if exceeding limit."""
+    # Create doc with a long sentence
+    long_sent = "This is a very long sentence " + "with many repeated words " * 10 + "ending here."
+    docs = [f"Short intro. {long_sent} Short outro."]
+
+    df, X = model.encode(
+        docs,
+        max_chunk_tokens=32,
+        num_sents=None,
+        split_long_sentences=False,
+        max_length=256,
+        show_progress=False,
+    )
+
+    # Should have exactly 3 chunks (3 sentences)
+    assert len(df) == 3
+    # The long sentence chunk should exceed the token limit
+    token_counts = [
+        len(model.tokenizer.encode(c, add_special_tokens=False)) for c in df["chunk"].to_list()
+    ]
+    assert max(token_counts) > 32, "Long sentence should exceed token limit"
