@@ -279,7 +279,7 @@ def test_boundary_special_token_mask_first_last(tokenizer):
     sequence_idx = torch.tensor([0])
 
     chunk_data = get_chunk_idx(
-        input_ids, sentence_ids, max_chunk_sents=1, chunk_overlap=0, sequence_idx=sequence_idx
+        input_ids, sentence_ids, max_chunk_sents=1, chunk_overlap_sents=0, sequence_idx=sequence_idx
     )
 
     mask = _compute_boundary_special_token_mask(chunk_data, tokenizer, torch.device("cpu"))
@@ -301,7 +301,9 @@ def test_get_chunk_idx_by_tokens_basic():
     sentence_ids = torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2, -1]])
 
     # Max 6 tokens per chunk should group sent0+sent1, then sent2
-    result = get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=6, chunk_overlap=0)
+    result = get_chunk_idx_by_tokens(
+        input_ids, sentence_ids, max_chunk_tokens=6, chunk_overlap_sents=0
+    )
 
     assert "chunk_token_idx" in result
     assert "chunk_token_ids" in result
@@ -322,7 +324,9 @@ def test_get_chunk_idx_by_tokens_single_chunk():
     input_ids = torch.tensor([[1, 2, 3, 4, 5, 6]])
     sentence_ids = torch.tensor([[0, 0, 0, 1, 1, 1]])
 
-    result = get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=100, chunk_overlap=0)
+    result = get_chunk_idx_by_tokens(
+        input_ids, sentence_ids, max_chunk_tokens=100, chunk_overlap_sents=0
+    )
 
     # All sentences should fit in one chunk
     assert result["num_sents"].size(0) == 1
@@ -336,7 +340,9 @@ def test_get_chunk_idx_by_tokens_with_overlap():
     sentence_ids = torch.tensor([[0, 0, 1, 1, 2, 2, 3, 3]])
 
     # Max 4 tokens per chunk with 1 sentence overlap
-    result = get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=4, chunk_overlap=1)
+    result = get_chunk_idx_by_tokens(
+        input_ids, sentence_ids, max_chunk_tokens=4, chunk_overlap_sents=1
+    )
 
     # Should have overlapping chunks
     assert result["num_sents"].size(0) >= 2
@@ -349,7 +355,9 @@ def test_get_chunk_idx_by_tokens_rejects_float_overlap():
     sentence_ids = torch.tensor([[0, 0, 0, 1, 1, 1]])
 
     with pytest.raises(ValueError, match="must be a non-negative integer"):
-        get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=4, chunk_overlap=0.5)
+        get_chunk_idx_by_tokens(
+            input_ids, sentence_ids, max_chunk_tokens=4, chunk_overlap_sents=0.5
+        )
 
 
 def test_get_chunk_idx_by_tokens_with_max_chunk_sents_limit():
@@ -360,7 +368,7 @@ def test_get_chunk_idx_by_tokens_with_max_chunk_sents_limit():
 
     # Max 100 tokens (won't be hit) but max 2 sentences
     result = get_chunk_idx_by_tokens(
-        input_ids, sentence_ids, max_chunk_tokens=100, max_chunk_sents=2, chunk_overlap=0
+        input_ids, sentence_ids, max_chunk_tokens=100, max_chunk_sents=2, chunk_overlap_sents=0
     )
 
     # Should have 2 chunks of 2 sentences each (limited by max_chunk_sents)
@@ -376,7 +384,7 @@ def test_get_chunk_idx_by_tokens_max_chunk_sents_hit_first():
 
     # Max 100 tokens but only 1 sentence per chunk
     result = get_chunk_idx_by_tokens(
-        input_ids, sentence_ids, max_chunk_tokens=100, max_chunk_sents=1, chunk_overlap=0
+        input_ids, sentence_ids, max_chunk_tokens=100, max_chunk_sents=1, chunk_overlap_sents=0
     )
 
     # Should have 3 chunks of 1 sentence each
@@ -392,7 +400,7 @@ def test_get_chunk_idx_by_tokens_token_limit_hit_first():
 
     # Max 5 tokens but up to 10 sentences per chunk
     result = get_chunk_idx_by_tokens(
-        input_ids, sentence_ids, max_chunk_tokens=5, max_chunk_sents=10, chunk_overlap=0
+        input_ids, sentence_ids, max_chunk_tokens=5, max_chunk_sents=10, chunk_overlap_sents=0
     )
 
     # Token limit should be hit first - can only fit 1 sentence (3 tokens) per chunk
@@ -405,7 +413,9 @@ def test_get_chunk_idx_by_tokens_empty_document():
     input_ids = torch.tensor([[0]])  # Just padding
     sentence_ids = torch.tensor([[-1]])  # No valid sentences
 
-    result = get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=100, chunk_overlap=0)
+    result = get_chunk_idx_by_tokens(
+        input_ids, sentence_ids, max_chunk_tokens=100, chunk_overlap_sents=0
+    )
 
     # Should return empty results
     assert result["num_sents"].size(0) == 0
@@ -419,7 +429,11 @@ def test_get_chunk_idx_by_tokens_large_sentence_split():
 
     with pytest.warns(UserWarning, match="Splitting into multiple chunks"):
         result = get_chunk_idx_by_tokens(
-            input_ids, sentence_ids, max_chunk_tokens=5, chunk_overlap=0, split_long_sents=True
+            input_ids,
+            sentence_ids,
+            max_chunk_tokens=5,
+            chunk_overlap_sents=0,
+            split_long_sents=True,
         )
 
     # The sentence should be split into 2 chunks of 5 tokens each
@@ -436,7 +450,11 @@ def test_get_chunk_idx_by_tokens_large_sentence_intact():
 
     with pytest.warns(UserWarning, match="Including as its own chunk without splitting"):
         result = get_chunk_idx_by_tokens(
-            input_ids, sentence_ids, max_chunk_tokens=5, chunk_overlap=0, split_long_sents=False
+            input_ids,
+            sentence_ids,
+            max_chunk_tokens=5,
+            chunk_overlap_sents=0,
+            split_long_sents=False,
         )
 
     # The large sentence should be kept as one chunk
@@ -461,7 +479,9 @@ def test_get_chunk_idx_by_tokens_multiple_sequences():
         ]
     )
 
-    result = get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=4, chunk_overlap=0)
+    result = get_chunk_idx_by_tokens(
+        input_ids, sentence_ids, max_chunk_tokens=4, chunk_overlap_sents=0
+    )
 
     # Should have chunks from both sequences
     assert result["num_sents"].size(0) >= 2
@@ -485,7 +505,9 @@ def test_get_chunk_idx_by_tokens_chunk_idx_per_document():
         ]
     )
 
-    result = get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=4, chunk_overlap=0)
+    result = get_chunk_idx_by_tokens(
+        input_ids, sentence_ids, max_chunk_tokens=4, chunk_overlap_sents=0
+    )
 
     # chunk_idx should start at 0 for each sequence
     seq0_chunks = result["chunk_idx"][result["sequence_idx"] == 0]

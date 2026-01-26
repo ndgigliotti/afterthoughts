@@ -31,7 +31,7 @@ def encoded_2docs(model):
         "Machine learning is AI. It enables learning.",
         "Python is a programming language. It is popular.",
     ]
-    return model.encode(docs, max_chunk_sents=[1, 2], chunk_overlap=0, show_progress=False)
+    return model.encode(docs, max_chunk_sents=[1, 2], chunk_overlap_sents=0, show_progress=False)
 
 
 @pytest.fixture(scope="session")
