@@ -357,7 +357,7 @@ def test_encoder_text_preservation_with_overlap(model):
     df, X = model.encode(
         docs,
         max_chunk_sents=2,
-        chunk_overlap=1,  # One sentence overlap
+        chunk_overlap_sents=1,  # One sentence overlap
         max_length=64,
         max_batch_tokens=256,
         show_progress=False,
@@ -580,7 +580,7 @@ def test_no_duplicates_after_dedup(model):
         max_chunk_sents=1,
         deduplicate=True,
         max_length=128,
-        prechunk_overlap=0.5,
+        prechunk_overlap_tokens=0.5,
         show_progress=False,
     )
 
@@ -700,6 +700,8 @@ def test_deduplicate_averaging_correctness():
     # Chunks 1 and 3 are duplicates (same doc, size, sentences)
     results = {
         "document_idx": torch.tensor([0, 0, 0, 0]),
+        "max_chunk_sents": torch.tensor([2, 2, 2, 2]),  # Configuration values
+        "max_chunk_tokens": torch.tensor([-1, -1, -1, -1]),  # -1 means None
         "num_sents": torch.tensor([2, 2, 2, 2]),
         "chunk_embeds": torch.tensor(
             [
@@ -752,6 +754,8 @@ def test_deduplicate_first_method():
     """Verify that method='first' keeps first occurrence without averaging."""
     results = {
         "document_idx": torch.tensor([0, 0, 0]),
+        "max_chunk_sents": torch.tensor([1, 1, 1]),  # Configuration values
+        "max_chunk_tokens": torch.tensor([-1, -1, -1]),  # -1 means None
         "num_sents": torch.tensor([1, 1, 1]),
         "chunk_embeds": torch.tensor(
             [
@@ -1120,7 +1124,7 @@ def test_max_chunk_tokens_with_overlap(model):
         docs,
         max_chunk_tokens=32,
         max_chunk_sents=None,
-        chunk_overlap=1,  # 1 sentence overlap (must be int with max_chunk_tokens)
+        chunk_overlap_sents=1,  # 1 sentence overlap (must be int with max_chunk_tokens)
         max_length=128,
         max_batch_tokens=256,
         deduplicate=False,
@@ -1151,16 +1155,24 @@ def test_max_chunk_tokens_backward_compatibility(model):
 
 
 def test_max_chunk_tokens_validation_rejects_list_max_chunk_sents(model):
-    """Verify that list max_chunk_sents is rejected with max_chunk_tokens."""
-    docs = ["Test document."]
+    """Verify that aligned lists work with max_chunk_tokens and max_chunk_sents."""
+    docs = ["First sentence. Second sentence. Third sentence. Fourth sentence."]
 
-    with pytest.raises(ValueError, match="max_chunk_sents cannot be a list/tuple"):
-        model.encode(
-            docs,
-            max_chunk_tokens=50,
-            max_chunk_sents=[1, 2],  # Should fail
-            show_progress=False,
-        )
+    # Aligned lists should work
+    df, X = model.encode(
+        docs,
+        max_chunk_tokens=[32, 64],
+        max_chunk_sents=[1, 2],  # Now allowed with aligned lists
+        chunk_overlap_sents=0,
+        show_progress=False,
+    )
+
+    # Should have chunks for both configurations
+    configs = set(
+        zip(df["max_chunk_sents"].to_list(), df["max_chunk_tokens"].to_list(), strict=False)
+    )
+    assert (1, 32) in configs
+    assert (2, 64) in configs
 
 
 def test_max_chunk_tokens_validation_rejects_invalid_value(model):
@@ -1230,15 +1242,15 @@ def test_max_chunk_tokens_chunk_text_preserved(model):
 
 
 def test_max_chunk_tokens_rejects_float_overlap(model):
-    """Verify that float chunk_overlap is rejected with max_chunk_tokens."""
+    """Verify that float chunk_overlap_sents is rejected with max_chunk_tokens."""
     docs = ["Test document."]
 
-    with pytest.raises(TypeError, match="chunk_overlap must be an integer"):
+    with pytest.raises(TypeError, match="chunk_overlap_sents must be an integer"):
         model.encode(
             docs,
             max_chunk_tokens=50,
             max_chunk_sents=None,
-            chunk_overlap=0.5,  # Should fail - must be int
+            chunk_overlap_sents=0.5,  # Should fail - must be int
             show_progress=False,
         )
 

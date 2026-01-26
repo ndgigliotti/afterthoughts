@@ -18,21 +18,21 @@ docs = [
     "Deforestation threatens its biodiversity. "
     "Scientists warn of a tipping point.",  # 1 document, 3 sentences
 ]
-df, X = model.encode(docs, num_sents=1)  # 1 sentence per chunk
+df, X = model.encode(docs, max_chunk_sents=1)  # 1 sentence per chunk
 ```
 
 ```python
 >>> df
-shape: (3, 4)
-┌──────────────┬───────────┬───────────┬─────────────────────────────────┐
-│ document_idx ┆ chunk_idx ┆ num_sents ┆ chunk                           │
-│ ---          ┆ ---       ┆ ---       ┆ ---                             │
-│ i64          ┆ i64       ┆ i64       ┆ str                             │
-╞══════════════╪═══════════╪═══════════╪═════════════════════════════════╡
-│ 0            ┆ 0         ┆ 1         ┆ The Amazon rainforest produces… │
-│ 0            ┆ 1         ┆ 1         ┆ Deforestation threatens its bi… │
-│ 0            ┆ 2         ┆ 1         ┆ Scientists warn of a tipping p… │
-└──────────────┴───────────┴───────────┴─────────────────────────────────┘
+shape: (3, 5)
+┌──────────────┬───────────┬─────────────────┬──────────────────┬─────────────────────────────────┐
+│ document_idx ┆ chunk_idx ┆ max_chunk_sents ┆ max_chunk_tokens ┆ chunk                           │
+│ ---          ┆ ---       ┆ ---             ┆ ---              ┆ ---                             │
+│ i64          ┆ i64       ┆ i64             ┆ i64              ┆ str                             │
+╞══════════════╪═══════════╪═════════════════╪══════════════════╪═════════════════════════════════╡
+│ 0            ┆ 0         ┆ 1               ┆ null             ┆ The Amazon rainforest produces… │
+│ 0            ┆ 1         ┆ 1               ┆ null             ┆ Deforestation threatens its bi… │
+│ 0            ┆ 2         ┆ 1               ┆ null             ┆ Scientists warn of a tipping p… │
+└──────────────┴───────────┴─────────────────┴──────────────────┴─────────────────────────────────┘
 
 >>> X.shape
 (3, 384)  # 3 sentence embeddings, each with full document context
@@ -60,7 +60,8 @@ This approach ensures that pronouns, references, and contextual cues in each chu
 ## Features
 
 * **Late chunking implementation**: Embed documents first, then pool into chunks for context-aware embeddings
-* **Flexible chunk configuration**: Customize sentences per chunk and overlap between chunks
+* **Flexible chunk configuration**: Sentence-based, token-based, or combined chunking strategies
+* **Multi-configuration support**: Test multiple chunk sizes in a single pass with aligned list parameters
 * **Sentence boundary detection**: Choice of BlingFire (default), NLTK, pysbd, or syntok for accurate sentence segmentation
 * **Query embedding**: Embed queries in the same space as chunks for semantic search
 * **HuggingFace integration**: Works with any transformer model from the HuggingFace Hub
@@ -104,8 +105,8 @@ This approach ensures that pronouns, references, and contextual cues in each chu
     ```python
     df, X = model.encode(
         docs,
-        num_sents=[1, 2],  # Extract 1-sentence and 2-sentence chunks
-        chunk_overlap=0.5,  # Overlap between chunks (in sentences)
+        max_chunk_sents=[1, 2],  # Extract 1-sentence and 2-sentence chunks
+        chunk_overlap_sents=1,   # Overlap between chunks (in sentences)
     )
     ```
     The `encode` method returns a tuple containing a Polars DataFrame and a NumPy array of chunk embeddings. Pass `return_frame="pandas"` for a pandas DataFrame instead.
@@ -115,7 +116,7 @@ This approach ensures that pronouns, references, and contextual cues in each chu
     ```python
     df, X = model.encode(
         docs,
-        num_sents=2,
+        max_chunk_sents=2,
         sent_tokenizer="pysbd",  # Options: "blingfire" (default), "nltk", "pysbd", "syntok"
     )
     ```
@@ -123,7 +124,9 @@ This approach ensures that pronouns, references, and contextual cues in each chu
     The DataFrame contains the following columns:
     * `document_idx`: The index of the document from which the chunk was extracted
     * `chunk_idx`: The chunk index within each document
-    * `num_sents`: The number of sentences in the chunk
+    * `max_chunk_sents`: The requested maximum sentences per chunk (configuration)
+    * `max_chunk_tokens`: The requested maximum tokens per chunk (configuration, null if not specified)
+    * `num_sents`: The actual number of sentences in the chunk
     * `chunk`: The chunk text
 
     Additional columns are available when `debug=True`:
@@ -140,6 +143,80 @@ This approach ensures that pronouns, references, and contextual cues in each chu
 
     This works identically for both Polars and pandas DataFrames.
 
+### Advanced Chunking Strategies
+
+#### Token-Based Chunking
+
+In addition to sentence-based chunking, you can specify a maximum token count per chunk using `max_chunk_tokens`. This is useful when you need chunks that fit within a specific token budget:
+
+```python
+# Token-based chunking: accumulate sentences until token limit
+df, X = model.encode(
+    docs,
+    max_chunk_tokens=128,  # Maximum 128 tokens per chunk
+    max_chunk_sents=None,  # No sentence limit
+)
+```
+
+You can also combine both constraints—whichever limit is reached first determines the chunk boundary:
+
+```python
+# Combined constraints: "at most 3 sentences AND at most 128 tokens"
+df, X = model.encode(
+    docs,
+    max_chunk_sents=3,
+    max_chunk_tokens=128,  # Whichever limit is hit first
+)
+```
+
+**Handling long sentences:** By default, sentences exceeding `max_chunk_tokens` are split into multiple chunks at token boundaries (`split_long_sents=True`). Set `split_long_sents=False` to keep long sentences intact as their own chunks.
+
+#### Comparing Multiple Chunk Configurations
+
+To experiment with different chunk sizes simultaneously, pass lists to `max_chunk_sents` and/or `max_chunk_tokens`. When both are lists, they must have the same length and will be processed as **aligned pairs**:
+
+```python
+# Multiple sentence sizes
+df, X = model.encode(
+    docs,
+    max_chunk_sents=[1, 2, 3],  # Creates 3 configurations
+)
+
+# Multiple token limits
+df, X = model.encode(
+    docs,
+    max_chunk_tokens=[64, 128, 256],  # Creates 3 configurations
+)
+
+# Aligned pairs (NOT cartesian product)
+df, X = model.encode(
+    docs,
+    max_chunk_sents=[1, 2, 3],
+    max_chunk_tokens=[64, 128, 256],  # Same length required
+    # Creates: (1, 64), (2, 128), (3, 256) - only 3 configs!
+)
+```
+
+The resulting DataFrame includes `max_chunk_sents` and `max_chunk_tokens` columns to identify which configuration produced each chunk:
+
+```python
+import polars as pl
+
+# Filter to specific configuration (Polars)
+# Cast to int since config columns can contain None
+df_small_chunks = df.filter(
+    (pl.col("max_chunk_sents").cast(pl.Int64, strict=False) == 1) &
+    (pl.col("max_chunk_tokens").cast(pl.Int64, strict=False) == 64)
+)
+
+# For pandas DataFrames, direct comparison works:
+# df_small_chunks = df[(df["max_chunk_sents"] == 1) & (df["max_chunk_tokens"] == 64)]
+```
+
+**Notes:**
+- When using `max_chunk_tokens`, `chunk_overlap_sents` must be an integer (number of sentences), not a fraction.
+- Config columns may contain `None` values, stored as Object dtype in Polars. Cast to Int64 for numeric comparisons.
+
 ### Using Pandas Instead of Polars
 
 Afterthoughts uses Polars by default for its speed and memory efficiency, but pandas is fully supported for users who prefer it or need compatibility with existing code. Simply set `return_frame="pandas"`:
@@ -147,13 +224,13 @@ Afterthoughts uses Polars by default for its speed and memory efficiency, but pa
 ```python
 df, X = model.encode(
     docs,
-    num_sents=2,
+    max_chunk_sents=2,
     return_frame="pandas",  # Return a pandas DataFrame
 )
 
 # Use familiar pandas operations
 df.groupby("document_idx").size()
-df[df["num_sents"] == 2]
+df[df["max_chunk_sents"] == 2]
 ```
 
 The pandas integration requires pandas to be installed (`pip install pandas`). The DataFrame schema and all functionality remain identical—only the return type changes.
@@ -279,7 +356,7 @@ model = Encoder(
 query_embeds = model.encode_queries(["how much protein should a female eat"])
 
 # Documents are encoded without any prompt
-df, X = model.encode(docs, num_sents=2)
+df, X = model.encode(docs, max_chunk_sents=2)
 ```
 
 #### BGE Models

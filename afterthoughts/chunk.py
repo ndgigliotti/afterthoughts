@@ -560,7 +560,7 @@ def get_chunk_idx(
     input_ids: torch.Tensor,
     sentence_ids: torch.Tensor,
     max_chunk_sents: list[int] | tuple[int, ...] | int,
-    chunk_overlap: int | float | list[int] | dict[int, int] = 0.5,
+    chunk_overlap_sents: int | float | list[int] | dict[int, int] = 0.5,
     sequence_idx: torch.Tensor | None = None,
     pad_token_id: int = 0,
 ) -> dict[str, Any]:
@@ -574,7 +574,7 @@ def get_chunk_idx(
         Tensor containing sentence IDs, padded with -1.
     max_chunk_sents : list, tuple, or int
         Number of sentences per chunk.
-    chunk_overlap : int, float, list, or dict, optional
+    chunk_overlap_sents : int, float, list, or dict, optional
         Overlap between chunks (number or fraction of sentences).
         Default is 0.5.
     sequence_idx : torch.Tensor or None, optional
@@ -639,7 +639,7 @@ def get_chunk_idx(
         unique_sent_ids = torch.unique(seq_sentence_ids[seq_sentence_ids != -1])
         chunk_counter = 0  # Reset for each sequence
         for i, size in enumerate(max_chunk_sents):
-            overlap_sents = get_overlap_count(chunk_overlap, size, i)
+            overlap_sents = get_overlap_count(chunk_overlap_sents, size, i)
             step = size - overlap_sents
             eff_size = min(size, len(unique_sent_ids))
             chunk_sent_ids = unique_sent_ids.unfold(0, eff_size, step)
@@ -689,7 +689,7 @@ def get_chunk_idx_by_tokens(
     sentence_ids: torch.Tensor,
     max_chunk_tokens: int,
     max_chunk_sents: int | None = None,
-    chunk_overlap: int = 0,
+    chunk_overlap_sents: int = 0,
     sequence_idx: torch.Tensor | None = None,
     pad_token_id: int = 0,
     split_long_sents: bool = True,
@@ -713,7 +713,7 @@ def get_chunk_idx_by_tokens(
         Maximum number of sentences per chunk. If None, chunks are limited only
         by `max_chunk_tokens`. If specified, chunks are limited by whichever
         constraint is hit first (token count or sentence count). Default is None.
-    chunk_overlap : int, optional
+    chunk_overlap_sents : int, optional
         Number of sentences to overlap between consecutive chunks. Must be a
         non-negative integer. Default is 0.
     sequence_idx : torch.Tensor or None, optional
@@ -767,11 +767,11 @@ def get_chunk_idx_by_tokens(
     ...     input_ids, sentence_ids, max_chunk_tokens=64, split_long_sents=False
     ... )
     """
-    # Validate chunk_overlap is a non-negative integer
-    if not isinstance(chunk_overlap, int) or chunk_overlap < 0:
+    # Validate chunk_overlap_sents is a non-negative integer
+    if not isinstance(chunk_overlap_sents, int) or chunk_overlap_sents < 0:
         raise ValueError(
-            f"`chunk_overlap` must be a non-negative integer when using "
-            f"`max_chunk_tokens`, got {chunk_overlap!r}"
+            f"`chunk_overlap_sents` must be a non-negative integer when using "
+            f"`max_chunk_tokens`, got {chunk_overlap_sents!r}"
         )
 
     if sequence_idx is None:
@@ -839,7 +839,9 @@ def get_chunk_idx_by_tokens(
                 if current_chunk:
                     chunks.append(current_chunk)
                     # Apply overlap: keep last N sentences
-                    overlap_sents = current_chunk[-chunk_overlap:] if chunk_overlap > 0 else []
+                    overlap_sents = (
+                        current_chunk[-chunk_overlap_sents:] if chunk_overlap_sents > 0 else []
+                    )
                 else:
                     overlap_sents = []
 
@@ -978,7 +980,7 @@ def _compute_chunk_embeds_slow(
     sequence_idx: torch.Tensor,
     tokenizer: PreTrainedTokenizerBase,
     max_chunk_sents: int | list[int] | tuple[int, ...] = 2,
-    chunk_overlap: int | float | list[int] | dict[int, int] = 0.5,
+    chunk_overlap_sents: int | float | list[int] | dict[int, int] = 0.5,
     exclude_special_tokens: bool = True,
 ) -> dict[str, torch.Tensor]:
     """
@@ -998,7 +1000,7 @@ def _compute_chunk_embeds_slow(
         Tokenizer object used to identify special tokens.
     max_chunk_sents : int or list or tuple, optional
         Number of sentences per chunk. Default is 2.
-    chunk_overlap : int or float or list or dict, optional
+    chunk_overlap_sents : int or float or list or dict, optional
         Overlap between chunks. Default is 0.5.
     exclude_special_tokens : bool, optional
         If True (default), exclude all special tokens from mean pooling.
@@ -1018,7 +1020,7 @@ def _compute_chunk_embeds_slow(
         input_ids,
         sentence_ids,
         max_chunk_sents=max_chunk_sents,
-        chunk_overlap=chunk_overlap,
+        chunk_overlap_sents=chunk_overlap_sents,
         sequence_idx=sequence_idx,
     )
 
@@ -1151,7 +1153,7 @@ def _compute_chunk_embeds(
     sequence_idx: torch.Tensor,
     tokenizer: PreTrainedTokenizerBase,
     max_chunk_sents: int | list[int] | tuple[int, ...] | None = 2,
-    chunk_overlap: int | float | list[int] | dict[int, int] = 0.5,
+    chunk_overlap_sents: int | float | list[int] | dict[int, int] = 0.5,
     exclude_special_tokens: bool = True,
     max_chunk_tokens: int | None = None,
     split_long_sents: bool = True,
@@ -1187,7 +1189,7 @@ def _compute_chunk_embeds(
         - list/tuple: Extract multiple chunk sizes simultaneously
         - None: No sentence limit (only used with max_chunk_tokens)
         Example: [1, 2, 3] extracts 1-sentence, 2-sentence, and 3-sentence chunks.
-    chunk_overlap : int, float, list[int], or dict[int, int], optional
+    chunk_overlap_sents : int, float, list[int], or dict[int, int], optional
         Overlap between consecutive chunks in number of sentences, by default 0.5.
         - float: Fraction of chunk size (e.g., 0.5 means 50% overlap)
         - int: Absolute number of sentences to overlap
@@ -1241,13 +1243,13 @@ def _compute_chunk_embeds(
     # Dispatch to token-based chunking if max_chunk_tokens is specified
     if max_chunk_tokens is not None:
         # Token-based chunking (with optional max_chunk_sents limit)
-        # chunk_overlap must be an int for token-based chunking (validated earlier)
+        # chunk_overlap_sents must be an int for token-based chunking (validated earlier)
         chunk_data = get_chunk_idx_by_tokens(
             input_ids,
             sentence_ids,
             max_chunk_tokens=max_chunk_tokens,
             max_chunk_sents=max_chunk_sents if isinstance(max_chunk_sents, int) else None,
-            chunk_overlap=chunk_overlap if isinstance(chunk_overlap, int) else 0,
+            chunk_overlap_sents=chunk_overlap_sents if isinstance(chunk_overlap_sents, int) else 0,
             sequence_idx=sequence_idx,
             pad_token_id=tokenizer.pad_token_id,
             split_long_sents=split_long_sents,
@@ -1260,7 +1262,7 @@ def _compute_chunk_embeds(
             input_ids,
             sentence_ids,
             max_chunk_sents=max_chunk_sents,
-            chunk_overlap=chunk_overlap,
+            chunk_overlap_sents=chunk_overlap_sents,
             sequence_idx=sequence_idx,
             pad_token_id=tokenizer.pad_token_id,
         )
@@ -1387,7 +1389,7 @@ def tokenize_with_sentence_boundaries(
     method: str = "blingfire",
     max_length: int | None = 512,
     prechunk: bool = True,
-    prechunk_overlap: float | int = 0.5,
+    prechunk_overlap_tokens: float | int = 0.5,
     return_tokenized_dataset: bool = False,
     batch_size: int = 10,
     n_jobs: int | None = None,
@@ -1420,7 +1422,7 @@ def tokenize_with_sentence_boundaries(
     prechunk : bool, optional
         Whether to split documents exceeding max_length into overlapping sequences,
         by default True. If False, documents are truncated at max_length.
-    prechunk_overlap : float or int, optional
+    prechunk_overlap_tokens : float or int, optional
         Overlap for splitting long documents into sequences, by default 0.5.
         - float in [0, 1): Fraction of max_length to overlap
         - int: Absolute number of sentences to overlap
@@ -1615,7 +1617,7 @@ def tokenize_with_sentence_boundaries(
                 sample_idx=i,
                 max_length=resolved_max_length,
                 padding=None,
-                overlap=prechunk_overlap,
+                overlap=prechunk_overlap_tokens,
                 add_special_tokens=True,
                 reset_sentence_ids_on_overflow=False,
             )
@@ -1657,7 +1659,7 @@ def _tokenize_batch_with_sentence_boundaries(
     tokenizer: PreTrainedTokenizerBase,
     max_length: int | None = None,
     prechunk: bool = True,
-    prechunk_overlap: float | int = 0.5,
+    prechunk_overlap_tokens: float | int = 0.5,
 ) -> dict[str, Any]:
     """Tokenize a list of documents into input sequences for the model."""
     inputs_result = tokenize_with_sentence_boundaries(
@@ -1666,7 +1668,7 @@ def _tokenize_batch_with_sentence_boundaries(
         method="blingfire",
         max_length=max_length,
         prechunk=prechunk,
-        prechunk_overlap=prechunk_overlap,
+        prechunk_overlap_tokens=prechunk_overlap_tokens,
     )
     if not isinstance(inputs_result, dict):
         raise TypeError("Expected tokenize_with_sentence_boundaries to return a dict")
