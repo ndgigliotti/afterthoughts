@@ -848,7 +848,7 @@ def get_chunk_idx_by_tokens(
                     if split_long_sents:
                         # Split the sentence into multiple chunks
                         warnings.warn(
-                            f"Sentence {sent_id_int} has {sent_tokens} tokens, "
+                            f"Sequence {seq_idx.item()}: Sentence {sent_id_int} has {sent_tokens} tokens, "
                             f"exceeding max_chunk_tokens={max_chunk_tokens}. "
                             "Splitting into multiple chunks.",
                             stacklevel=2,
@@ -870,7 +870,7 @@ def get_chunk_idx_by_tokens(
                     else:
                         # Keep sentence intact, exceeding the limit
                         warnings.warn(
-                            f"Sentence {sent_id_int} has {sent_tokens} tokens, "
+                            f"Sequence {seq_idx.item()}: Sentence {sent_id_int} has {sent_tokens} tokens, "
                             f"exceeding max_chunk_tokens={max_chunk_tokens}. "
                             "Including as its own chunk without splitting.",
                             stacklevel=2,

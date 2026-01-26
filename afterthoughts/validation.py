@@ -32,48 +32,71 @@ def validate_docs(docs: list[str]) -> None:
 
 
 def validate_max_chunk_sents(
-    max_chunk_sents: int | list[int] | tuple[int, ...] | None,
-    max_chunk_tokens: int | None = None,
+    max_chunk_sents: int | list[int | None] | tuple[int | None, ...] | None,
+    max_chunk_tokens: int | list[int] | tuple[int, ...] | None = None,
 ) -> None:
-    """Validate max_chunk_sents parameter."""
-    # Allow None only when max_chunk_tokens is specified
+    """Validate max_chunk_sents parameter.
+
+    Supports None as a value in lists when max_chunk_tokens is specified.
+    """
+    # Allow None scalar only when max_chunk_tokens is specified
     if max_chunk_sents is None:
         if max_chunk_tokens is None:
             raise ValueError("max_chunk_sents cannot be None unless max_chunk_tokens is specified")
         return
-    match max_chunk_sents:
-        case int(n) if n < 1:
-            raise ValueError(f"max_chunk_sents must be >= 1, got {n}")
-        case list() | tuple() as sizes if len(sizes) == 0:
+
+    # Validate single int value
+    if isinstance(max_chunk_sents, int):
+        if max_chunk_sents < 1:
+            raise ValueError(f"max_chunk_sents must be >= 1, got {max_chunk_sents}")
+        return
+
+    # Validate list/tuple
+    if isinstance(max_chunk_sents, (list, tuple)):
+        if len(max_chunk_sents) == 0:
             raise ValueError("max_chunk_sents cannot be empty")
-        case list() | tuple() as sizes if any(not isinstance(s, int) for s in sizes):
-            raise TypeError("max_chunk_sents values must be integers")
-        case list() | tuple() as sizes if any(s < 1 for s in sizes):
-            raise ValueError(f"max_chunk_sents values must be >= 1, got {list(sizes)}")
+
+        # Check types (allow int or None)
+        for i, s in enumerate(max_chunk_sents):
+            if s is None:
+                # None is allowed only if max_chunk_tokens is specified
+                if max_chunk_tokens is None:
+                    raise ValueError(
+                        f"max_chunk_sents[{i}] is None, but max_chunk_tokens is not specified. "
+                        "None values require max_chunk_tokens to be set."
+                    )
+            elif isinstance(s, int):
+                if s < 1:
+                    raise ValueError(f"max_chunk_sents[{i}] must be >= 1, got {s}")
+            else:
+                raise TypeError(f"max_chunk_sents[{i}] must be int or None, got {type(s).__name__}")
+        return
+
+    raise TypeError(
+        f"max_chunk_sents must be int, list, tuple, or None, got {type(max_chunk_sents).__name__}"
+    )
 
 
-def validate_chunk_overlap(chunk_overlap: int | float | list[int] | dict[int, int]) -> None:
-    """Validate chunk_overlap parameter."""
-    match chunk_overlap:
-        case float(f) if not (0 <= f < 1):
-            raise ValueError(f"chunk_overlap as float must be in [0, 1), got {f}")
+def validate_chunk_overlap_sents(chunk_overlap_sents: int) -> None:
+    """Validate chunk_overlap_sents parameter."""
+    match chunk_overlap_sents:
         case int(i) if i < 0:
-            raise ValueError(f"chunk_overlap as int must be >= 0, got {i}")
-        case list() as overlaps if any(not isinstance(o, int) or o < 0 for o in overlaps):
-            raise ValueError(
-                f"chunk_overlap list values must be non-negative integers, got {overlaps}"
+            raise ValueError(f"chunk_overlap_sents must be >= 0, got {i}")
+        case int():
+            pass
+        case _:
+            raise TypeError(
+                f"chunk_overlap_sents must be an integer, got {type(chunk_overlap_sents).__name__}"
             )
-        case dict() as mapping if any(not isinstance(v, int) or v < 0 for v in mapping.values()):
-            raise ValueError("chunk_overlap dict values must be non-negative integers")
 
 
-def validate_prechunk_overlap(prechunk_overlap: float | int) -> None:
-    """Validate prechunk_overlap parameter."""
-    match prechunk_overlap:
+def validate_prechunk_overlap_tokens(prechunk_overlap_tokens: float | int) -> None:
+    """Validate prechunk_overlap_tokens parameter."""
+    match prechunk_overlap_tokens:
         case float(f) if not (0 <= f < 1):
-            raise ValueError(f"prechunk_overlap as float must be in [0, 1), got {f}")
+            raise ValueError(f"prechunk_overlap_tokens as float must be in [0, 1), got {f}")
         case int(i) if i < 0:
-            raise ValueError(f"prechunk_overlap as int must be >= 0, got {i}")
+            raise ValueError(f"prechunk_overlap_tokens as int must be >= 0, got {i}")
 
 
 def validate_sent_tokenizer(sent_tokenizer: str) -> None:
@@ -114,54 +137,79 @@ def validate_positive_int(value: int | None, name: str) -> None:
 
 
 def validate_max_chunk_tokens(
-    max_chunk_tokens: int | None,
+    max_chunk_tokens: int | list[int] | tuple[int, ...] | None,
     max_chunk_sents: int | list[int] | tuple[int, ...] | None,
-    chunk_overlap: int | float | list[int] | dict[int, int],
 ) -> None:
-    """Validate max_chunk_tokens parameter."""
-    if max_chunk_tokens is not None:
-        if not isinstance(max_chunk_tokens, int):
-            raise TypeError(
-                f"max_chunk_tokens must be an integer, got {type(max_chunk_tokens).__name__}"
-            )
+    """Validate max_chunk_tokens parameter.
+
+    Supports single values or lists for cartesian product generation.
+    """
+    if max_chunk_tokens is None:
+        return
+
+    # Validate single value
+    if isinstance(max_chunk_tokens, int):
         if max_chunk_tokens < 1:
             raise ValueError(f"max_chunk_tokens must be >= 1, got {max_chunk_tokens}")
-        # When max_chunk_tokens is used, max_chunk_sents can only be int or None (not list/tuple)
-        if isinstance(max_chunk_sents, (list, tuple)):
-            raise ValueError(
-                "max_chunk_sents cannot be a list/tuple when max_chunk_tokens is specified. "
-                "Use a single int value or None."
-            )
-        # When max_chunk_tokens is used, chunk_overlap must be an integer
-        if not isinstance(chunk_overlap, int):
-            raise TypeError(
-                f"chunk_overlap must be an integer when max_chunk_tokens is specified, "
-                f"got {type(chunk_overlap).__name__}. Use an integer number of sentences."
-            )
-        if chunk_overlap < 0:
-            raise ValueError(
-                f"chunk_overlap must be >= 0 when max_chunk_tokens is specified, "
-                f"got {chunk_overlap}"
-            )
+        return
+
+    # Validate list/tuple
+    if isinstance(max_chunk_tokens, (list, tuple)):
+        if len(max_chunk_tokens) == 0:
+            raise ValueError("max_chunk_tokens cannot be empty")
+        if any(not isinstance(t, int) for t in max_chunk_tokens):
+            raise TypeError("max_chunk_tokens values must be integers")
+        if any(t < 1 for t in max_chunk_tokens):
+            raise ValueError(f"max_chunk_tokens values must be >= 1, got {list(max_chunk_tokens)}")
+        return
+
+    raise TypeError(
+        f"max_chunk_tokens must be an int, list, or tuple, got {type(max_chunk_tokens).__name__}"
+    )
+
+
+def validate_chunk_config_pair(
+    max_chunk_sents: int | None,
+    max_chunk_tokens: int | None,
+) -> None:
+    """Validate a single (max_chunk_sents, max_chunk_tokens) configuration pair.
+
+    Parameters
+    ----------
+    max_chunk_sents : int or None
+        Maximum sentences per chunk for this config.
+    max_chunk_tokens : int or None
+        Maximum tokens per chunk for this config.
+
+    Raises
+    ------
+    ValueError
+        If the pair is invalid (e.g., both None).
+    """
+    if max_chunk_sents is None and max_chunk_tokens is None:
+        raise ValueError(
+            "At least one of max_chunk_sents or max_chunk_tokens must be specified. "
+            "Got both as None."
+        )
 
 
 def validate_encode_params(
     docs: list[str],
     max_chunk_sents: int | list[int] | tuple[int, ...] | None,
-    chunk_overlap: int | float | list[int] | dict[int, int],
-    prechunk_overlap: float | int,
+    chunk_overlap_sents: int,
+    prechunk_overlap_tokens: float | int,
     sent_tokenizer: str,
     return_frame: str,
     max_batch_tokens: int,
     max_length: int | None,
-    max_chunk_tokens: int | None = None,
+    max_chunk_tokens: int | list[int] | tuple[int, ...] | None = None,
 ) -> None:
     """Validate all parameters for Encoder.encode()."""
     validate_docs(docs)
-    validate_max_chunk_tokens(max_chunk_tokens, max_chunk_sents, chunk_overlap)
+    validate_max_chunk_tokens(max_chunk_tokens, max_chunk_sents)
     validate_max_chunk_sents(max_chunk_sents, max_chunk_tokens)
-    validate_chunk_overlap(chunk_overlap)
-    validate_prechunk_overlap(prechunk_overlap)
+    validate_chunk_overlap_sents(chunk_overlap_sents)
+    validate_prechunk_overlap_tokens(prechunk_overlap_tokens)
     validate_sent_tokenizer(sent_tokenizer)
     validate_return_frame(return_frame)
     validate_positive_int(max_batch_tokens, "max_batch_tokens")
