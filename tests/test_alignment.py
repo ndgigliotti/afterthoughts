@@ -18,10 +18,10 @@ Note: These tests require downloading a model and are slower than unit tests.
 import numpy as np
 from numpy.linalg import norm
 
-from afterthoughts import Encoder
+from afterthoughts import LateEncoder
 
 
-def encode_text_as_query(model: Encoder, text: str) -> np.ndarray:
+def encode_text_as_query(model: LateEncoder, text: str) -> np.ndarray:
     """Encode text using the query encoder for comparison."""
     return model.encode_queries([text])[0]
 
@@ -32,7 +32,7 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def get_avg_similarity(
-    model: Encoder,
+    model: LateEncoder,
     query: str,
     embeddings: np.ndarray,
     doc_indices: list[int],

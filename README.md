@@ -14,9 +14,9 @@ pip install afterthoughts
 ```
 
 ```python
-from afterthoughts import Encoder
+from afterthoughts import LateEncoder
 
-model = Encoder("sentence-transformers/multi-qa-MiniLM-L6-cos-v1")
+model = LateEncoder("sentence-transformers/multi-qa-MiniLM-L6-cos-v1")
 
 docs = [
     "The Amazon rainforest produces 20% of Earth's oxygen. "
@@ -85,13 +85,13 @@ This approach ensures that pronouns, references, and contextual cues in each chu
     pip install afterthoughts
     ```
 
-2. Create an `Encoder` object and load a transformer model.
+2. Create a `LateEncoder` object and load a transformer model.
 
     ```python
-    from afterthoughts import Encoder
+    from afterthoughts import LateEncoder
 
     # Choose a model which works well with mean-tokens pooling
-    model = Encoder("sentence-transformers/multi-qa-MiniLM-L6-cos-v1")
+    model = LateEncoder("sentence-transformers/multi-qa-MiniLM-L6-cos-v1")
     ```
 
 3. Prepare a list of documents `docs` (strings) from which to extract chunk embeddings.
@@ -244,17 +244,17 @@ The pandas integration requires pandas to be installed (`pip install pandas`). T
 
 ### Memory Optimizations
 
-The `Encoder` class supports two memory optimization parameters:
+The `LateEncoder` class supports two memory optimization parameters:
 
 #### Dimension Truncation (`truncate_dims`)
 
 For models trained with Matryoshka Representation Learning (MRL), you can truncate embeddings to smaller dimensions with minimal quality loss. No retraining required—just slice the first N dimensions.
 
 ```python
-from afterthoughts import Encoder
+from afterthoughts import LateEncoder
 
 # This model was trained with MRL at dimensions [768, 512, 256, 128, 64]
-model = Encoder(
+model = LateEncoder(
     "tomaarsen/mpnet-base-nli-matryoshka",
     truncate_dims=256,  # Truncate to 256 dimensions
 )
@@ -269,9 +269,9 @@ Note: Truncation also works on non-MRL models, but may degrade embedding quality
 Convert chunk embeddings to float16 for 2x memory reduction:
 
 ```python
-from afterthoughts import Encoder
+from afterthoughts import LateEncoder
 
-model = Encoder(
+model = LateEncoder(
     "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
     half_embeds=True,  # Convert embeddings to float16
 )
@@ -287,9 +287,9 @@ To enable automatic mixed precision, set the `amp` parameter to `True` during in
 
 ```python
 import torch
-from afterthoughts import Encoder
+from afterthoughts import LateEncoder
 
-model = Encoder(
+model = LateEncoder(
     "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
     amp=True,
     amp_dtype=torch.float16, # Choose the lower-precision data type
@@ -302,8 +302,8 @@ To run the model in 16-bit precision, set the `torch_dtype` parameter to `torch.
 
 ```python
 import torch
-from afterthoughts import Encoder
-model = Encoder(
+from afterthoughts import LateEncoder
+model = LateEncoder(
     "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
     torch_dtype=torch.float16,  # Run the model in 16-bit precision
 )
@@ -312,9 +312,9 @@ model = Encoder(
 Alternatively, you can convert the model to 16-bit precision after it has been loaded:
 
 ```python
-from afterthoughts import Encoder
+from afterthoughts import LateEncoder
 
-model = Encoder("sentence-transformers/multi-qa-MiniLM-L6-cos-v1")
+model = LateEncoder("sentence-transformers/multi-qa-MiniLM-L6-cos-v1")
 model.half()  # Convert the model to 16-bit precision
 ```
 
@@ -352,9 +352,9 @@ Many modern embedding models require instruction prefixes to achieve optimal per
 E5-instruct models (e5-mistral-7b-instruct, multilingual-e5-large-instruct) require a task instruction for queries but not for documents:
 
 ```python
-from afterthoughts import Encoder
+from afterthoughts import LateEncoder
 
-model = Encoder(
+model = LateEncoder(
     "intfloat/multilingual-e5-large-instruct",
     query_prompt="Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
 )
@@ -371,7 +371,7 @@ df, X = model.encode(docs, max_chunk_sents=2)
 BGE models use a simpler prefix for queries:
 
 ```python
-model = Encoder(
+model = LateEncoder(
     "BAAI/bge-large-en-v1.5",
     query_prompt="Represent this sentence for searching relevant passages: ",
 )
@@ -382,7 +382,7 @@ model = Encoder(
 Nomic requires task prefixes for both queries and documents:
 
 ```python
-model = Encoder(
+model = LateEncoder(
     "nomic-ai/nomic-embed-text-v1.5",
     query_prompt="search_query: ",
     document_prompt="search_document: ",
@@ -394,7 +394,7 @@ model = Encoder(
 Instructor models use domain-specific instructions for both queries and documents:
 
 ```python
-model = Encoder(
+model = LateEncoder(
     "hkunlp/instructor-large",
     query_prompt="Represent the Wikipedia question for retrieving supporting documents: ",
     document_prompt="Represent the Wikipedia document for retrieval: ",

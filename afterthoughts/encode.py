@@ -14,7 +14,7 @@
 
 """Main encoder class for extracting context-aware sentence-chunk embeddings.
 
-This module provides the Encoder class, which implements late chunking for
+This module provides the LateEncoder class, which implements late chunking for
 transformer-based embedding models. Late chunking processes entire documents
 through the model to capture full context, then extracts embeddings for
 sentence groups by mean-pooling token embeddings within sentence boundaries.
@@ -25,7 +25,7 @@ truncation for Matryoshka models, and memory-efficient float16 conversion.
 
 Classes
 -------
-Encoder : Main API for encoding documents and queries
+LateEncoder : Main API for encoding documents and queries
 
 Key Features
 ------------
@@ -38,7 +38,7 @@ Key Features
 
 Notes
 -----
-The Encoder class wraps HuggingFace transformers models and adds sentence-aware
+The LateEncoder class wraps HuggingFace transformers models and adds sentence-aware
 chunking on top of the model's token embeddings. This enables semantic search
 and retrieval over variable-length text chunks while maintaining full document
 context during encoding.
@@ -92,8 +92,8 @@ logger = logging.getLogger(__name__)
 _MIN_BATCHES_FOR_PARALLEL = 5
 
 
-class Encoder:
-    """Encoder for generating context-aware sentence-chunk embeddings.
+class LateEncoder:
+    """Encoder for generating context-aware sentence-chunk embeddings via late chunking.
 
     This class implements late chunking: encoding entire documents through a
     transformer model to capture full context, then extracting embeddings for
@@ -131,7 +131,7 @@ class Encoder:
     --------
     Basic usage with default settings:
 
-    >>> encoder = Encoder("sentence-transformers/all-MiniLM-L6-v2")
+    >>> encoder = LateEncoder("sentence-transformers/all-MiniLM-L6-v2")
     >>> docs = ["First sentence. Second sentence.", "Another document."]
     >>> df, embeddings = encoder.encode(docs, max_chunk_sents=1)
 
@@ -151,7 +151,7 @@ class Encoder:
 
     Use memory optimization for large datasets:
 
-    >>> encoder = Encoder(
+    >>> encoder = LateEncoder(
     ...     "sentence-transformers/all-MiniLM-L6-v2",
     ...     half_embeds=True,
     ...     normalize=True
@@ -182,7 +182,7 @@ class Encoder:
         document_prompt: str | None = None,
         _num_token_jobs: int | None = -1,
     ) -> None:
-        """Initialize an Encoder model.
+        """Initialize a LateEncoder model.
 
         Parameters
         ----------
@@ -256,7 +256,7 @@ class Encoder:
         assert isinstance(device, torch.device)
         return device
 
-    def to(self, device: torch.device | str | int) -> "Encoder":
+    def to(self, device: torch.device | str | int) -> "LateEncoder":
         """Move the model to a new device.
 
         Parameters
@@ -266,25 +266,25 @@ class Encoder:
 
         Returns
         -------
-        Encoder
+        LateEncoder
             Returns the model instance.
         """
         self.model.to(device)
         return self
 
-    def half(self) -> "Encoder":
+    def half(self) -> "LateEncoder":
         """Convert the model to half precision.
 
         Returns
         -------
-        Encoder
+        LateEncoder
             Returns the model instance.
         """
         self.model.half()
         self.model_dtype = self.model.dtype
         return self
 
-    def compile(self, mode: str = "reduce-overhead", dynamic: bool = True) -> "Encoder":
+    def compile(self, mode: str = "reduce-overhead", dynamic: bool = True) -> "LateEncoder":
         """Compile the model using torch.compile for potential speedups.
 
         This is an advanced feature. Compilation benefits vary significantly
@@ -303,7 +303,7 @@ class Encoder:
 
         Returns
         -------
-        Encoder
+        LateEncoder
             Returns the model instance for method chaining.
         """
         self.model = torch.compile(self.model, mode=mode, dynamic=dynamic)

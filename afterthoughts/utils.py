@@ -611,7 +611,7 @@ def get_device() -> str:
     Examples
     --------
     >>> device = get_device()
-    >>> encoder = Encoder("model-name", device=device)
+    >>> encoder = LateEncoder("model-name", device=device)
     """
     if torch.cuda.is_available():
         return "cuda"

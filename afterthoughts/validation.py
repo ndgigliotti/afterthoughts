@@ -204,7 +204,7 @@ def validate_encode_params(
     max_length: int | None,
     max_chunk_tokens: int | list[int] | tuple[int, ...] | None = None,
 ) -> None:
-    """Validate all parameters for Encoder.encode()."""
+    """Validate all parameters for LateEncoder.encode()."""
     validate_docs(docs)
     validate_max_chunk_tokens(max_chunk_tokens, max_chunk_sents)
     validate_max_chunk_sents(max_chunk_sents, max_chunk_tokens)
@@ -221,7 +221,7 @@ def validate_encode_queries_params(
     batch_size: int,
     max_length: int | None,
 ) -> None:
-    """Validate all parameters for Encoder.encode_queries()."""
+    """Validate all parameters for LateEncoder.encode_queries()."""
     validate_docs(queries)  # Same validation as docs
     validate_positive_int(batch_size, "batch_size")
     validate_positive_int(max_length, "max_length")

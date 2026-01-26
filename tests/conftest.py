@@ -3,7 +3,7 @@
 import pytest
 from transformers import AutoTokenizer
 
-from afterthoughts import Encoder
+from afterthoughts import LateEncoder
 
 MODEL_NAME = "sentence-transformers/paraphrase-MiniLM-L3-v2"
 
@@ -11,7 +11,7 @@ MODEL_NAME = "sentence-transformers/paraphrase-MiniLM-L3-v2"
 @pytest.fixture(scope="session")
 def model():
     """Load model once per test session to avoid repeated initialization."""
-    return Encoder(
+    return LateEncoder(
         model_name=MODEL_NAME,
         device="cpu",
         _num_token_jobs=1,
@@ -37,7 +37,7 @@ def encoded_2docs(model):
 @pytest.fixture(scope="session")
 def model_half_embeds():
     """Load model with half_embeds=True for testing float16 conversion."""
-    return Encoder(
+    return LateEncoder(
         model_name=MODEL_NAME,
         device="cpu",
         half_embeds=True,
@@ -48,7 +48,7 @@ def model_half_embeds():
 @pytest.fixture(scope="session")
 def model_truncate_dims():
     """Load model with truncate_dims=128 for testing dimension truncation."""
-    return Encoder(
+    return LateEncoder(
         model_name=MODEL_NAME,
         device="cpu",
         truncate_dims=128,

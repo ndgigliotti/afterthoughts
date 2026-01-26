@@ -3,7 +3,7 @@ import polars as pl
 import pytest
 import torch
 
-from afterthoughts import Encoder
+from afterthoughts import LateEncoder
 from afterthoughts.chunk import get_chunk_idx
 from afterthoughts.utils import move_or_convert_tensors
 
@@ -14,7 +14,7 @@ requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA n
 
 @requires_cuda
 def test_encoder_init():
-    """Test basic Encoder initialization."""
+    """Test basic LateEncoder initialization."""
     model_name = MODEL_NAME
     amp = False
     amp_dtype = torch.float16
@@ -22,7 +22,7 @@ def test_encoder_init():
     device = "cuda"
     _num_token_jobs = 8
 
-    encoder = Encoder(
+    encoder = LateEncoder(
         model_name=model_name,
         amp=amp,
         amp_dtype=amp_dtype,
@@ -42,8 +42,8 @@ def test_encoder_init():
 
 @requires_cuda
 def test_encoder_init_with_half_embeds_and_truncate_dims():
-    """Test Encoder initialization with half_embeds and truncate_dims parameters."""
-    encoder = Encoder(
+    """Test LateEncoder initialization with half_embeds and truncate_dims parameters."""
+    encoder = LateEncoder(
         model_name=MODEL_NAME,
         half_embeds=True,
         truncate_dims=128,
@@ -130,7 +130,7 @@ def test_move_or_convert_results_invalid_return_tensors():
 def test_encoder_to_cpu():
     model_name = MODEL_NAME
     device = "cuda"
-    encoder = Encoder(
+    encoder = LateEncoder(
         model_name=model_name,
         device=device,
     )
@@ -142,7 +142,7 @@ def test_encoder_to_cpu():
 
 @requires_cuda
 def test_encoder_to_cuda():
-    encoder = Encoder(
+    encoder = LateEncoder(
         model_name=MODEL_NAME,
         device="cpu",
         _num_token_jobs=1,
@@ -155,7 +155,7 @@ def test_encoder_to_cuda():
 
 @requires_cuda
 def test_encoder_to_device():
-    encoder = Encoder(
+    encoder = LateEncoder(
         model_name=MODEL_NAME,
         device="cpu",
         _num_token_jobs=1,
@@ -240,7 +240,7 @@ def test_encoder_encode_queries_preserves_order(model):
 
 def test_encoder_half_embeds_if_needed():
     """Test that half_embeds parameter converts embeddings to float16."""
-    encoder = Encoder(model_name=MODEL_NAME, device="cpu", half_embeds=True)
+    encoder = LateEncoder(model_name=MODEL_NAME, device="cpu", half_embeds=True)
     embeds = torch.randn(10, 10, dtype=torch.float32)
     reduced_embeds = encoder.half_embeds_if_needed(embeds)
     assert reduced_embeds.dtype == torch.float16
@@ -251,7 +251,7 @@ def test_encoder_half_embeds_if_needed():
 
 
 def test_encoder_normalize_if_needed():
-    encoder = Encoder(model_name=MODEL_NAME, device="cpu", normalize=True)
+    encoder = LateEncoder(model_name=MODEL_NAME, device="cpu", normalize=True)
     embeds = torch.randn(10, 10)
     normalized_embeds = encoder.normalize_if_needed(embeds)
     norms = torch.norm(normalized_embeds, dim=1)
@@ -295,11 +295,11 @@ def test_build_results_dataframe(return_frame, as_numpy):
     # Test for invalid return_frame value
     if return_frame == "teddies":
         with pytest.raises(ValueError, match="Invalid value for"):
-            Encoder._build_results_df(results, return_frame, as_numpy)
+            LateEncoder._build_results_df(results, return_frame, as_numpy)
     else:
         # Build the results dataframe and check the types
         expected_length = len(results["sample_idx"])
-        df, embeds = Encoder._build_results_df(results, return_frame, as_numpy)
+        df, embeds = LateEncoder._build_results_df(results, return_frame, as_numpy)
         assert isinstance(df, expected_df_type)
         assert isinstance(embeds, expected_embeds_type)
         assert len(df) == len(embeds) == expected_length
@@ -324,7 +324,7 @@ def test_build_results_dataframe_pandas():
     }
 
     expected_length = len(results["sample_idx"])
-    df, embeds = Encoder._build_results_df(results, return_frame, as_numpy)
+    df, embeds = LateEncoder._build_results_df(results, return_frame, as_numpy)
     assert isinstance(df, expected_df_type)
     assert isinstance(embeds, expected_embeds_type)
     assert len(df) == len(embeds) == expected_length
@@ -729,7 +729,7 @@ def test_deduplicate_averaging_correctness():
     }
 
     # Test averaging method
-    dedup_results = Encoder._deduplicate_chunk_embeds(results, method="average")
+    dedup_results = LateEncoder._deduplicate_chunk_embeds(results, method="average")
 
     # Should have 2 unique chunks
     assert len(dedup_results["document_idx"]) == 2
@@ -779,7 +779,7 @@ def test_deduplicate_first_method():
         ],
     }
 
-    dedup_results = Encoder._deduplicate_chunk_embeds(results, method="first")
+    dedup_results = LateEncoder._deduplicate_chunk_embeds(results, method="first")
 
     # Should have 2 unique chunks
     assert len(dedup_results["document_idx"]) == 2
@@ -881,7 +881,7 @@ def test_encode_queries_with_prompt(model):
 def test_encode_queries_with_init_prompt():
     """Test encode_queries with query_prompt set at initialization."""
     prompt = "Represent this for retrieval: "
-    encoder = Encoder(
+    encoder = LateEncoder(
         model_name=MODEL_NAME,
         device="cpu",
         query_prompt=prompt,
@@ -929,7 +929,7 @@ def test_encode_with_document_prompt(model):
 def test_encode_with_init_document_prompt():
     """Test encode() with document_prompt set at initialization."""
     prompt = "Document for retrieval: "
-    encoder = Encoder(
+    encoder = LateEncoder(
         model_name=MODEL_NAME,
         device="cpu",
         document_prompt=prompt,
