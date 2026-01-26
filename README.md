@@ -23,16 +23,16 @@ df, X = model.encode(docs, max_chunk_sents=1)  # 1 sentence per chunk
 
 ```python
 >>> df
-shape: (3, 5)
-┌──────────────┬───────────┬─────────────────┬──────────────────┬─────────────────────────────────┐
-│ document_idx ┆ chunk_idx ┆ max_chunk_sents ┆ max_chunk_tokens ┆ chunk                           │
-│ ---          ┆ ---       ┆ ---             ┆ ---              ┆ ---                             │
-│ i64          ┆ i64       ┆ i64             ┆ i64              ┆ str                             │
-╞══════════════╪═══════════╪═════════════════╪══════════════════╪═════════════════════════════════╡
-│ 0            ┆ 0         ┆ 1               ┆ null             ┆ The Amazon rainforest produces… │
-│ 0            ┆ 1         ┆ 1               ┆ null             ┆ Deforestation threatens its bi… │
-│ 0            ┆ 2         ┆ 1               ┆ null             ┆ Scientists warn of a tipping p… │
-└──────────────┴───────────┴─────────────────┴──────────────────┴─────────────────────────────────┘
+shape: (3, 7)
+┌─────┬──────────────┬───────────┬─────────────────┬──────────────────┬───────────┬─────────────────────────────────┐
+│ idx ┆ document_idx ┆ chunk_idx ┆ max_chunk_sents ┆ max_chunk_tokens ┆ num_sents ┆ chunk                           │
+│ --- ┆ ---          ┆ ---       ┆ ---             ┆ ---              ┆ ---       ┆ ---                             │
+│ u32 ┆ i64          ┆ i64       ┆ i64             ┆ null             ┆ i64       ┆ str                             │
+╞═════╪══════════════╪═══════════╪═════════════════╪══════════════════╪═══════════╪═════════════════════════════════╡
+│ 0   ┆ 0            ┆ 0         ┆ 1               ┆ null             ┆ 1         ┆ The Amazon rainforest produces… │
+│ 1   ┆ 0            ┆ 1         ┆ 1               ┆ null             ┆ 1         ┆ Deforestation threatens its bi… │
+│ 2   ┆ 0            ┆ 2         ┆ 1               ┆ null             ┆ 1         ┆ Scientists warn of a tipping p… │
+└─────┴──────────────┴───────────┴─────────────────┴──────────────────┴───────────┴─────────────────────────────────┘
 
 >>> X.shape
 (3, 384)  # 3 sentence embeddings, each with full document context
