@@ -1,5 +1,10 @@
 # Afterthoughts
 
+[![CI](https://github.com/ndgigliotti/afterthoughts/actions/workflows/ci.yml/badge.svg)](https://github.com/ndgigliotti/afterthoughts/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/afterthoughts.svg)](https://pypi.org/project/afterthoughts/)
+[![Python versions](https://img.shields.io/pypi/pyversions/afterthoughts.svg)](https://pypi.org/project/afterthoughts/)
+[![License](https://img.shields.io/pypi/l/afterthoughts.svg)](https://github.com/ndgigliotti/afterthoughts/blob/main/LICENSE)
+
 A Python library for late chunking ([Günther et al., 2024](https://arxiv.org/abs/2409.04701)) that preserves context across chunks for improved RAG retrieval, semantic search, clustering, and exploratory data analysis.
 
 ## Quick Start
@@ -24,15 +29,15 @@ df, X = model.encode(docs, max_chunk_sents=1)  # 1 sentence per chunk
 ```python
 >>> df
 shape: (3, 7)
-┌─────┬──────────────┬───────────┬─────────────────┬──────────────────┬───────────┬─────────────────────────────────┐
-│ idx ┆ document_idx ┆ chunk_idx ┆ max_chunk_sents ┆ max_chunk_tokens ┆ num_sents ┆ chunk                           │
-│ --- ┆ ---          ┆ ---       ┆ ---             ┆ ---              ┆ ---       ┆ ---                             │
-│ u32 ┆ i64          ┆ i64       ┆ i64             ┆ null             ┆ i64       ┆ str                             │
-╞═════╪══════════════╪═══════════╪═════════════════╪══════════════════╪═══════════╪═════════════════════════════════╡
-│ 0   ┆ 0            ┆ 0         ┆ 1               ┆ null             ┆ 1         ┆ The Amazon rainforest produces… │
-│ 1   ┆ 0            ┆ 1         ┆ 1               ┆ null             ┆ 1         ┆ Deforestation threatens its bi… │
-│ 2   ┆ 0            ┆ 2         ┆ 1               ┆ null             ┆ 1         ┆ Scientists warn of a tipping p… │
-└─────┴──────────────┴───────────┴─────────────────┴──────────────────┴───────────┴─────────────────────────────────┘
+┌─────┬──────────────┬───────────┬─────────────────┬──────────────────┬───────────┬───────────────────────────────────────┐
+│ idx ┆ document_idx ┆ chunk_idx ┆ max_chunk_sents ┆ max_chunk_tokens ┆ num_sents ┆ chunk                                 │
+│ --- ┆ ---          ┆ ---       ┆ ---             ┆ ---              ┆ ---       ┆ ---                                   │
+│ u32 ┆ i64          ┆ i64       ┆ i64             ┆ null             ┆ i64       ┆ str                                   │
+╞═════╪══════════════╪═══════════╪═════════════════╪══════════════════╪═══════════╪═══════════════════════════════════════╡
+│ 0   ┆ 0            ┆ 0         ┆ 1               ┆ null             ┆ 1         ┆ The Amazon rainforest produces 20% o… │
+│ 1   ┆ 0            ┆ 1         ┆ 1               ┆ null             ┆ 1         ┆ Deforestation threatens its biodiver… │
+│ 2   ┆ 0            ┆ 2         ┆ 1               ┆ null             ┆ 1         ┆ Scientists warn of a tipping point.   │
+└─────┴──────────────┴───────────┴─────────────────┴──────────────────┴───────────┴───────────────────────────────────────┘
 
 >>> X.shape
 (3, 384)  # 3 sentence embeddings, each with full document context
