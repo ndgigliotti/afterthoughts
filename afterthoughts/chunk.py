@@ -728,6 +728,11 @@ def get_chunk_idx_by_tokens(
         - False: Keep the sentence intact as its own chunk, exceeding the limit.
           A warning is issued when this occurs.
 
+        Note: This parameter only affects chunking at the `max_chunk_tokens`
+        boundary. By the time this function is called, input sequences have
+        already been bounded to the model's max_length through tokenization
+        and prechunking, so sentences cannot exceed that limit.
+
     Returns
     -------
     dict

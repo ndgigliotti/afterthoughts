@@ -169,7 +169,7 @@ df, X = model.encode(
 )
 ```
 
-**Handling long sentences:** By default, sentences exceeding `max_chunk_tokens` are split into multiple chunks at token boundaries (`split_long_sents=True`). Set `split_long_sents=False` to keep long sentences intact as their own chunks.
+**Handling long sentences:** By default, sentences exceeding `max_chunk_tokens` are split into multiple chunks at token boundaries (`split_long_sents=True`). Set `split_long_sents=False` to keep long sentences intact as their own chunks. Note that this parameter only affects chunking at the `max_chunk_tokens` boundary—sentences exceeding the model's `max_length` are handled automatically during tokenization through prechunking.
 
 #### Comparing Multiple Chunk Configurations
 

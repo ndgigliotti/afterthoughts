@@ -577,12 +577,13 @@ class Encoder:
         df_dict = move_or_convert_tensors(df_dict, return_tensors="np", move_to_cpu=True)
 
         # Convert -1 sentinel back to None for display
+        # Use list conversion to avoid object dtype in Polars
         if "max_chunk_sents" in df_dict:
             sents_arr = df_dict["max_chunk_sents"]
-            df_dict["max_chunk_sents"] = np.where(sents_arr == -1, None, sents_arr)
+            df_dict["max_chunk_sents"] = [None if x == -1 else int(x) for x in sents_arr]
         if "max_chunk_tokens" in df_dict:
             tokens_arr = df_dict["max_chunk_tokens"]
-            df_dict["max_chunk_tokens"] = np.where(tokens_arr == -1, None, tokens_arr)
+            df_dict["max_chunk_tokens"] = [None if x == -1 else int(x) for x in tokens_arr]
         embeds = results["chunk_embeds"]
         if not isinstance(embeds, torch.Tensor):
             raise TypeError("Chunk embeddings must be torch.Tensor.")
@@ -1145,6 +1146,14 @@ class Encoder:
               A warning is issued when this occurs.
             - False: Keep sentences intact as their own chunks, even if they
               exceed the limit. A warning is issued when this occurs.
+
+            **Important:** This parameter only controls chunking behavior at the
+            `max_chunk_tokens` boundary. Sentences that exceed the model's
+            `max_length` are handled separately during tokenization:
+            - If `prechunk=True` (default), long documents are split into
+              overlapping sequences at the model's max_length boundary, and
+              any sentences spanning multiple sequences are automatically split.
+            - If `prechunk=False`, sequences are truncated at max_length.
 
         Examples
         --------
