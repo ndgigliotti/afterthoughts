@@ -594,11 +594,10 @@ class Encoder:
             embeds_result = embeds.cpu()
         df: pl.DataFrame | Any
         if return_frame == "polars":
-            df = pl.DataFrame(df_dict).with_row_index(name="idx")
+            df = pl.DataFrame(df_dict)
         elif return_frame == "pandas":
             pd = require_pandas()
             df = pd.DataFrame(df_dict)
-            df.insert(0, "idx", range(len(df)))
         else:
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
         return df, embeds_result
@@ -1427,6 +1426,10 @@ class Encoder:
             df = df.rename({"embed_idx": "orig_embed_idx"})
         else:
             df = df.drop(["embed_idx", "sequence_idx"])
+
+        # Add idx column after all sorting is complete
+        df = df.with_row_index(name="idx")
+
         # Convert to requested DataFrame format
         if return_frame == "pandas":
             df = df.to_pandas()
