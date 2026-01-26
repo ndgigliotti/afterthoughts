@@ -594,10 +594,11 @@ class Encoder:
             embeds_result = embeds.cpu()
         df: pl.DataFrame | Any
         if return_frame == "polars":
-            df = pl.DataFrame(df_dict)
+            df = pl.DataFrame(df_dict).with_row_index(name="idx")
         elif return_frame == "pandas":
             pd = require_pandas()
             df = pd.DataFrame(df_dict)
+            df.insert(0, "idx", range(len(df)))
         else:
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
         return df, embeds_result
@@ -1183,6 +1184,7 @@ class Encoder:
             Tuple containing the DataFrame of chunks and the chunk embeddings.
 
             The DataFrame contains the following columns:
+            - idx: Global chunk index (0-based), maps directly to embedding row
             - document_idx: Document index (0-based)
             - chunk_idx: Chunk index within document (0-based)
             - max_chunk_sents: Requested max sentences per chunk (configuration)

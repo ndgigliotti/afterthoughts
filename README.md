@@ -122,6 +122,7 @@ This approach ensures that pronouns, references, and contextual cues in each chu
     ```
 
     The DataFrame contains the following columns:
+    * `idx`: Global chunk index (0-based), maps directly to embedding row
     * `document_idx`: The index of the document from which the chunk was extracted
     * `chunk_idx`: The chunk index within each document
     * `max_chunk_sents`: The requested maximum sentences per chunk (configuration)
@@ -134,14 +135,15 @@ This approach ensures that pronouns, references, and contextual cues in each chu
     * `sequence_idx`: The index of the tokenized sequence (differs from `document_idx` when long documents are split)
     * `batch_idx`: The index of the batch in which the chunk was processed
 
-    To access the chunk embeddings from the `i`-th document:
+    To access embeddings for specific chunks, use the `idx` column:
 
     ```python
-    i = 10
-    doc_chunks = X[df["document_idx"] == i]
+    # Get embeddings for all chunks from document 10
+    doc_df = df[df["document_idx"] == 10]
+    doc_embeds = X[doc_df["idx"].to_numpy()]  # pandas
+    # or
+    doc_embeds = X[doc_df["idx"].to_numpy()]  # polars (same syntax!)
     ```
-
-    This works identically for both Polars and pandas DataFrames.
 
 ### Advanced Chunking Strategies
 
