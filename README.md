@@ -5,7 +5,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/afterthoughts.svg)](https://pypi.org/project/afterthoughts/)
 [![License](https://img.shields.io/pypi/l/afterthoughts.svg)](https://github.com/ndgigliotti/afterthoughts/blob/main/LICENSE)
 
-**Sentence-aware embeddings with document-level context.** A late chunking implementation ([Günther et al., 2024](https://arxiv.org/abs/2409.04701)) that embeds first and chunks second, extracting any number of chunks in one forward pass.
+**Sentence-aware embeddings with document-level context.** Embeds first, chunks second, extracting any number of chunks in one forward pass while preserving full document context. For related work on late chunking, see [Günther et al., 2024](https://arxiv.org/abs/2409.04701).
 
 ## Quick Start
 
