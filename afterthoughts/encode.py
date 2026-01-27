@@ -135,12 +135,11 @@ class LateEncoder:
     >>> docs = ["First sentence. Second sentence.", "Another document."]
     >>> df, embeddings = encoder.encode(docs, max_chunk_sents=1)
 
-    Encode with multiple chunk sizes and overlap:
+    Encode with multiple chunk sizes:
 
     >>> df, embeddings = encoder.encode(
     ...     docs,
     ...     max_chunk_sents=[1, 2, 3],
-    ...     chunk_overlap=0.5
     ... )
 
     Encode queries for semantic search:
@@ -1087,16 +1086,13 @@ class LateEncoder:
             - None: No sentence limit (only valid with max_chunk_tokens)
             For example, if `max_chunk_sents` is set to `(1, 2, 3)`, chunks
             of 1, 2, and 3 consecutive sentences will be extracted.
-        chunk_overlap : int, float, list, or dict, optional
-            Overlap between chunks (in sentences), by default 0.
-            If a float, it is interpreted as a fraction of the chunk size.
-            If an integer, it is interpreted as the number of sentences to overlap.
-            If a list or tuple, it should contain the overlap for each chunk size.
-            If a dictionary, it should map chunk sizes to overlaps.
+        chunk_overlap_sents : int, optional
+            Number of sentences to overlap between chunks, by default 0.
         prechunk : bool, optional
             Enable chunking of documents into overlapping sequences, by default True.
-        prechunk_overlap : float or int, optional
+        prechunk_overlap_tokens : float or int, optional
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
+            If a float, interpreted as a fraction of max_length. If an int, the number of tokens.
         sent_tokenizer : str, optional
             Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
             Options are "blingfire", "nltk", "pysbd", or "syntok".
@@ -1142,9 +1138,6 @@ class LateEncoder:
             they must have the same length and will be processed as aligned pairs:
             - max_chunk_sents=[1, 2, 3], max_chunk_tokens=[64, 128, 256]
               → creates configs (1,64), (2,128), (3,256)
-
-            Note: When using `max_chunk_tokens`, `chunk_overlap_sents` must be an integer
-            (number of sentences), not a float.
         split_long_sents : bool, optional
             How to handle sentences that exceed `max_chunk_tokens`, by default True.
             Only applies when `max_chunk_tokens` is specified.

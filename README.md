@@ -111,7 +111,6 @@ This approach ensures that pronouns, references, and contextual cues in each chu
     df, X = model.encode(
         docs,
         max_chunk_sents=[1, 2],  # Extract 1-sentence and 2-sentence chunks
-        chunk_overlap_sents=1,   # Overlap between chunks (in sentences)
     )
     ```
     The `encode` method returns a tuple containing a Polars DataFrame and a NumPy array of chunk embeddings. Pass `return_frame="pandas"` for a pandas DataFrame instead.
@@ -220,9 +219,7 @@ df_small_chunks = df.filter(
 # df_small_chunks = df[(df["max_chunk_sents"] == 1) & (df["max_chunk_tokens"] == 64)]
 ```
 
-**Notes:**
-- When using `max_chunk_tokens`, `chunk_overlap_sents` must be an integer (number of sentences), not a fraction.
-- Config columns may contain `None` values, stored as Object dtype in Polars. Cast to Int64 for numeric comparisons.
+**Note:** Config columns may contain `None` values when using lists with mixed values (e.g., `[1, None, 2]`). Cast to Int64 for numeric comparisons in Polars.
 
 ### Using Pandas Instead of Polars
 
