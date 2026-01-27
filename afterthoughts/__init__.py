@@ -8,7 +8,7 @@ model to capture full context, then extracts embeddings for sentence groups
 Key Features
 ------------
 - Context-aware embeddings: Full document context is preserved during encoding
-- Flexible chunking: Configure chunk size (number of sentences) and overlap
+- Flexible chunking: Sentence-based and token-based chunking strategies
 - Sentence boundary detection: Multiple backends (BlingFire, NLTK, pysbd, syntok)
 - Memory efficient: Dynamic batching by token count, optional float16 conversion
 - Matryoshka support: Dimension truncation for MRL-trained models
@@ -16,21 +16,21 @@ Key Features
 
 Basic Usage
 -----------
-    >>> from afterthoughts import Encoder
+    >>> from afterthoughts import LateEncoder
     >>>
     >>> # Initialize encoder
-    >>> encoder = Encoder("sentence-transformers/all-MiniLM-L6-v2")
+    >>> encoder = LateEncoder("sentence-transformers/all-MiniLM-L6-v2")
     >>>
     >>> # Encode documents into sentence chunks
     >>> docs = ["First sentence. Second sentence.", "Another document."]
-    >>> df, embeddings = encoder.encode(docs, num_sents=1)
+    >>> df, embeddings = encoder.encode(docs, max_chunk_sents=1)
     >>>
     >>> # Encode queries for semantic search
     >>> query_embeds = encoder.encode_queries(["search query"])
 
 Main Classes
 ------------
-Encoder : Main API for encoding documents and queries into embeddings
+LateEncoder : Main API for encoding documents and queries into embeddings
 
 Utility Functions
 -----------------
@@ -45,7 +45,7 @@ tokenizers, and advanced configuration options.
 
 __author__ = """Nicholas Gigliotti"""
 __email__ = "ndgigliotti@gmail.com"
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 # Copyright 2024-2026 Nicholas Gigliotti
 #
@@ -61,5 +61,22 @@ __version__ = "0.1.0"
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from afterthoughts.encode import Encoder  # noqa
-from afterthoughts.utils import configure_logging, get_device  # noqa
+import warnings
+
+from afterthoughts.encode import LateEncoder
+from afterthoughts.utils import configure_logging, get_device
+
+__all__ = ["Encoder", "LateEncoder", "configure_logging", "get_device"]
+
+
+def __getattr__(name: str):
+    """Provide deprecated Encoder alias for backwards compatibility."""
+    if name == "Encoder":
+        warnings.warn(
+            "Encoder is deprecated and will be removed in a future version. "
+            "Use LateEncoder instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return LateEncoder
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -273,7 +273,7 @@ def _add_special_tokens(
 
 
 @torch.inference_mode()
-def _split_long_sentences(sentence_ids: torch.Tensor, max_length: int) -> torch.Tensor:
+def _split_long_sents(sentence_ids: torch.Tensor, max_length: int) -> torch.Tensor:
     """Splits long sentences into smaller segments.
 
     Parameters
@@ -412,7 +412,7 @@ def chunk_preserving_sentence_structure(
     eff_max_length = max_length - num_specials if add_special_tokens else max_length
     eff_max_length_for_sentences = eff_max_length - num_prompt_tokens
 
-    sentence_ids = _split_long_sentences(sentence_ids, eff_max_length_for_sentences)
+    sentence_ids = _split_long_sents(sentence_ids, eff_max_length_for_sentences)
     sent_lengths = torch.bincount(sentence_ids[sentence_ids != -1])
     unique_sent_ids = torch.unique(sentence_ids[sentence_ids != -1])
 
@@ -559,8 +559,8 @@ def check_tensors(
 def get_chunk_idx(
     input_ids: torch.Tensor,
     sentence_ids: torch.Tensor,
-    num_sents: list[int] | tuple[int, ...] | int,
-    chunk_overlap: int | float | list[int] | dict[int, int] = 0.5,
+    max_chunk_sents: list[int] | tuple[int, ...] | int,
+    chunk_overlap_sents: int | float | list[int] | dict[int, int] = 0.5,
     sequence_idx: torch.Tensor | None = None,
     pad_token_id: int = 0,
 ) -> dict[str, Any]:
@@ -572,9 +572,9 @@ def get_chunk_idx(
         Tensor containing input token IDs.
     sentence_ids : torch.Tensor
         Tensor containing sentence IDs, padded with -1.
-    num_sents : list, tuple, or int
+    max_chunk_sents : list, tuple, or int
         Number of sentences per chunk.
-    chunk_overlap : int, float, list, or dict, optional
+    chunk_overlap_sents : int, float, list, or dict, optional
         Overlap between chunks (number or fraction of sentences).
         Default is 0.5.
     sequence_idx : torch.Tensor or None, optional
@@ -629,8 +629,8 @@ def get_chunk_idx(
         "sequence_idx": [],
         "chunk_idx": [],
     }
-    if isinstance(num_sents, int):
-        num_sents = [num_sents]
+    if isinstance(max_chunk_sents, int):
+        max_chunk_sents = [max_chunk_sents]
     # Process sequences first, then chunk sizes within each sequence
     # chunk_idx resets for each sequence (per-document indexing)
     for seq_input_ids, seq_sentence_ids, seq_idx in zip(
@@ -638,8 +638,8 @@ def get_chunk_idx(
     ):
         unique_sent_ids = torch.unique(seq_sentence_ids[seq_sentence_ids != -1])
         chunk_counter = 0  # Reset for each sequence
-        for i, size in enumerate(num_sents):
-            overlap_sents = get_overlap_count(chunk_overlap, size, i)
+        for i, size in enumerate(max_chunk_sents):
+            overlap_sents = get_overlap_count(chunk_overlap_sents, size, i)
             step = size - overlap_sents
             eff_size = min(size, len(unique_sent_ids))
             chunk_sent_ids = unique_sent_ids.unfold(0, eff_size, step)
@@ -684,14 +684,308 @@ def get_chunk_idx(
     return results
 
 
+def get_chunk_idx_by_tokens(
+    input_ids: torch.Tensor,
+    sentence_ids: torch.Tensor,
+    max_chunk_tokens: int,
+    max_chunk_sents: int | None = None,
+    chunk_overlap_sents: int = 0,
+    sequence_idx: torch.Tensor | None = None,
+    pad_token_id: int = 0,
+    split_long_sents: bool = True,
+) -> dict[str, Any]:
+    """Get chunk indices by accumulating sentences until token limit is reached.
+
+    This function builds chunks by greedily accumulating consecutive sentences
+    until the token count would exceed `max_chunk_tokens`. Optionally, a maximum
+    number of sentences per chunk can also be specified via `max_chunk_sents`.
+
+    Parameters
+    ----------
+    input_ids : torch.Tensor
+        Tensor containing input token IDs of shape (batch_size, seq_len).
+    sentence_ids : torch.Tensor
+        Tensor containing sentence IDs of shape (batch_size, seq_len), padded with -1.
+    max_chunk_tokens : int
+        Maximum number of tokens per chunk. Chunks will not exceed this limit
+        unless `split_long_sents=False` and a single sentence exceeds it.
+    max_chunk_sents : int or None, optional
+        Maximum number of sentences per chunk. If None, chunks are limited only
+        by `max_chunk_tokens`. If specified, chunks are limited by whichever
+        constraint is hit first (token count or sentence count). Default is None.
+    chunk_overlap_sents : int, optional
+        Number of sentences to overlap between consecutive chunks. Must be a
+        non-negative integer. Default is 0.
+    sequence_idx : torch.Tensor or None, optional
+        Tensor containing sequence indices. If None, a default sequence index is generated.
+        Default is None.
+    pad_token_id : int, optional
+        Token ID used for padding chunk token IDs. Default is 0.
+    split_long_sents : bool, optional
+        How to handle sentences that exceed `max_chunk_tokens`. Default is True.
+        - True: Split the sentence into multiple chunks at token boundaries.
+          A warning is issued when this occurs.
+        - False: Keep the sentence intact as its own chunk, exceeding the limit.
+          A warning is issued when this occurs.
+
+        Note: This parameter only affects chunking at the `max_chunk_tokens`
+        boundary. By the time this function is called, input sequences have
+        already been bounded to the model's max_length through tokenization
+        and prechunking, so sentences cannot exceed that limit.
+
+    Returns
+    -------
+    dict
+        Dictionary containing the following keys:
+        - "chunk_token_idx": 0-padded matrix of token indices within chunks.
+        - "chunk_token_ids": Padded matrix of chunk token IDs.
+        - "sentence_ids": Padded matrix of sentence IDs.
+        - "attention_mask": Attention mask for the chunk indices.
+        - "num_sents": Number of sentences in each chunk.
+        - "sequence_idx": Sequence indices.
+        - "chunk_idx": Per-document chunk indices.
+
+    Raises
+    ------
+    ValueError
+        If `sequence_idx` length does not match the number of rows in `input_ids`.
+        If `sentence_ids` length does not match the size of `input_ids`.
+        If `chunk_overlap` is not a non-negative integer.
+
+    Notes
+    -----
+    The overlap is always applied in terms of sentences (not tokens), as sentence
+    boundaries provide semantically meaningful overlap points.
+
+    Examples
+    --------
+    >>> # Token-only mode: chunks limited only by token count
+    >>> result = get_chunk_idx_by_tokens(input_ids, sentence_ids, max_chunk_tokens=128)
+
+    >>> # Combined mode: at most 3 sentences AND 128 tokens per chunk
+    >>> result = get_chunk_idx_by_tokens(
+    ...     input_ids, sentence_ids, max_chunk_tokens=128, max_chunk_sents=3
+    ... )
+
+    >>> # Keep long sentences intact (may exceed max_chunk_tokens)
+    >>> result = get_chunk_idx_by_tokens(
+    ...     input_ids, sentence_ids, max_chunk_tokens=64, split_long_sents=False
+    ... )
+    """
+    # Validate chunk_overlap_sents is a non-negative integer
+    if not isinstance(chunk_overlap_sents, int) or chunk_overlap_sents < 0:
+        raise ValueError(
+            f"`chunk_overlap_sents` must be a non-negative integer when using "
+            f"`max_chunk_tokens`, got {chunk_overlap_sents!r}"
+        )
+
+    if sequence_idx is None:
+        sequence_idx = torch.arange(input_ids.size(0), device=input_ids.device)
+    else:
+        if len(sequence_idx) != input_ids.size(0):
+            raise ValueError(
+                f"`sequence_idx` must have the same number of rows as `input_ids` "
+                f"({len(sequence_idx)} != {input_ids.size(0)})."
+            )
+        if sequence_idx.device != input_ids.device:
+            sequence_idx = sequence_idx.to(input_ids.device)
+    if len(sentence_ids) != input_ids.size(0):
+        raise ValueError(
+            f"Length of `sentence_ids` ({len(sentence_ids)}) "
+            f"must match size of `input_ids` ({input_ids.size(0)})."
+        )
+
+    results: dict[str, Any] = {
+        "chunk_token_idx": [],
+        "chunk_token_ids": [],
+        "sentence_ids": [],
+        "num_sents": [],
+        "sequence_idx": [],
+        "chunk_idx": [],
+        "is_split": [],  # Track whether chunk is a split portion of a sentence
+    }
+
+    # Process each sequence
+    for seq_input_ids, seq_sentence_ids, seq_idx in zip(
+        input_ids, sentence_ids, sequence_idx, strict=False
+    ):
+        unique_sent_ids = torch.unique(seq_sentence_ids[seq_sentence_ids != -1])
+        if len(unique_sent_ids) == 0:
+            continue
+
+        # Compute token counts per sentence
+        sent_token_counts = {}
+        for sent_id in unique_sent_ids:
+            mask = seq_sentence_ids == sent_id
+            sent_token_counts[int(sent_id.item())] = int(mask.sum().item())
+
+        # Build chunks by greedy accumulation
+        # Each chunk entry is either:
+        # - A list of sentence IDs (normal case)
+        # - A tuple (sent_id, start_idx, end_idx) for split sentences
+        chunks: list[list[int] | tuple[int, int, int]] = []
+        current_chunk: list[int] = []
+        current_tokens = 0
+
+        for sent_id in unique_sent_ids:
+            sent_id_int = int(sent_id.item())
+            sent_tokens = sent_token_counts[sent_id_int]
+
+            # Check if we can add this sentence to the current chunk
+            can_add_by_tokens = current_tokens + sent_tokens <= max_chunk_tokens
+            can_add_by_sents = max_chunk_sents is None or len(current_chunk) < max_chunk_sents
+
+            if can_add_by_tokens and can_add_by_sents:
+                # Add sentence to current chunk
+                current_chunk.append(sent_id_int)
+                current_tokens += sent_tokens
+            else:
+                # Save current chunk if non-empty
+                if current_chunk:
+                    chunks.append(current_chunk)
+                    # Apply overlap: keep last N sentences
+                    overlap_sents = (
+                        current_chunk[-chunk_overlap_sents:] if chunk_overlap_sents > 0 else []
+                    )
+                else:
+                    overlap_sents = []
+
+                # Check if sentence itself exceeds max_chunk_tokens
+                if sent_tokens > max_chunk_tokens:
+                    if split_long_sents:
+                        # Split the sentence into multiple chunks
+                        warnings.warn(
+                            f"Sequence {seq_idx.item()}: Sentence {sent_id_int} has {sent_tokens} tokens, "
+                            f"exceeding max_chunk_tokens={max_chunk_tokens}. "
+                            "Splitting into multiple chunks.",
+                            stacklevel=2,
+                        )
+                        # Get token indices for this sentence
+                        sent_mask = seq_sentence_ids == sent_id
+                        sent_token_indices = torch.nonzero(sent_mask, as_tuple=False).squeeze()
+                        if sent_token_indices.dim() == 0:
+                            sent_token_indices = sent_token_indices.unsqueeze(0)
+
+                        # Split into chunks of max_chunk_tokens
+                        for start_idx in range(0, len(sent_token_indices), max_chunk_tokens):
+                            end_idx = min(start_idx + max_chunk_tokens, len(sent_token_indices))
+                            chunks.append((sent_id_int, start_idx, end_idx))
+
+                        # Don't add to current_chunk since we handled it
+                        current_chunk = []
+                        current_tokens = 0
+                    else:
+                        # Keep sentence intact, exceeding the limit
+                        warnings.warn(
+                            f"Sequence {seq_idx.item()}: Sentence {sent_id_int} has {sent_tokens} tokens, "
+                            f"exceeding max_chunk_tokens={max_chunk_tokens}. "
+                            "Including as its own chunk without splitting.",
+                            stacklevel=2,
+                        )
+                        current_chunk = [sent_id_int]
+                        current_tokens = sent_tokens
+                else:
+                    # Sentence fits within limit, start new chunk with overlap + sentence
+                    current_chunk = overlap_sents + [sent_id_int]
+                    current_tokens = sum(sent_token_counts[s] for s in current_chunk)
+
+        # Don't forget the last chunk
+        if current_chunk:
+            chunks.append(current_chunk)
+
+        # Convert chunks to token indices and IDs
+        for chunk_counter, chunk in enumerate(chunks):
+            if isinstance(chunk, tuple):
+                # Split sentence: (sent_id, start_idx, end_idx)
+                sent_id_int, start_idx, end_idx = chunk
+                sent_mask = seq_sentence_ids == sent_id_int
+                sent_token_indices = torch.nonzero(sent_mask, as_tuple=False).squeeze()
+                if sent_token_indices.dim() == 0:
+                    sent_token_indices = sent_token_indices.unsqueeze(0)
+
+                # Get the slice of tokens for this split
+                chunk_token_idx = sent_token_indices[start_idx:end_idx]
+                chunk_token_ids = seq_input_ids[chunk_token_idx]
+                # All tokens in a split chunk have the same sentence ID
+                chunk_sent_ids = torch.full(
+                    (len(chunk_token_idx),), sent_id_int, dtype=seq_sentence_ids.dtype
+                )
+                num_sents_in_chunk = 1  # Split chunks are always from 1 sentence
+                is_split = True  # This is a split portion of a sentence
+            else:
+                # Normal chunk: list of sentence IDs
+                chunk_tensor = torch.tensor(chunk, device=seq_sentence_ids.device)
+                mask = torch.isin(seq_sentence_ids, chunk_tensor)
+                chunk_token_ids = seq_input_ids[mask]
+                chunk_token_idx = torch.nonzero(mask, as_tuple=False).squeeze()
+                # Handle edge case: single token chunk
+                if chunk_token_idx.dim() == 0:
+                    chunk_token_idx = chunk_token_idx.unsqueeze(0)
+                chunk_sent_ids = seq_sentence_ids[mask]
+                num_sents_in_chunk = len(chunk)
+                is_split = False  # Normal chunk, not a split
+
+            results["chunk_token_ids"].append(chunk_token_ids)
+            results["chunk_token_idx"].append(chunk_token_idx)
+            results["sentence_ids"].append(chunk_sent_ids)
+            results["num_sents"].append(torch.tensor([num_sents_in_chunk]))
+            results["sequence_idx"].append(seq_idx.unsqueeze(0))
+            results["chunk_idx"].append(torch.tensor([chunk_counter]))
+            results["is_split"].append(torch.tensor([is_split]))
+
+    # Handle empty results
+    if len(results["num_sents"]) == 0:
+        return {
+            "chunk_token_idx": torch.zeros((0, 0), dtype=torch.long, device=input_ids.device),
+            "chunk_token_ids": torch.zeros((0, 0), dtype=torch.long, device=input_ids.device),
+            "sentence_ids": torch.zeros((0, 0), dtype=torch.long, device=input_ids.device),
+            "attention_mask": torch.zeros((0, 0), dtype=torch.long, device=input_ids.device),
+            "num_sents": torch.zeros((0,), dtype=torch.long),
+            "sequence_idx": torch.zeros((0,), dtype=torch.long),
+            "chunk_idx": torch.zeros((0,), dtype=torch.long),
+            "is_split": torch.zeros((0,), dtype=torch.bool),
+        }
+
+    # Stack results
+    results["num_sents"] = torch.cat(results["num_sents"])
+    results["sequence_idx"] = torch.cat(results["sequence_idx"])
+    results["chunk_idx"] = torch.cat(results["chunk_idx"])
+    results["is_split"] = torch.cat(results["is_split"]).bool()
+    results["attention_mask"] = pad_sequence(
+        [torch.ones_like(p) for p in results["chunk_token_idx"]],
+        batch_first=True,
+        padding_value=0,
+    ).to(input_ids.device)
+    results["chunk_token_idx"] = pad_sequence(
+        results["chunk_token_idx"], batch_first=True, padding_value=0
+    ).to(input_ids.device)
+    results["chunk_token_ids"] = pad_sequence(
+        results["chunk_token_ids"], batch_first=True, padding_value=pad_token_id
+    ).to(input_ids.device)
+    results["sentence_ids"] = pad_sequence(
+        results["sentence_ids"], batch_first=True, padding_value=-1
+    ).to(input_ids.device)
+
+    assert (
+        results["chunk_token_idx"].size(0)
+        == results["chunk_token_ids"].size(0)
+        == results["sentence_ids"].size(0)
+        == results["num_sents"].size(0)
+        == results["sequence_idx"].size(0)
+        == results["chunk_idx"].size(0)
+        == results["is_split"].size(0)
+    )
+    return results
+
+
 def _compute_chunk_embeds_slow(
     input_ids: torch.Tensor,
     token_embeds: torch.Tensor,
     sentence_ids: torch.Tensor,
     sequence_idx: torch.Tensor,
     tokenizer: PreTrainedTokenizerBase,
-    num_sents: int | list[int] | tuple[int, ...] = 2,
-    chunk_overlap: int | float | list[int] | dict[int, int] = 0.5,
+    max_chunk_sents: int | list[int] | tuple[int, ...] = 2,
+    chunk_overlap_sents: int | float | list[int] | dict[int, int] = 0.5,
     exclude_special_tokens: bool = True,
 ) -> dict[str, torch.Tensor]:
     """
@@ -709,9 +1003,9 @@ def _compute_chunk_embeds_slow(
         Tensor containing sequence indices.
     tokenizer : object
         Tokenizer object used to identify special tokens.
-    num_sents : int or list or tuple, optional
+    max_chunk_sents : int or list or tuple, optional
         Number of sentences per chunk. Default is 2.
-    chunk_overlap : int or float or list or dict, optional
+    chunk_overlap_sents : int or float or list or dict, optional
         Overlap between chunks. Default is 0.5.
     exclude_special_tokens : bool, optional
         If True (default), exclude all special tokens from mean pooling.
@@ -730,8 +1024,8 @@ def _compute_chunk_embeds_slow(
     chunk_data = get_chunk_idx(
         input_ids,
         sentence_ids,
-        num_sents=num_sents,
-        chunk_overlap=chunk_overlap,
+        max_chunk_sents=max_chunk_sents,
+        chunk_overlap_sents=chunk_overlap_sents,
         sequence_idx=sequence_idx,
     )
 
@@ -863,9 +1157,11 @@ def _compute_chunk_embeds(
     sentence_ids: torch.Tensor,
     sequence_idx: torch.Tensor,
     tokenizer: PreTrainedTokenizerBase,
-    num_sents: int | list[int] | tuple[int, ...] = 2,
-    chunk_overlap: int | float | list[int] | dict[int, int] = 0.5,
+    max_chunk_sents: int | list[int] | tuple[int, ...] | None = 2,
+    chunk_overlap_sents: int | float | list[int] | dict[int, int] = 0.5,
     exclude_special_tokens: bool = True,
+    max_chunk_tokens: int | None = None,
+    split_long_sents: bool = True,
 ) -> dict[str, torch.Tensor]:
     """Compute chunk embeddings via vectorized mean-pooling of token embeddings.
 
@@ -892,21 +1188,29 @@ def _compute_chunk_embeds(
         in the batch (used for tracking across chunks).
     tokenizer : PreTrainedTokenizerBase
         Tokenizer for identifying special tokens (CLS, SEP, PAD).
-    num_sents : int, list[int], or tuple[int, ...], optional
-        Number of sentences per chunk. Can be a single int or a list/tuple to
-        extract multiple chunk sizes simultaneously, by default 2.
+    max_chunk_sents : int, list[int], tuple[int, ...], or None, optional
+        Number of sentences per chunk, by default 2. Can be:
+        - int: Fixed number of sentences per chunk
+        - list/tuple: Extract multiple chunk sizes simultaneously
+        - None: No sentence limit (only used with max_chunk_tokens)
         Example: [1, 2, 3] extracts 1-sentence, 2-sentence, and 3-sentence chunks.
-    chunk_overlap : int, float, list[int], or dict[int, int], optional
+    chunk_overlap_sents : int, float, list[int], or dict[int, int], optional
         Overlap between consecutive chunks in number of sentences, by default 0.5.
         - float: Fraction of chunk size (e.g., 0.5 means 50% overlap)
         - int: Absolute number of sentences to overlap
-        - list: Overlap values corresponding to each value in num_sents
+        - list: Overlap values corresponding to each value in max_chunk_sents
         - dict: Maps chunk size to overlap count
     exclude_special_tokens : bool, optional
         How to handle special tokens during mean pooling, by default True.
         - True (default): Exclude all special tokens from mean pooling.
         - False: Include [CLS] in first chunk and [SEP] in last chunk
           of each sequence.
+    max_chunk_tokens : int or None, optional
+        Maximum number of tokens per chunk, by default None. When specified,
+        chunks are built by greedily accumulating sentences until the token
+        limit is reached. Can be used alone or combined with max_chunk_sents:
+        - max_chunk_tokens alone: Greedy accumulation with no sentence limit
+        - Both specified: "At most N sentences AND at most M tokens"
 
     Returns
     -------
@@ -935,20 +1239,38 @@ def _compute_chunk_embeds(
     ...     sentence_ids=batch["sentence_ids"],
     ...     sequence_idx=batch["sequence_idx"],
     ...     tokenizer=tokenizer,
-    ...     num_sents=2,
+    ...     max_chunk_sents=2,
     ...     chunk_overlap=0.5
     ... )
     >>> chunk_embeddings = results["chunk_embeds"]  # Shape: (num_chunks, hidden_size)
     """
     # Get the chunk grouping information
-    chunk_data = get_chunk_idx(
-        input_ids,
-        sentence_ids,
-        num_sents=num_sents,
-        chunk_overlap=chunk_overlap,
-        sequence_idx=sequence_idx,
-        pad_token_id=tokenizer.pad_token_id,
-    )
+    # Dispatch to token-based chunking if max_chunk_tokens is specified
+    if max_chunk_tokens is not None:
+        # Token-based chunking (with optional max_chunk_sents limit)
+        # chunk_overlap_sents must be an int for token-based chunking (validated earlier)
+        chunk_data = get_chunk_idx_by_tokens(
+            input_ids,
+            sentence_ids,
+            max_chunk_tokens=max_chunk_tokens,
+            max_chunk_sents=max_chunk_sents if isinstance(max_chunk_sents, int) else None,
+            chunk_overlap_sents=chunk_overlap_sents if isinstance(chunk_overlap_sents, int) else 0,
+            sequence_idx=sequence_idx,
+            pad_token_id=tokenizer.pad_token_id,
+            split_long_sents=split_long_sents,
+        )
+    else:
+        # Sentence-based chunking (original behavior)
+        if max_chunk_sents is None:
+            max_chunk_sents = 1  # Default for backward compatibility
+        chunk_data = get_chunk_idx(
+            input_ids,
+            sentence_ids,
+            max_chunk_sents=max_chunk_sents,
+            chunk_overlap_sents=chunk_overlap_sents,
+            sequence_idx=sequence_idx,
+            pad_token_id=tokenizer.pad_token_id,
+        )
 
     # Compute the mask for valid tokens
     if exclude_special_tokens:
@@ -1003,6 +1325,9 @@ def _compute_chunk_embeds(
         "num_sents": chunk_data["num_sents"],
         "chunk_embeds": chunk_embeds,
     }
+    # Include is_split flag when using token-based chunking
+    if "is_split" in chunk_data:
+        results["is_split"] = chunk_data["is_split"]
     assert (
         results["chunk_token_ids"].size(0)
         == results["sentence_ids"].size(0)
@@ -1069,7 +1394,7 @@ def tokenize_with_sentence_boundaries(
     method: str = "blingfire",
     max_length: int | None = 512,
     prechunk: bool = True,
-    prechunk_overlap: float | int = 0.5,
+    prechunk_overlap_tokens: float | int = 0.5,
     return_tokenized_dataset: bool = False,
     batch_size: int = 10,
     n_jobs: int | None = None,
@@ -1102,7 +1427,7 @@ def tokenize_with_sentence_boundaries(
     prechunk : bool, optional
         Whether to split documents exceeding max_length into overlapping sequences,
         by default True. If False, documents are truncated at max_length.
-    prechunk_overlap : float or int, optional
+    prechunk_overlap_tokens : float or int, optional
         Overlap for splitting long documents into sequences, by default 0.5.
         - float in [0, 1): Fraction of max_length to overlap
         - int: Absolute number of sentences to overlap
@@ -1297,7 +1622,7 @@ def tokenize_with_sentence_boundaries(
                 sample_idx=i,
                 max_length=resolved_max_length,
                 padding=None,
-                overlap=prechunk_overlap,
+                overlap=prechunk_overlap_tokens,
                 add_special_tokens=True,
                 reset_sentence_ids_on_overflow=False,
             )
@@ -1339,7 +1664,7 @@ def _tokenize_batch_with_sentence_boundaries(
     tokenizer: PreTrainedTokenizerBase,
     max_length: int | None = None,
     prechunk: bool = True,
-    prechunk_overlap: float | int = 0.5,
+    prechunk_overlap_tokens: float | int = 0.5,
 ) -> dict[str, Any]:
     """Tokenize a list of documents into input sequences for the model."""
     inputs_result = tokenize_with_sentence_boundaries(
@@ -1348,7 +1673,7 @@ def _tokenize_batch_with_sentence_boundaries(
         method="blingfire",
         max_length=max_length,
         prechunk=prechunk,
-        prechunk_overlap=prechunk_overlap,
+        prechunk_overlap_tokens=prechunk_overlap_tokens,
     )
     if not isinstance(inputs_result, dict):
         raise TypeError("Expected tokenize_with_sentence_boundaries to return a dict")

@@ -626,7 +626,7 @@ def tokenize_docs(
     max_length: int | None = None,
     truncation: bool = True,
     prechunk: bool = True,
-    prechunk_overlap: float | int = 0,
+    prechunk_overlap_tokens: float | int = 0,
     add_special_tokens: bool = True,
     return_attention_mask: bool = False,
     return_offsets_mapping: bool = False,
@@ -652,8 +652,10 @@ def tokenize_docs(
         Default is True.
     prechunk : bool, optional
         Whether to return overflowing tokens. Default is True.
-    prechunk_overlap : float or int, optional
-        The overlap between prechunked sequences. Default is 0.
+    prechunk_overlap_tokens : float or int, optional
+        Overlap for splitting long documents into sequences, by default 0.
+        - float in [0, 1): Fraction of max_length to overlap
+        - int: Absolute number of tokens to overlap
     add_special_tokens : bool, optional
         Whether to add special tokens to the tokenized sequences.
         Default is True.
@@ -692,7 +694,7 @@ def tokenize_docs(
     data = pl.DataFrame({"text": docs, "sample_idx": range(len(docs))})
 
     max_length = get_max_length(max_length, tokenizer, required=truncation)
-    stride = get_overlap_count(prechunk_overlap, max_length)
+    stride = get_overlap_count(prechunk_overlap_tokens, max_length)
     num_batches = math.ceil(len(data) / batch_size)
     batches = tqdm(
         data.iter_slices(batch_size),

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "afterthoughts"
-version = "0.1.0"
+version = "0.1.1"
 description = "Sentence-aware embeddings using late chunking with transformers."
 readme = "README.md"
 authors = [
@@ -42,6 +42,7 @@ pandas = [
     "pandas",
 ]
 dev = [
+    "accelerate",  # required by transformers for device_map
     "coverage",  # testing
     "pre-commit",  # git hooks
     "pyright",  # type checking
@@ -68,6 +69,7 @@ include = ["afterthoughts"]
 exclude = ["tests", "benchmarks"]
 typeCheckingMode = "basic"
 reportMissingTypeStubs = false
+reportMissingImports = false  # optional dependencies (pandas, nltk, pysbd, syntok)
 # Disable checks that are primarily triggered by incorrect transformers/tokenizers stubs
 reportArgumentType = false
 reportReturnType = false

@@ -1,13 +1,13 @@
 import pytest
 
 from afterthoughts.validation import (
-    validate_chunk_overlap,
+    validate_chunk_overlap_sents,
     validate_docs,
     validate_encode_params,
     validate_encode_queries_params,
-    validate_num_sents,
+    validate_max_chunk_sents,
     validate_positive_int,
-    validate_prechunk_overlap,
+    validate_prechunk_overlap_tokens,
     validate_return_frame,
     validate_sent_tokenizer,
 )
@@ -28,85 +28,68 @@ class TestValidateDocs:
 
 class TestValidateNumSents:
     def test_valid_int(self):
-        validate_num_sents(1)
-        validate_num_sents(5)
+        validate_max_chunk_sents(1)
+        validate_max_chunk_sents(5)
 
     def test_valid_list(self):
-        validate_num_sents([1, 2, 3])
+        validate_max_chunk_sents([1, 2, 3])
 
     def test_valid_tuple(self):
-        validate_num_sents((1, 2))
+        validate_max_chunk_sents((1, 2))
 
     def test_zero_int(self):
         with pytest.raises(ValueError, match="must be >= 1"):
-            validate_num_sents(0)
+            validate_max_chunk_sents(0)
 
     def test_negative_int(self):
         with pytest.raises(ValueError, match="must be >= 1"):
-            validate_num_sents(-1)
+            validate_max_chunk_sents(-1)
 
     def test_empty_list(self):
         with pytest.raises(ValueError, match="cannot be empty"):
-            validate_num_sents([])
+            validate_max_chunk_sents([])
 
     def test_list_with_zero(self):
         with pytest.raises(ValueError, match="must be >= 1"):
-            validate_num_sents([1, 0, 2])
+            validate_max_chunk_sents([1, 0, 2])
 
     def test_list_with_non_int(self):
-        with pytest.raises(TypeError, match="must be integers"):
-            validate_num_sents([1, 2.5])  # type: ignore[list-item]
+        with pytest.raises(TypeError, match="must be int or None"):
+            validate_max_chunk_sents([1, 2.5])  # type: ignore[list-item]
 
 
-class TestValidateChunkOverlap:
-    def test_valid_float(self):
-        validate_chunk_overlap(0.0)
-        validate_chunk_overlap(0.5)
-        validate_chunk_overlap(0.99)
+class TestValidateChunkOverlapSents:
+    """Test validation for chunk_overlap_sents parameter (now int only)."""
 
     def test_valid_int(self):
-        validate_chunk_overlap(0)
-        validate_chunk_overlap(5)
-
-    def test_valid_list(self):
-        validate_chunk_overlap([0, 1, 2])
-
-    def test_valid_dict(self):
-        validate_chunk_overlap({1: 0, 2: 1})
-
-    def test_float_out_of_range(self):
-        with pytest.raises(ValueError, match=r"must be in \[0, 1\)"):
-            validate_chunk_overlap(1.0)
-        with pytest.raises(ValueError, match=r"must be in \[0, 1\)"):
-            validate_chunk_overlap(-0.1)
+        validate_chunk_overlap_sents(0)
+        validate_chunk_overlap_sents(5)
 
     def test_negative_int(self):
         with pytest.raises(ValueError, match="must be >= 0"):
-            validate_chunk_overlap(-1)
+            validate_chunk_overlap_sents(-1)
 
-    def test_list_with_negative(self):
-        with pytest.raises(ValueError, match="non-negative integers"):
-            validate_chunk_overlap([0, -1])
-
-    def test_dict_with_negative(self):
-        with pytest.raises(ValueError, match="non-negative integers"):
-            validate_chunk_overlap({1: 0, 2: -1})
+    def test_invalid_type(self):
+        with pytest.raises(TypeError, match="must be an integer"):
+            validate_chunk_overlap_sents(0.5)  # type: ignore[arg-type]
 
 
-class TestValidatePrechunkOverlap:
+class TestValidatePrechunkOverlapTokens:
+    """Test validation for prechunk_overlap_tokens parameter."""
+
     def test_valid_float(self):
-        validate_prechunk_overlap(0.5)
+        validate_prechunk_overlap_tokens(0.5)
 
     def test_valid_int(self):
-        validate_prechunk_overlap(10)
+        validate_prechunk_overlap_tokens(10)
 
     def test_float_out_of_range(self):
         with pytest.raises(ValueError, match=r"must be in \[0, 1\)"):
-            validate_prechunk_overlap(1.5)
+            validate_prechunk_overlap_tokens(1.5)
 
     def test_negative_int(self):
         with pytest.raises(ValueError, match="must be >= 0"):
-            validate_prechunk_overlap(-1)
+            validate_prechunk_overlap_tokens(-1)
 
 
 class TestValidateSentTokenizer:
@@ -150,12 +133,12 @@ class TestValidateEncodeParams:
     def test_valid_params(self):
         validate_encode_params(
             docs=["doc1"],
-            num_sents=1,
-            chunk_overlap=0.5,
-            prechunk_overlap=0.5,
+            max_chunk_sents=1,
+            chunk_overlap_sents=0,
+            prechunk_overlap_tokens=0.5,
             sent_tokenizer="blingfire",
             return_frame="polars",
-            batch_tokens=8192,
+            max_batch_tokens=8192,
             max_length=512,
         )
 
@@ -163,12 +146,12 @@ class TestValidateEncodeParams:
         with pytest.raises(ValueError, match="cannot be empty"):
             validate_encode_params(
                 docs=[],
-                num_sents=1,
-                chunk_overlap=0,
-                prechunk_overlap=0.5,
+                max_chunk_sents=1,
+                chunk_overlap_sents=0,
+                prechunk_overlap_tokens=0.5,
                 sent_tokenizer="blingfire",
                 return_frame="polars",
-                batch_tokens=8192,
+                max_batch_tokens=8192,
                 max_length=None,
             )
 
