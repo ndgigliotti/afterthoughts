@@ -144,9 +144,7 @@ This approach ensures that pronouns, references, and contextual cues in each chu
     ```python
     # Get embeddings for all chunks from document 10
     doc_df = df[df["document_idx"] == 10]
-    doc_embeds = X[doc_df["idx"].to_numpy()]  # pandas
-    # or
-    doc_embeds = X[doc_df["idx"].to_numpy()]  # polars (same syntax!)
+    doc_embeds = X[doc_df["idx"]]
     ```
 
 ### Advanced Chunking Strategies
