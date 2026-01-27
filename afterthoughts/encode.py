@@ -644,12 +644,18 @@ class LateEncoder:
             raise ValueError(f"method must be 'average' or 'first', got {method!r}")
 
         document_idx = results["document_idx"]
-        max_chunk_sents = results["max_chunk_sents"]  # NEW: Use config, not actual count
-        max_chunk_tokens = results["max_chunk_tokens"]  # NEW: Add tokens to key
         chunk_embeds = results["chunk_embeds"]
         chunk_sentence_ids = results["chunk_sentence_ids"]
 
         n_chunks = len(document_idx)
+
+        # Get config columns if present, otherwise use -1 (won't affect deduplication)
+        max_chunk_sents = results.get(
+            "max_chunk_sents", torch.full((n_chunks,), -1, dtype=torch.long)
+        )
+        max_chunk_tokens = results.get(
+            "max_chunk_tokens", torch.full((n_chunks,), -1, dtype=torch.long)
+        )
 
         # Compute first and last sentence ID for each chunk
         # Since sentences are consecutive within a chunk, (first, last) uniquely identifies it
@@ -1261,6 +1267,11 @@ class LateEncoder:
 
             chunk_configs.append((sents, tokens))
 
+        # Track which config columns to include based on original input parameters
+        # (not whether expanded configs contain None - a list like [1, None] should still include the column)
+        include_sents_col = max_chunk_sents is not None
+        include_tokens_col = max_chunk_tokens is not None
+
         inputs, sentence_texts = self._tokenize(
             docs,
             max_length=max_length,
@@ -1292,9 +1303,12 @@ class LateEncoder:
             "num_sents": [],
             "chunk_embeds": [],
             "is_split": [],  # Track split chunks for text reconstruction
-            "max_chunk_sents": [],  # NEW: Track which config produced each chunk
-            "max_chunk_tokens": [],  # NEW: Track which config produced each chunk
         }
+        # Only include config columns if the parameter was specified
+        if include_sents_col:
+            results["max_chunk_sents"] = []
+        if include_tokens_col:
+            results["max_chunk_tokens"] = []
 
         # Process each chunk configuration
         for config_idx, (sents_cfg, tokens_cfg) in enumerate(chunk_configs):
@@ -1334,20 +1348,24 @@ class LateEncoder:
                 if "is_split" in batch:
                     results["is_split"].append(batch["is_split"])
 
-                # NEW: Track which config produced these chunks
+                # Track which config produced these chunks (only if column is included)
                 num_chunks = len(batch["sequence_idx"])
-                results["max_chunk_sents"].append(
-                    torch.full(
-                        (num_chunks,), sents_cfg if sents_cfg is not None else -1, dtype=torch.long
+                if include_sents_col:
+                    results["max_chunk_sents"].append(
+                        torch.full(
+                            (num_chunks,),
+                            sents_cfg if sents_cfg is not None else -1,
+                            dtype=torch.long,
+                        )
                     )
-                )
-                results["max_chunk_tokens"].append(
-                    torch.full(
-                        (num_chunks,),
-                        tokens_cfg if tokens_cfg is not None else -1,
-                        dtype=torch.long,
+                if include_tokens_col:
+                    results["max_chunk_tokens"].append(
+                        torch.full(
+                            (num_chunks,),
+                            tokens_cfg if tokens_cfg is not None else -1,
+                            dtype=torch.long,
+                        )
                     )
-                )
 
         # Remove empty is_split list if not used (check before concatenation)
         if "is_split" in results and len(results["is_split"]) == 0:

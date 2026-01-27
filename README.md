@@ -5,7 +5,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/afterthoughts.svg)](https://pypi.org/project/afterthoughts/)
 [![License](https://img.shields.io/pypi/l/afterthoughts.svg)](https://github.com/ndgigliotti/afterthoughts/blob/main/LICENSE)
 
-A Python library for late chunking ([Günther et al., 2024](https://arxiv.org/abs/2409.04701)) that preserves context across chunks for improved RAG retrieval, semantic search, clustering, and exploratory data analysis.
+**Sentence-aware embeddings with document-level context.** A late chunking implementation ([Günther et al., 2024](https://arxiv.org/abs/2409.04701)) that embeds first and chunks second, extracting any number of chunks in one forward pass.
 
 ## Quick Start
 
@@ -28,16 +28,16 @@ df, X = model.encode(docs, max_chunk_sents=1)  # 1 sentence per chunk
 
 ```python
 >>> df
-shape: (3, 7)
-┌─────┬──────────────┬───────────┬─────────────────┬──────────────────┬───────────┬───────────────────────────────────────┐
-│ idx ┆ document_idx ┆ chunk_idx ┆ max_chunk_sents ┆ max_chunk_tokens ┆ num_sents ┆ chunk                                 │
-│ --- ┆ ---          ┆ ---       ┆ ---             ┆ ---              ┆ ---       ┆ ---                                   │
-│ u32 ┆ i64          ┆ i64       ┆ i64             ┆ null             ┆ i64       ┆ str                                   │
-╞═════╪══════════════╪═══════════╪═════════════════╪══════════════════╪═══════════╪═══════════════════════════════════════╡
-│ 0   ┆ 0            ┆ 0         ┆ 1               ┆ null             ┆ 1         ┆ The Amazon rainforest produces 20% o… │
-│ 1   ┆ 0            ┆ 1         ┆ 1               ┆ null             ┆ 1         ┆ Deforestation threatens its biodiver… │
-│ 2   ┆ 0            ┆ 2         ┆ 1               ┆ null             ┆ 1         ┆ Scientists warn of a tipping point.   │
-└─────┴──────────────┴───────────┴─────────────────┴──────────────────┴───────────┴───────────────────────────────────────┘
+shape: (3, 6)
+┌─────┬──────────────┬───────────┬─────────────────┬───────────┬───────────────────────────────────────────┐
+│ idx ┆ document_idx ┆ chunk_idx ┆ max_chunk_sents ┆ num_sents ┆ chunk                                     │
+│ --- ┆ ---          ┆ ---       ┆ ---             ┆ ---       ┆ ---                                       │
+│ u32 ┆ i64          ┆ i64       ┆ i64             ┆ i64       ┆ str                                       │
+╞═════╪══════════════╪═══════════╪═════════════════╪═══════════╪═══════════════════════════════════════════╡
+│ 0   ┆ 0            ┆ 0         ┆ 1               ┆ 1         ┆ The Amazon rainforest produces 20% of Ea… │
+│ 1   ┆ 0            ┆ 1         ┆ 1               ┆ 1         ┆ Deforestation threatens its biodiversity… │
+│ 2   ┆ 0            ┆ 2         ┆ 1               ┆ 1         ┆ Scientists warn of a tipping point.       │
+└─────┴──────────────┴───────────┴─────────────────┴───────────┴───────────────────────────────────────────┘
 
 >>> X.shape
 (3, 384)  # 3 sentence embeddings, each with full document context
@@ -130,8 +130,8 @@ This approach ensures that pronouns, references, and contextual cues in each chu
     * `idx`: Global chunk index (0-based), maps directly to embedding row
     * `document_idx`: The index of the document from which the chunk was extracted
     * `chunk_idx`: The chunk index within each document
-    * `max_chunk_sents`: The requested maximum sentences per chunk (configuration)
-    * `max_chunk_tokens`: The requested maximum tokens per chunk (configuration, null if not specified)
+    * `max_chunk_sents`: The requested maximum sentences per chunk (only present when specified)
+    * `max_chunk_tokens`: The requested maximum tokens per chunk (only present when specified)
     * `num_sents`: The actual number of sentences in the chunk
     * `chunk`: The chunk text
 

@@ -34,9 +34,9 @@ When documents exceed the model's max sequence length, both approaches split the
 
 **Paper approach (Algorithm 2):** Performs token-level deduplication by keeping only the first occurrence of overlapping token embeddings. After processing each macro chunk, the overlap tokens are dropped before concatenating with subsequent chunks. This creates a single unified token embedding sequence with a bias toward earlier context.
 
-**Afterthoughts approach:** Computes chunk embeddings from each macro chunk separately, then deduplicates at the embedding level by averaging embeddings for chunks covering the exact same sentence IDs. This is more bidirectional, incorporating context from both preceding and following macro chunks. It also enables fast vectorized pooling operations on tensors rather than requiring concatenation of ragged token embedding matrices.
+**Afterthoughts approach:** Computes chunk embeddings from each macro chunk separately, then deduplicates at the embedding level by averaging embeddings for chunks that cover identical content. Deduplication uses a compound key of `(document_idx, max_chunk_sents, max_chunk_tokens, first_sent_id, last_sent_id)` to identify duplicates. This is more bidirectional than the paper's approach, incorporating context from both preceding and following macro chunks. It also enables fast vectorized pooling operations on tensors rather than requiring concatenation of ragged token embedding matrices.
 
-Note that only chunks with identical sentence ID sequences are averaged. Chunks in the overlap region that cover different (even partially overlapping) sentence groups are kept as distinct embeddings.
+**Configuration-aware deduplication:** Only chunks with identical sentence ID sequences *and* configuration parameters are averaged. This allows running multiple chunking configurations simultaneously (e.g., different `max_chunk_tokens` limits) without incorrectly merging chunks from different experiments. Split chunks (portions of sentences exceeding token limits) are kept separate even when covering the same sentence boundaries.
 
 **Memory scalability:** The paper's Algorithm 2 constructs a single token embedding matrix for the entire document before pooling. For book-length documents (100k+ tokens), this requires holding an enormous `(tokens × hidden_dim)` matrix in memory for each book. Afterthoughts instead extracts chunk embeddings immediately after each macro chunk, discarding token embeddings before processing the next. This keeps memory at `O(max_length × hidden_dim)` regardless of document length, making it practical for arbitrarily long documents.
 
@@ -50,4 +50,28 @@ df, X = model.encode(docs, deduplicate=False)
 
 **Paper:** Tests multiple chunking strategies - fixed token counts (256 tokens), fixed sentence counts (5 sentences), and semantic boundaries. Late chunking is agnostic to the chunking method.
 
-**Afterthoughts:** Uses sentence-based chunking exclusively (similar to the paper's "Sentence Boundaries" strategy). Chunks are defined as N consecutive sentences, detected via BlingFire, NLTK, pysbd, or syntok. This means chunk sizes vary based on sentence length rather than being fixed token counts.
+**Afterthoughts:** Supports both sentence-based and token-based chunking strategies:
+
+**Sentence-based chunking** (similar to the paper's "Sentence Boundaries" strategy): Chunks are defined as N consecutive sentences, detected via BlingFire, NLTK, pysbd, or syntok. Chunk sizes vary based on sentence length.
+
+```python
+df, X = model.encode(docs, max_chunk_sents=5)  # 5 sentences per chunk
+```
+
+**Token-based chunking** (similar to the paper's fixed token count strategy): Chunks are built by greedily accumulating consecutive sentences until a token limit is reached. This provides more consistent chunk sizes in terms of tokens while still respecting sentence boundaries.
+
+```python
+df, X = model.encode(docs, max_chunk_tokens=256)  # ~256 tokens per chunk
+```
+
+**Combined constraints:** Both limits can be specified simultaneously. Chunks are built by accumulating sentences until either the sentence count or token count limit is hit, whichever comes first.
+
+```python
+df, X = model.encode(docs, max_chunk_sents=5, max_chunk_tokens=256)
+```
+
+**Handling long sentences:** When individual sentences exceed `max_chunk_tokens`, the `split_long_sents` parameter controls behavior:
+- `split_long_sents=True` (default): Splits the sentence into multiple chunks at token boundaries, with a warning.
+- `split_long_sents=False`: Keeps the sentence intact as its own chunk, exceeding the limit, with a warning.
+
+Note that sentences exceeding the model's `max_length` are automatically split during prechunking regardless of this setting.
