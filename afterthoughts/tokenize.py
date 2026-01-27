@@ -653,7 +653,9 @@ def tokenize_docs(
     prechunk : bool, optional
         Whether to return overflowing tokens. Default is True.
     prechunk_overlap_tokens : float or int, optional
-        The overlap between prechunked sequences. Default is 0.
+        Overlap for splitting long documents into sequences, by default 0.
+        - float in [0, 1): Fraction of max_length to overlap
+        - int: Absolute number of tokens to overlap
     add_special_tokens : bool, optional
         Whether to add special tokens to the tokenized sequences.
         Default is True.

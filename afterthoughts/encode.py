@@ -904,8 +904,8 @@ class LateEncoder:
             DataLoader containing the tokenized input sequences.
         max_chunk_sents : int, list, tuple, or None
             Number of sentences per chunk. None means no sentence limit.
-        chunk_overlap_sents : int, float, list, or dict
-            Overlap between chunks (in sentences).
+        chunk_overlap_sents : int
+            Number of sentences to overlap between consecutive chunks.
         move_results_to_cpu : bool, optional
             Move results to CPU after processing, by default False.
         return_tensors : str, optional
@@ -1185,8 +1185,8 @@ class LateEncoder:
             - idx: Global chunk index (0-based), maps directly to embedding row
             - document_idx: Document index (0-based)
             - chunk_idx: Chunk index within document (0-based)
-            - max_chunk_sents: Requested max sentences per chunk (configuration)
-            - max_chunk_tokens: Requested max tokens per chunk (configuration)
+            - max_chunk_sents: Requested max sentences (only if max_chunk_sents is specified)
+            - max_chunk_tokens: Requested max tokens (only if max_chunk_tokens is specified)
             - num_sents: Actual number of sentences in chunk (may be less than max at boundaries)
             - chunk: The decoded chunk text (if return_text=True)
         """

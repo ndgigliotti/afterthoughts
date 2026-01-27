@@ -8,7 +8,7 @@ model to capture full context, then extracts embeddings for sentence groups
 Key Features
 ------------
 - Context-aware embeddings: Full document context is preserved during encoding
-- Flexible chunking: Configure chunk size (number of sentences) and overlap
+- Flexible chunking: Sentence-based and token-based chunking strategies
 - Sentence boundary detection: Multiple backends (BlingFire, NLTK, pysbd, syntok)
 - Memory efficient: Dynamic batching by token count, optional float16 conversion
 - Matryoshka support: Dimension truncation for MRL-trained models
