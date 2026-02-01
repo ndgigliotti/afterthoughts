@@ -219,6 +219,56 @@ df_small_chunks = df.filter(
 
 **Note:** Config columns may contain `None` values when using lists with mixed values (e.g., `[1, None, 2]`). Cast to Int64 for numeric comparisons in Polars.
 
+#### Use Case: Retrieval Performance Tuning
+
+Generate multiple chunk configurations in a single embedding pass to systematically optimize your retrieval system. This is particularly valuable for production RAG systems where you want to find the chunk strategy that maximizes retrieval quality for your specific domain and queries.
+
+**Workflow:**
+
+1. **Benchmark multiple configurations in one pass** - no re-embedding overhead:
+   ```python
+   df, X = model.encode(
+       docs,
+       max_chunk_sents=[1, 2, 3],
+       max_chunk_tokens=[64, 128, 256],  # Aligned pairs: (1,64), (2,128), (3,256)
+   )
+   ```
+
+2. **Store each configuration in a separate namespace** to compare retrieval quality (e.g. with Pinecone):
+   ```python
+   from pinecone import Pinecone
+
+   pc = Pinecone(api_key="YOUR_API_KEY")
+   index = pc.Index("your-index-name")
+
+   max_chunk_sents = [1, 2, 3]
+   max_chunk_tokens = [64, 128, 256]
+
+   for config_sents, config_tokens in zip(max_chunk_sents, max_chunk_tokens):
+       config_df = df.filter(
+           (pl.col("max_chunk_sents") == config_sents) &
+           (pl.col("max_chunk_tokens") == config_tokens)
+       )
+       config_embeds = X[config_df["idx"]]
+
+       # Prepare vectors: (id, values, metadata)
+       vectors = [
+           (str(row["idx"]), embedding.tolist(), row)
+           for row, embedding in zip(config_df.to_dicts(), config_embeds)
+       ]
+
+       index.upsert(
+           vectors=vectors,
+           namespace=f"chunks_{config_sents}s_{config_tokens}t",
+       )
+   ```
+
+   *Other vector databases (Qdrant, Weaviate, Milvus) support similar namespace/collection-based segmentation.*
+
+3. **Run your retrieval evaluation** against each namespace to measure which configuration performs best on your metrics (MRR, NDCG, recall@k, etc.).
+
+This approach allows you to optimize chunk strategy for your specific use case without the computational cost of multiple embedding passes.
+
 ### Using Pandas Instead of Polars
 
 Afterthoughts uses Polars by default for its speed and memory efficiency, but pandas is fully supported for users who prefer it or need compatibility with existing code. Simply set `return_frame="pandas"`:
