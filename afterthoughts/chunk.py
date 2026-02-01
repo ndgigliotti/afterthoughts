@@ -185,6 +185,38 @@ def get_sentence_offsets_pysbd(text: str) -> torch.Tensor:
     return offsets
 
 
+def get_sentence_offsets_newline(text: str) -> torch.Tensor:
+    """
+    Get sentence offsets by splitting on newline characters.
+
+    Useful for structured text like code, transcripts, or line-oriented data
+    where newlines represent logical boundaries rather than grammatical sentences.
+
+    Parameters
+    ----------
+    text : str
+        The input text to be processed.
+
+    Returns
+    -------
+    torch.Tensor
+        A tensor containing the offsets of each line in the input text.
+        Empty lines are skipped.
+    """
+    if len(text) == 0:
+        return torch.tensor([]).reshape(0, 2)
+
+    offset_list = []
+    pos = 0
+    for line in text.split("\n"):
+        line_len = len(line)
+        if line.strip():  # Skip empty lines
+            offset_list.append((pos, pos + line_len))
+        pos += line_len + 1  # +1 for the newline character
+
+    return torch.tensor(offset_list if offset_list else []).reshape(-1, 2)
+
+
 def get_sentence_offsets(
     text: str | list[str],
     method: str | Callable[[str], torch.Tensor] = "blingfire",
@@ -200,7 +232,7 @@ def get_sentence_offsets(
         the function will process each string in parallel.
     method : str or callable, optional
         The method to use for sentence boundary detection.
-        Can be a string ('blingfire', 'nltk', 'pysbd', 'syntok') or a
+        Can be a string ('blingfire', 'nltk', 'pysbd', 'syntok', 'newline') or a
         callable that takes a string and returns a torch.Tensor of shape
         (n_sentences, 2) containing [start, end] character offsets for
         each sentence. Defaults to 'blingfire'.
@@ -257,6 +289,7 @@ def get_sentence_offsets(
         "nltk": get_sentence_offsets_nltk,
         "pysbd": get_sentence_offsets_pysbd,
         "syntok": get_sentence_offsets_syntok,
+        "newline": get_sentence_offsets_newline,
     }
 
     # Determine the offset function to use
@@ -1466,11 +1499,11 @@ def tokenize_with_sentence_boundaries(
         HuggingFace tokenizer (fast tokenizer recommended for offset mapping).
     method : str or callable, optional
         Sentence boundary detection method, by default "blingfire".
-        Can be a string ("blingfire", "nltk", "pysbd", "syntok") or a
+        Can be a string ("blingfire", "nltk", "pysbd", "syntok", "newline") or a
         callable that takes a string and returns a torch.Tensor of shape
         (n_sentences, 2) containing [start, end] character offsets for
-        each sentence. Custom callables enable domain-specific sentence
-        segmentation (e.g., legal documents, code, structured text).
+        each sentence. Use 'newline' for line-oriented text (code, transcripts,
+        structured data). Custom callables enable domain-specific segmentation.
     max_length : int or None, optional
         Maximum sequence length in tokens, by default 512.
         If None, uses tokenizer.model_max_length.

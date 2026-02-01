@@ -1095,11 +1095,11 @@ class LateEncoder:
             If a float, interpreted as a fraction of max_length. If an int, the number of tokens.
         sent_tokenizer : str or callable, optional
             Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
-            Can be a string ("blingfire", "nltk", "pysbd", "syntok") or a
+            Can be a string ("blingfire", "nltk", "pysbd", "syntok", "newline") or a
             callable that takes a string and returns a torch.Tensor of shape
             (n_sentences, 2) containing [start, end] character offsets for
-            each sentence. Custom callables enable domain-specific sentence
-            segmentation (e.g., legal documents, code, structured text).
+            each sentence. Use 'newline' for line-oriented text (code, transcripts).
+            Custom callables enable domain-specific segmentation.
         exclude_special_tokens : bool, optional
             If True (default), exclude all special tokens from mean pooling.
             If False, include [CLS] in first chunk and [SEP] in last chunk
@@ -1180,19 +1180,22 @@ class LateEncoder:
         ...     max_chunk_tokens=[64, 128, 256],  # Same length!
         ... )
 
-        Custom sentence tokenizer:
+        Custom sentence tokenizer for speaker-based chunking:
 
-        >>> def custom_tokenizer(text: str) -> torch.Tensor:
-        ...     '''Custom tokenizer that splits on newlines.'''
-        ...     sentences = []
-        ...     pos = 0
-        ...     for line in text.split('\\n'):
-        ...         if line.strip():
-        ...             end = pos + len(line) + 1
-        ...             sentences.append([pos, end])
-        ...             pos = end
-        ...     return torch.tensor(sentences if sentences else []).reshape(-1, 2)
-        >>> df, embeds = encoder.encode(docs, sent_tokenizer=custom_tokenizer)
+        >>> def speaker_turns(text: str) -> torch.Tensor:
+        ...     '''Split transcript by speaker turns (e.g., "Speaker A: ...")'''
+        ...     import re
+        ...     pattern = r'(?:^|\\n)(?:Speaker [A-Z]:|\\[\\w+\\]:)'
+        ...     matches = list(re.finditer(pattern, text))
+        ...     if not matches:
+        ...         return torch.tensor([[0, len(text)]]).reshape(-1, 2)
+        ...     offsets = []
+        ...     for i, match in enumerate(matches):
+        ...         start = match.start() if i == 0 else matches[i-1].end()
+        ...         end = match.end() if i == len(matches)-1 else matches[i+1].start()
+        ...         offsets.append([start, end])
+        ...     return torch.tensor(offsets).reshape(-1, 2)
+        >>> df, embeds = encoder.encode(transcripts, sent_tokenizer=speaker_turns)
 
         Returns
         -------
