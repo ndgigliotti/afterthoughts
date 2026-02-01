@@ -1475,61 +1475,6 @@ class LateEncoder:
             raise ValueError(f"Invalid value for return_frame: {return_frame}")
         return df, vecs
 
-    def get_chunks(
-        self,
-        docs: list[str],
-        max_length: int | None = None,
-        max_chunk_sents: int | list[int | None] | tuple[int | None, ...] | None = 1,
-        chunk_overlap_sents: int = 0,
-        prechunk: bool = True,
-        prechunk_overlap_tokens: float | int = 0.5,
-        sent_tokenizer: str | Callable[[str], torch.Tensor] = "blingfire",
-        return_frame: str = "polars",
-        show_progress: bool = True,
-        prompt: str | None = None,
-        max_chunk_tokens: int | list[int] | tuple[int, ...] | None = None,
-        split_long_sents: bool = True,
-    ):
-        """Get chunk metadata without encoding.
-
-        This method performs tokenization and chunking but skips the encoding step,
-        returning only the chunk metadata and text. Useful for previewing how documents
-        will be chunked, debugging chunking behavior, or testing different chunking
-        strategies without the computational cost of encoding.
-
-        Takes the same chunking parameters as `encode()` but skips the model forward pass.
-
-        Returns
-        -------
-        pl.DataFrame | pd.DataFrame
-            DataFrame containing chunk metadata (same columns as encode output but without embeddings).
-
-        Examples
-        --------
-        >>> chunks_df = encoder.get_chunks(docs, max_chunk_sents=2)
-        >>> print(chunks_df[['document_idx', 'chunk_idx', 'num_sents', 'chunk']])
-        """
-        # Just call encode and discard the embeddings
-        # The model is run but we don't return the embeddings
-        df, _ = self.encode(
-            docs=docs,
-            max_length=max_length,
-            max_chunk_sents=max_chunk_sents,
-            chunk_overlap_sents=chunk_overlap_sents,
-            prechunk=prechunk,
-            prechunk_overlap_tokens=prechunk_overlap_tokens,
-            sent_tokenizer=sent_tokenizer,
-            return_frame=return_frame,
-            return_text=True,
-            show_progress=show_progress,
-            prompt=prompt,
-            max_chunk_tokens=max_chunk_tokens,
-            split_long_sents=split_long_sents,
-            deduplicate=False,  # No need to deduplicate for preview
-        )
-
-        return df
-
     @overload
     def encode_queries(
         self,
