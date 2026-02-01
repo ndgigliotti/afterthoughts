@@ -1098,7 +1098,9 @@ class LateEncoder:
             Can be a string ("blingfire", "nltk", "pysbd", "syntok", "newline") or a
             callable that takes a string and returns a torch.Tensor of shape
             (n_sentences, 2) containing [start, end] character offsets for
-            each sentence. Use 'newline' for line-oriented text (code, transcripts).
+            each sentence. Offsets must be half-open intervals [start, end) that work
+            with Python slicing: text[start:end] extracts the sentence.
+            Use 'newline' for line-oriented text (code, transcripts).
             Custom callables enable domain-specific segmentation.
         exclude_special_tokens : bool, optional
             If True (default), exclude all special tokens from mean pooling.
@@ -1183,16 +1185,20 @@ class LateEncoder:
         Custom sentence tokenizer for speaker-based chunking:
 
         >>> def speaker_turns(text: str) -> torch.Tensor:
-        ...     '''Split transcript by speaker turns (e.g., "Speaker A: ...")'''
+        ...     '''Split transcript by speaker turns.
+        ...
+        ...     Returns half-open intervals [start, end) for use with text[start:end].
+        ...     Example: "Speaker A: Hello\\nSpeaker B: Hi"
+        ...     '''
         ...     import re
         ...     pattern = r'(?:^|\\n)(?:Speaker [A-Z]:|\\[\\w+\\]:)'
         ...     matches = list(re.finditer(pattern, text))
         ...     if not matches:
         ...         return torch.tensor([[0, len(text)]]).reshape(-1, 2)
         ...     offsets = []
-        ...     for i, match in enumerate(matches):
-        ...         start = match.start() if i == 0 else matches[i-1].end()
-        ...         end = match.end() if i == len(matches)-1 else matches[i+1].start()
+        ...     for i in range(len(matches)):
+        ...         start = matches[i].start()
+        ...         end = matches[i+1].start() if i+1 < len(matches) else len(text)
         ...         offsets.append([start, end])
         ...     return torch.tensor(offsets).reshape(-1, 2)
         >>> df, embeds = encoder.encode(transcripts, sent_tokenizer=speaker_turns)

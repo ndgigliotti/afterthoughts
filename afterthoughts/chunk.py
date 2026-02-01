@@ -235,7 +235,9 @@ def get_sentence_offsets(
         Can be a string ('blingfire', 'nltk', 'pysbd', 'syntok', 'newline') or a
         callable that takes a string and returns a torch.Tensor of shape
         (n_sentences, 2) containing [start, end] character offsets for
-        each sentence. Defaults to 'blingfire'.
+        each sentence. Offsets are half-open intervals [start, end) that work
+        directly with Python slicing: text[start:end] extracts the sentence.
+        Defaults to 'blingfire'.
     n_jobs : int, optional
         The number of jobs to use for parallel processing when the input
         is a list of strings. If None, defaults to using all available cores.
@@ -265,14 +267,22 @@ def get_sentence_offsets(
     --------
     Using a built-in tokenizer:
 
-    >>> offsets = get_sentence_offsets("Hello. World.", method="blingfire")
+    >>> text = "Hello. World."
+    >>> offsets = get_sentence_offsets(text, method="blingfire")
+    >>> offsets
+    tensor([[ 0,  6],
+            [ 7, 13]])
+    >>> text[0:6]  # First sentence (half-open interval)
+    'Hello.'
+    >>> text[7:13]  # Second sentence
+    'World.'
 
     Using a custom callable:
 
     >>> def custom_tokenizer(text: str) -> torch.Tensor:
-    ...     # Simple regex-based sentence splitter
+    ...     # Split on periods, half-open intervals [start, end)
     ...     import re
-    ...     pattern = r'[.!?]+\\s+'
+    ...     pattern = r'[.!?]+\\s*'
     ...     sentences = []
     ...     pos = 0
     ...     for match in re.finditer(pattern, text):
@@ -1502,7 +1512,9 @@ def tokenize_with_sentence_boundaries(
         Can be a string ("blingfire", "nltk", "pysbd", "syntok", "newline") or a
         callable that takes a string and returns a torch.Tensor of shape
         (n_sentences, 2) containing [start, end] character offsets for
-        each sentence. Use 'newline' for line-oriented text (code, transcripts,
+        each sentence. Offsets must be half-open intervals [start, end) that work
+        with Python slicing: text[start:end] extracts the sentence.
+        Use 'newline' for line-oriented text (code, transcripts,
         structured data). Custom callables enable domain-specific segmentation.
     max_length : int or None, optional
         Maximum sequence length in tokens, by default 512.
