@@ -47,6 +47,7 @@ Long sentences that exceed max_length are automatically split into sub-segments.
 
 import logging
 import warnings
+from collections.abc import Callable
 from typing import Any
 
 import blingfire as bf
@@ -185,7 +186,9 @@ def get_sentence_offsets_pysbd(text: str) -> torch.Tensor:
 
 
 def get_sentence_offsets(
-    text: str | list[str], method: str = "blingfire", n_jobs: int | None = None
+    text: str | list[str],
+    method: str | Callable[[str], torch.Tensor] = "blingfire",
+    n_jobs: int | None = None,
 ) -> torch.Tensor | list[torch.Tensor]:
     """
     Get sentence offsets for a given text using a specified method.
@@ -195,10 +198,12 @@ def get_sentence_offsets(
     text : str or list of str
         The input text to be processed. If a list of strings is provided,
         the function will process each string in parallel.
-    method : str, optional
+    method : str or callable, optional
         The method to use for sentence boundary detection.
-        Options are 'blingfire', 'nltk', 'pysbd', and 'syntok'.
-        Defaults to 'blingfire'.
+        Can be a string ('blingfire', 'nltk', 'pysbd', 'syntok') or a
+        callable that takes a string and returns a torch.Tensor of shape
+        (n_sentences, 2) containing [start, end] character offsets for
+        each sentence. Defaults to 'blingfire'.
     n_jobs : int, optional
         The number of jobs to use for parallel processing when the input
         is a list of strings. If None, defaults to using all available cores.
@@ -213,7 +218,9 @@ def get_sentence_offsets(
     Raises
     ------
     ValueError
-        If an invalid method is specified.
+        If an invalid method string is specified.
+    TypeError
+        If the callable does not return the expected tensor format.
 
     See Also
     --------
@@ -221,6 +228,29 @@ def get_sentence_offsets(
     get_sentence_offsets_nltk : Sentence offset detection using NLTK.
     get_sentence_offsets_pysbd : Sentence offset detection using pysbd.
     get_sentence_offsets_syntok : Sentence offset detection using syntok.
+
+    Examples
+    --------
+    Using a built-in tokenizer:
+
+    >>> offsets = get_sentence_offsets("Hello. World.", method="blingfire")
+
+    Using a custom callable:
+
+    >>> def custom_tokenizer(text: str) -> torch.Tensor:
+    ...     # Simple regex-based sentence splitter
+    ...     import re
+    ...     pattern = r'[.!?]+\\s+'
+    ...     sentences = []
+    ...     pos = 0
+    ...     for match in re.finditer(pattern, text):
+    ...         end = match.end()
+    ...         sentences.append([pos, end])
+    ...         pos = end
+    ...     if pos < len(text):
+    ...         sentences.append([pos, len(text)])
+    ...     return torch.tensor(sentences if sentences else []).reshape(-1, 2)
+    >>> offsets = get_sentence_offsets("Hello. World.", method=custom_tokenizer)
     """
     methods = {
         "blingfire": get_sentence_offsets_blingfire,
@@ -229,16 +259,33 @@ def get_sentence_offsets(
         "syntok": get_sentence_offsets_syntok,
     }
 
-    if method in methods:
+    # Determine the offset function to use
+    if callable(method):
+        get_offsets = method
+    elif method in methods:
         get_offsets = methods[method]
-        if isinstance(text, str):
-            offsets = get_offsets(text)
-        else:
-            offsets = Parallel(n_jobs=n_jobs, prefer="processes")(
-                delayed(get_offsets)(t) for t in text
+    else:
+        raise ValueError(
+            f"Invalid method: '{method}'. Must be one of {list(methods.keys())} "
+            "or a callable with signature (str) -> torch.Tensor"
+        )
+
+    # Apply the offset function
+    if isinstance(text, str):
+        offsets = get_offsets(text)
+        # Validate output format if using custom callable
+        if callable(method) and not isinstance(offsets, torch.Tensor):
+            raise TypeError(
+                f"Custom sentence tokenizer must return torch.Tensor, got {type(offsets)}"
             )
     else:
-        raise ValueError(f"Invalid method: '{method}'")
+        offsets = Parallel(n_jobs=n_jobs, prefer="processes")(delayed(get_offsets)(t) for t in text)
+        # Validate output format for first result if using custom callable
+        if callable(method) and offsets and not isinstance(offsets[0], torch.Tensor):
+            raise TypeError(
+                f"Custom sentence tokenizer must return torch.Tensor, got {type(offsets[0])}"
+            )
+
     return offsets
 
 
@@ -1391,7 +1438,7 @@ def _as_sentence_ids(
 def tokenize_with_sentence_boundaries(
     docs: list[str],
     tokenizer: PreTrainedTokenizerBase,
-    method: str = "blingfire",
+    method: str | Callable[[str], torch.Tensor] = "blingfire",
     max_length: int | None = 512,
     prechunk: bool = True,
     prechunk_overlap_tokens: float | int = 0.5,
@@ -1417,10 +1464,13 @@ def tokenize_with_sentence_boundaries(
         Documents to tokenize. Can be of any length.
     tokenizer : transformers.PreTrainedTokenizerBase
         HuggingFace tokenizer (fast tokenizer recommended for offset mapping).
-    method : str, optional
+    method : str or callable, optional
         Sentence boundary detection method, by default "blingfire".
-        Options: "blingfire" (fast, recommended), "nltk" (accurate),
-        "pysbd" (handles abbreviations), "syntok" (sophisticated).
+        Can be a string ("blingfire", "nltk", "pysbd", "syntok") or a
+        callable that takes a string and returns a torch.Tensor of shape
+        (n_sentences, 2) containing [start, end] character offsets for
+        each sentence. Custom callables enable domain-specific sentence
+        segmentation (e.g., legal documents, code, structured text).
     max_length : int or None, optional
         Maximum sequence length in tokens, by default 512.
         If None, uses tokenizer.model_max_length.
