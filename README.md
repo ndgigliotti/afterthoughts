@@ -18,12 +18,14 @@ from afterthoughts import LateEncoder
 
 model = LateEncoder("sentence-transformers/multi-qa-MiniLM-L6-cos-v1")
 
-docs = [
-    "The Amazon rainforest produces 20% of Earth's oxygen. "
-    "Deforestation threatens its biodiversity. "
-    "Scientists warn of a tipping point.",  # 1 document, 3 sentences
-]
-df, X = model.encode(docs, max_chunk_sents=1)  # 1 sentence per chunk
+# One document with three sentences
+doc = """
+The Amazon rainforest produces 20% of Earth's oxygen.
+Deforestation threatens its biodiversity.
+Scientists warn of a tipping point.
+"""
+
+df, X = model.encode([doc], max_chunk_sents=1)  # 1 sentence per chunk
 ```
 
 ```python

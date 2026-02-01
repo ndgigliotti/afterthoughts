@@ -46,7 +46,7 @@ context during encoding.
 
 import logging
 import math
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, overload
 
@@ -958,7 +958,7 @@ class LateEncoder:
         chunk_overlap_sents: int = ...,
         prechunk: bool = ...,
         prechunk_overlap_tokens: float | int = ...,
-        sent_tokenizer: str = ...,
+        sent_tokenizer: str | Callable[[str], torch.Tensor] = ...,
         exclude_special_tokens: bool = ...,
         deduplicate: bool = ...,
         return_frame: Literal["polars"] = ...,
@@ -981,7 +981,7 @@ class LateEncoder:
         chunk_overlap_sents: int = ...,
         prechunk: bool = ...,
         prechunk_overlap_tokens: float | int = ...,
-        sent_tokenizer: str = ...,
+        sent_tokenizer: str | Callable[[str], torch.Tensor] = ...,
         exclude_special_tokens: bool = ...,
         deduplicate: bool = ...,
         return_frame: Literal["polars"] = ...,
@@ -1004,7 +1004,7 @@ class LateEncoder:
         chunk_overlap_sents: int = ...,
         prechunk: bool = ...,
         prechunk_overlap_tokens: float | int = ...,
-        sent_tokenizer: str = ...,
+        sent_tokenizer: str | Callable[[str], torch.Tensor] = ...,
         exclude_special_tokens: bool = ...,
         deduplicate: bool = ...,
         return_frame: Literal["pandas"] = ...,
@@ -1027,7 +1027,7 @@ class LateEncoder:
         chunk_overlap_sents: int = ...,
         prechunk: bool = ...,
         prechunk_overlap_tokens: float | int = ...,
-        sent_tokenizer: str = ...,
+        sent_tokenizer: str | Callable[[str], torch.Tensor] = ...,
         exclude_special_tokens: bool = ...,
         deduplicate: bool = ...,
         return_frame: Literal["pandas"] = ...,
@@ -1049,7 +1049,7 @@ class LateEncoder:
         chunk_overlap_sents: int = 0,
         prechunk: bool = True,
         prechunk_overlap_tokens: float | int = 0.5,
-        sent_tokenizer: str = "blingfire",
+        sent_tokenizer: str | Callable[[str], torch.Tensor] = "blingfire",
         exclude_special_tokens: bool = True,
         deduplicate: bool = True,
         return_frame: str = "polars",
@@ -1093,9 +1093,15 @@ class LateEncoder:
         prechunk_overlap_tokens : float or int, optional
             Overlap for splitting long documents into overlapping sequences, by default 0.5.
             If a float, interpreted as a fraction of max_length. If an int, the number of tokens.
-        sent_tokenizer : str, optional
+        sent_tokenizer : str or callable, optional
             Sentence tokenizer to use for sentence boundary detection, by default "blingfire".
-            Options are "blingfire", "nltk", "pysbd", or "syntok".
+            Can be a string ("blingfire", "nltk", "pysbd", "syntok", "newline") or a
+            callable that takes a string and returns a torch.Tensor of shape
+            (n_sentences, 2) containing [start, end] character offsets for
+            each sentence. Offsets must be half-open intervals [start, end) that work
+            with Python slicing: text[start:end] extracts the sentence.
+            Use 'newline' for line-oriented text (code, transcripts).
+            Custom callables enable domain-specific segmentation.
         exclude_special_tokens : bool, optional
             If True (default), exclude all special tokens from mean pooling.
             If False, include [CLS] in first chunk and [SEP] in last chunk
@@ -1175,6 +1181,27 @@ class LateEncoder:
         ...     max_chunk_sents=[1, 2, 3],
         ...     max_chunk_tokens=[64, 128, 256],  # Same length!
         ... )
+
+        Custom sentence tokenizer for speaker-based chunking:
+
+        >>> def speaker_turns(text: str) -> torch.Tensor:
+        ...     '''Split transcript by speaker turns.
+        ...
+        ...     Returns half-open intervals [start, end) for use with text[start:end].
+        ...     Example: "Speaker A: Hello\\nSpeaker B: Hi"
+        ...     '''
+        ...     import re
+        ...     pattern = r'(?:^|\\n)(?:Speaker [A-Z]:|\\[\\w+\\]:)'
+        ...     matches = list(re.finditer(pattern, text))
+        ...     if not matches:
+        ...         return torch.tensor([[0, len(text)]]).reshape(-1, 2)
+        ...     offsets = []
+        ...     for i in range(len(matches)):
+        ...         start = matches[i].start()
+        ...         end = matches[i+1].start() if i+1 < len(matches) else len(text)
+        ...         offsets.append([start, end])
+        ...     return torch.tensor(offsets).reshape(-1, 2)
+        >>> df, embeds = encoder.encode(transcripts, sent_tokenizer=speaker_turns)
 
         Returns
         -------

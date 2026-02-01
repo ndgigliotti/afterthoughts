@@ -184,6 +184,66 @@ def test_get_sentence_offsets_pysbd_method():
     assert offsets.size(1) == 2
 
 
+def test_get_sentence_offsets_newline_method():
+    text = "First line\nSecond line\nThird line"
+    offsets = get_sentence_offsets(text, method="newline")
+    # Check that the result is a tensor with 2 columns
+    assert isinstance(offsets, torch.Tensor)
+    assert offsets.ndim == 2
+    assert offsets.size(1) == 2
+    # Should have 3 lines
+    assert offsets.size(0) == 3
+    # Verify offsets are correct
+    assert text[offsets[0, 0] : offsets[0, 1]] == "First line"
+    assert text[offsets[1, 0] : offsets[1, 1]] == "Second line"
+    assert text[offsets[2, 0] : offsets[2, 1]] == "Third line"
+
+
+def test_get_sentence_offsets_newline_empty_lines():
+    text = "First line\n\nThird line"
+    offsets = get_sentence_offsets(text, method="newline")
+    # Empty lines should be skipped
+    assert offsets.size(0) == 2
+    assert text[offsets[0, 0] : offsets[0, 1]] == "First line"
+    assert text[offsets[1, 0] : offsets[1, 1]] == "Third line"
+
+
+def test_get_sentence_offsets_custom_callable():
+    # Define a simple custom tokenizer that splits on periods
+    def custom_tokenizer(text: str) -> torch.Tensor:
+        import re
+
+        pattern = r"[.!?]+\s*"
+        sentences = []
+        pos = 0
+        for match in re.finditer(pattern, text):
+            end = match.end()
+            sentences.append([pos, end])
+            pos = end
+        if pos < len(text):
+            sentences.append([pos, len(text)])
+        return torch.tensor(sentences if sentences else []).reshape(-1, 2)
+
+    text = "Hello. World!"
+    offsets = get_sentence_offsets(text, method=custom_tokenizer)
+    # Check that the result is a tensor with 2 columns
+    assert isinstance(offsets, torch.Tensor)
+    assert offsets.ndim == 2
+    assert offsets.size(1) == 2
+    # Should have 2 sentences
+    assert offsets.size(0) == 2
+
+
+def test_get_sentence_offsets_custom_callable_invalid_return():
+    # Define a custom tokenizer that returns wrong type
+    def bad_tokenizer(text: str) -> list:
+        return [[0, len(text)]]  # Returns list instead of torch.Tensor
+
+    text = "Hello"
+    with pytest.raises(TypeError, match="Custom sentence tokenizer must return torch.Tensor"):
+        get_sentence_offsets(text, method=bad_tokenizer)
+
+
 def test_get_sentence_offsets_invalid_method():
     text = "Hello world. This is a test."
     with pytest.raises(ValueError, match="Invalid method: 'invalid'"):
