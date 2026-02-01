@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-02-01
+
+### Added
+- Support for custom callable sentence tokenizers - users can pass custom functions to `sent_tokenizer` parameter for domain-specific segmentation (e.g., speaker turns, code blocks)
+- Built-in newline sentence tokenizer (`sent_tokenizer="newline"`) for line-oriented text like code, transcripts, or structured data
+- Comprehensive tests for newline tokenizer and custom callable tokenizers
+
+### Changed
+- Refactored `get_sentence_offsets_pysbd()` to use pysbd's native `char_span=True` feature for more reliable offset detection
+
+### Fixed
+- Improved pysbd offset accuracy by using native span detection instead of manual text searching
+
 ## [0.1.1] - 2026-01-26
 
 ### Added
@@ -43,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive test suite
 - Documentation and examples
 
-[Unreleased]: https://github.com/ndgigliotti/afterthoughts/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/ndgigliotti/afterthoughts/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/ndgigliotti/afterthoughts/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/ndgigliotti/afterthoughts/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ndgigliotti/afterthoughts/releases/tag/v0.1.0
