@@ -158,6 +158,8 @@ def get_sentence_offsets_pysbd(text: str) -> torch.Tensor:
     -------
     torch.Tensor
         A tensor containing the offsets of each sentence in the input text.
+        Offsets are half-open intervals [start, end) where text[start:end]
+        extracts the sentence.
 
     Raises
     ------
@@ -168,20 +170,10 @@ def get_sentence_offsets_pysbd(text: str) -> torch.Tensor:
     if len(text) == 0:
         offsets = torch.tensor([]).reshape(0, 2)
     else:
-        segmenter = Segmenter(language="en", clean=False)
-        sentences = segmenter.segment(text)
-        # Build offsets by finding each sentence in the original text
-        offset_list = []
-        pos = 0
-        for sent in sentences:
-            start = text.find(sent, pos)
-            if start == -1:
-                # Fallback: use current position if exact match fails
-                start = pos
-            end = start + len(sent)
-            offset_list.append((start, end))
-            pos = end
-        offsets = torch.tensor(offset_list)
+        segmenter = Segmenter(language="en", clean=False, char_span=True)
+        text_spans = segmenter.segment(text)
+        # TextSpan objects have .start and .end attributes with half-open intervals
+        offsets = torch.tensor([(span.start, span.end) for span in text_spans])
     return offsets
 
 
